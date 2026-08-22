@@ -38,13 +38,34 @@ $null = & zig build test 2>&1
 "{0} {1,-16}" -f $(if ($LASTEXITCODE -eq 0) { "PASS" } else { "FAIL" }), "T1 zig test"
 if ($LASTEXITCODE -ne 0) { $fail++ }
 
-# Assert the FINDING, not a line number: stzlib is an external tree and its
-# line numbers move whenever it is edited. Pinning 720:44 made this gate fail
-# for the right rule at the wrong address.
-$chk = & ".\zig-out\bin\ringpp.exe" check "D:\GitHub\stzlib\libraries\stzlib\core\system" 2>&1 | Out-String
-$ok = ($chk -match "stkPointer\.ring") -and ($chk -match "rpp/varptr-unknown-name") -and ($chk -match "0 warn")
-"{0} {1,-16} {2}" -f $(if ($ok) { "PASS" } else { "FAIL" }), "T1 check gate", "finds the dead varptr in stkPointer.ring, no warnings"
+# T1. SELF-CONTAINED, and that is the point. This gate used to scan a path
+# inside D:\GitHub\stzlib, which made Ring++'s own suite unrunnable by anyone
+# who does not also have Softanza checked out beside it. Ring++ is an
+# independent project and a Ring package; its gates may not require another
+# repository to exist.
+#
+# Assert the RULE, never a line number: fixture lines move when the fixture
+# is edited, and pinning stkPointer.ring:720:44 once failed for the right
+# rule at the wrong address.
+$chk = & ".\zig-out\bin\ringpp.exe" check "tests\fixtures\lint_bad.ring" 2>&1 | Out-String
+$ok = ($chk -match "rpp/varptr-unknown-name") -and
+      ($chk -match "rpp/empty-catch") -and
+      ($chk -match "rpp/substr-in-loop")
+"{0} {1,-16} {2}" -f $(if ($ok) { "PASS" } else { "FAIL" }), "T1 check gate", "3 rules fire on the local fixture"
 if (-not $ok) { $fail++ }
+
+# OPTIONAL: the same checker over a large real corpus, when one happens to be
+# present. Never required -- but NAMED when skipped, because a gate quietly
+# not run is a green nobody earned (PX, CENTRAL-PXLATENCY-01).
+$corpus = "D:\GitHub\stzlib\libraries\stzlib\core\system"
+if (Test-Path $corpus) {
+    $cOut = & ".\zig-out\bin\ringpp.exe" check $corpus 2>&1 | Out-String
+    $cOk = ($cOut -match "rpp/varptr-unknown-name") -and ($cOut -match "0 warn")
+    "{0} {1,-16} {2}" -f $(if ($cOk) { "PASS" } else { "FAIL" }), "T1 corpus", "optional: Softanza present, dead varptr found"
+    if (-not $cOk) { $fail++ }
+} else {
+    "SKIP {0,-16} {1}" -f "T1 corpus", "optional corpus absent (Softanza not checked out) -- not required"
+}
 
 # T2. The catalog-coverage and dangling-citation guards live in `zig build
 # test` above; what that cannot check is that the binary actually answers.

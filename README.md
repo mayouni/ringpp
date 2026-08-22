@@ -9,10 +9,40 @@ volumes, complex processing, optimisation, ML and AI that come with
 them. The answer to those needs should not be "rewrite that part in
 another language." It should be Ring.
 
-*Status: **design only**. No library code exists yet, deliberately.
-This repository currently holds the measurements that a design must
-answer to, the design itself, and a phase plan whose first gate is
-"prove someone needs this."*
+**Ring++ is an independent project.** It depends on nothing but Ring
+itself — no other package, no extension to compile, no DLL. It is
+developed alongside [Softanza](https://github.com/mansourayouni/stzlib)
+and used by it, but it is not part of it and never requires it.
+
+---
+
+## Install
+
+```
+ringpm install ringpp
+```
+
+Then, from anywhere:
+
+```ring
+load "ringpp.ring"
+
+oBuf = new RppBuffer(1024)
+oBuf.Poke(0, "hello")
+? oBuf.Peek(0, 5)        # --> hello
+```
+
+That is the whole dependency story. The library half is **pure Ring**,
+loads in one line, and works wherever Ring works — including WASM.
+
+The `ringpp` **CLI** (`check`, `why`, `ast`) is a separate, optional Zig
+build and is deliberately *not* in the package: installing a Ring library
+should never require a C toolchain. Build it from source when you want
+static analysis.
+
+*Status: the library, the CLI's analysis half, and eight measured
+examples are **built and gated**. The compiler half (T3–T7) is designed
+and not yet built. `powershell -File tests\run-all.ps1` runs everything.*
 
 ---
 
