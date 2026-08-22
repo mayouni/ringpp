@@ -111,6 +111,16 @@ if ($good -match "rpp/type-") {
 }
 "{0} {1,-16} {2}" -f $(if ($tyOk) { "PASS" } else { "FAIL" }), "T2 type gate", "5 rules fire on the bad fixture; the good one is silent"
 if (-not $tyOk) { $fail++ }
+
+# T2, the PROJECT layer: cross-file checking through the load graph.
+# Every fixture verdict below was first confirmed by running Ring itself
+# (app.ring -> R19, dup_main.ring -> C22, indep_a.ring -> clean).
+$xf = & ".\zig-out\bin\ringpp.exe" check "tests\fixtures\xfile" 2>&1 | Out-String
+$xfOk = ($xf -match "rpp/type-arity") -and ($xf -match "defined in .*lib\.ring") -and
+        ($xf -match "rpp/type-duplicate-func") -and ($xf -match "dup_main") -and
+        ($xf -notmatch "indep_")
+"{0} {1,-16} {2}" -f $(if ($xfOk) { "PASS" } else { "FAIL" }), "T2 xfile gate", "cross-file arity names lib.ring; C22 at the join; independent programs silent"
+if (-not $xfOk) { $fail++; $xf -split "`n" | Select-Object -Last 6 | ForEach-Object { "       $_" } }
 Pop-Location
 
 # The examples are a gate, not a brochure: each asserts that its raw-Ring and

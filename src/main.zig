@@ -6,6 +6,7 @@ const ts = @import("ts.zig");
 const check = @import("check.zig");
 const why = @import("why.zig");
 const types = @import("types.zig");
+const project = @import("project.zig");
 
 const version = "0.1.0";
 
@@ -101,26 +102,55 @@ fn runCheck(gpa: std.mem.Allocator, w: anytype, path: []const u8) !u8 {
     var bytes: usize = 0;
     var timer = try std.time.Timer.start();
 
-    // A pre-pass, because one question cannot be answered from a single file:
-    // a project may `load "typehints.ring"` once in an entry file and pull the
-    // rest in from there. Without this, every included file would be told it
-    // is about to raise R24 — an error on correct code, which is the one
-    // failure a checker must not have. Cheap: a substring scan, no parsing.
-    var tctx = types.Ctx{};
-    for (files.items) |f| {
-        const src = std.fs.cwd().readFileAlloc(gpa, f, 64 * 1024 * 1024) catch continue;
-        defer gpa.free(src);
-        if (std.mem.indexOf(u8, src, "typehints") != null) {
-            tctx.typehints_loaded_in_scan = true;
-            break;
-        }
-    }
+    // PASS 1 — the project layer (src/project.zig). Each file is parsed,
+    // its top-level signatures and `load` targets extracted, and the tree
+    // FREED before the next file is touched: parsing twice trades time for
+    // never holding two trees at once, on a machine that has punished the
+    // alternative. The load graph then says which definitions each file can
+    // actually reach — and cross-file calls are checked with the same
+    // certainty as local ones, because Ring's C22 guarantees a name has at
+    // most one live definition per program (FINDINGS F-26).
+    var parena_state = std.heap.ArenaAllocator.init(gpa);
+    defer parena_state.deinit();
+    const parena = parena_state.allocator();
 
+    var infos = std.ArrayList(project.FileInfo){};
+    var any_typehints = false;
     for (files.items) |f| {
+        const src = std.fs.cwd().readFileAlloc(gpa, f, 64 * 1024 * 1024) catch {
+            try infos.append(parena, .{
+                .path = try parena.dupe(u8, f),
+                .norm = try project.normPath(parena, "", f),
+                .sigs = &.{},
+                .loads = &.{},
+                .loads_typehints = false,
+            });
+            continue;
+        };
+        defer gpa.free(src);
+        const info = try project.scanFile(parena, parser, f, src);
+        if (info.loads_typehints) any_typehints = true;
+        try infos.append(parena, info);
+    }
+    var proj = try project.Project.build(parena, infos.items);
+
+    // PASS 2 — the checks, per file, with that file's load-graph view.
+    for (files.items, 0..) |f, i| {
         const src = std.fs.cwd().readFileAlloc(gpa, f, 64 * 1024 * 1024) catch continue;
         defer gpa.free(src);
         bytes += src.len;
-        try check.checkSourceCtx(gpa, parser, f, src, &report, tctx);
+
+        // per-file scratch: a view must die with its file, or six thousand
+        // of them accumulate and the process dies OutOfMemory (measured)
+        var scratch_state = std.heap.ArenaAllocator.init(gpa);
+        defer scratch_state.deinit();
+        const view = try proj.viewFor(scratch_state.allocator(), @intCast(i));
+        try check.checkSourceCtx(gpa, parser, f, src, &report, .{
+            .typehints_loaded_in_scan = any_typehints,
+            .extern_sigs = &view.extern_sigs,
+            .conflicted = &view.conflicted,
+            .duplicates = view.duplicates,
+        });
     }
     const ms = @as(f64, @floatFromInt(timer.read())) / 1_000_000.0;
 
@@ -221,4 +251,5 @@ test {
     _ = check;
     _ = why;
     _ = types;
+    _ = project;
 }

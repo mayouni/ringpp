@@ -308,6 +308,46 @@ pub const catalog = [_]Entry{
             "Reporting those would be a false-positive flood.",
     },
 
+    .{
+        .rule = "rpp/type-duplicate-func",
+        .findings = &.{"F-26"},
+        .codes = &.{"C22"},
+        .title = "Two definitions of one function name — the program dies at load",
+        .symptom = "Error (C22) : Function redefinition, function is already defined! " ++
+            "Reported before the first line runs, naming neither definition site.",
+        .cause = "Ring rejects a duplicate function name at LOAD time — measured on 1.27 " ++
+            "for both shapes: two defs in one file, and two defs brought together by " ++
+            "load statements. The checker reports this at the JOIN file: the one whose " ++
+            "loads first put both definitions into a single program. Files downstream " ++
+            "of the join inherit the problem and are not re-reported.",
+        .fix = "Remove one definition, or stop loading one of the two files. The " ++
+            "checker's note names both sites with file and line.",
+        .evidence = "measured 2026-08-23, both reproducers in FINDINGS F-26",
+        .hurts = "Names in a conflicted state are EXCLUDED from arity and type checking " ++
+            "— a report against an arbitrary one of the two definitions would be a " ++
+            "guess. Fix the duplicate and the checking resumes.",
+    },
+    .{
+        .rule = "rpp/type-declared-conflict",
+        .findings = &.{"F-24"},
+        .title = "Two of your own declarations contradict each other",
+        .symptom = "Nothing at run time — Ring enforces neither declaration. The code " ++
+            "runs with the real value while every reader believes the annotations.",
+        .cause = "Two shapes. (1) A call feeds one function's declared RETURN into " ++
+            "another's declared PARAMETER and the categories cannot both be true: " ++
+            "Greet(GetCount()) where GetCount declares number and Greet declares " ++
+            "string s. (2) A parameter declared one category is reassigned inside its " ++
+            "own body to a literal of another: func F(int x) ... x = \"abc\".",
+        .fix = "One of the two declarations is lying; decide which and fix it. Ring " ++
+            "will not decide for you.",
+        .evidence = "unit-tested in src/types.zig against the vendored grammar; the " ++
+            "underlying non-enforcement measured in FINDINGS F-24",
+        .hurts = "Only DECLARED types are compared — a call result with no return " ++
+            "annotation, or a computed value, is never judged. Inference would find " ++
+            "more and be wrong sometimes, which is a worse trade for a checker whose " ++
+            "authority rests on never crying wolf.",
+    },
+
     // Not rules. Reachable by finding id or error code, because they are what
     // someone actually hits at 2am with only a code to search for.
     .{

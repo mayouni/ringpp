@@ -627,6 +627,49 @@ document this, and the reproducer would need reducing to a plain class
 with no Ring++ around it before it is worth anyone's time. Recorded here
 as a Ring++ defect with a Ring cause.
 
+### F-26. A duplicate function name is a load-time kill — and that is what makes cross-file checking sound
+
+Measured 2026-08-23, both shapes, Ring 1.27:
+
+```ring
+# one file
+func Sum x, y     ...
+func Sum a, b, c  ...
+# --> Line 4 Error (C22) : Function redefinition, function is already defined!
+```
+
+```ring
+# across a load
+load "a.ring"        # defines Sum(x, y)
+func Sum a, b, c     # this file's own
+# --> Line 4 Error (C22), same message — the program NEVER STARTS
+```
+
+`C22` fires at **load time**, before the first line executes, and its
+message names neither definition site.
+
+**Why this finding matters more than it looks.** It is the soundness
+proof for cross-file type checking. Within one load graph, a name that
+resolves has **exactly one live definition** — any program carrying two
+is dead before it runs. So a call in `app.ring` to a function defined in
+`lib.ring`, reached through `load`, can be checked against that
+definition with the *same certainty* as a same-file call: no other
+definition can exist in a program that runs.
+
+The same fact dictates the two edge behaviours:
+
+- a name defined **twice inside one closure** is itself the defect —
+  reported as `rpp/type-duplicate-func` at the **join file** (the one
+  whose loads first bring the definitions together), with both sites
+  named, since Ring's own message names neither;
+- conflicted names are **excluded** from arity and type checking, because
+  a report against an arbitrary one of the two would be a guess.
+
+And the guard for trees of *independent programs* (an `examples/`
+directory where every file defines its own `Helper()`): files are related
+**only through `load` edges they actually contain**. The scan root is not
+a program — the load graph is.
+
 ### F-4. Cheap-looking calls that are not cheap
 
 Net cost per call, 300,000 iterations, loop baseline subtracted

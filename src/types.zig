@@ -45,6 +45,34 @@ const chk = @import("check.zig");
 /// "this file does not load it" is not on its own a verdict.
 pub const Ctx = struct {
     typehints_loaded_in_scan: bool = false,
+
+    /// Cross-file signatures visible from THIS file through its load graph
+    /// (src/project.zig). A name here has exactly one definition across the
+    /// closure — Ring's C22 guarantees no second live one (FINDINGS F-26) —
+    /// so checking against it carries the same certainty as a local call.
+    extern_sigs: ?*const std.StringHashMap(ExternSig) = null,
+
+    /// Names with MORE than one definition in this file's closure. Checking
+    /// against either would be arbitrary, so these are skipped — and the
+    /// duplicate itself is reported once, at the join file, via `duplicates`.
+    conflicted: ?*const std.StringHashMap(void) = null,
+
+    /// Duplicates INTRODUCED by this file's own loads (the join point).
+    /// Running this file is Error (C22) before its first line executes.
+    duplicates: []const DupNote = &.{},
+};
+
+pub const ExternSig = struct {
+    file: []const u8,
+    sig: Collected,
+};
+
+pub const DupNote = struct {
+    name: []const u8,
+    file_a: []const u8,
+    row_a: u32,
+    file_b: []const u8,
+    row_b: u32,
 };
 
 /// Ring's hint vocabulary, verbatim from libraries/typehints/typehints.ring.
@@ -130,13 +158,58 @@ fn literalOf(n: ts.Node) Lit {
     return .none;
 }
 
-const Param = struct { ty: []const u8, name: []const u8 };
+pub const Param = struct { ty: []const u8, name: []const u8 };
 
-const Sig = struct {
-    name: []const u8,
+/// One top-level function signature, every string arena-owned (safe to keep
+/// after the source and the tree are gone — the project layer relies on it).
+pub const Collected = struct {
+    display: []const u8,
+    lower: []const u8,
     params: []Param,
+    /// the `int` of `int func F(...)`, or "" when unannotated
+    ret: []const u8,
     row: u32,
 };
+
+/// Signatures a plain unqualified call can reach: file level, BEFORE the
+/// first class — every func after the first class is a method of it
+/// (FINDINGS F-21), and an unqualified call to a method resolves by
+/// different rules. Including methods would report errors on correct code.
+///
+/// Keeps ALL definitions, duplicates included: the project layer needs to
+/// SEE a duplicate to report it as the C22 it is (F-26).
+pub fn collectTopSigs(arena: std.mem.Allocator, root: ts.Node) ![]Collected {
+    var out = std.ArrayList(Collected){};
+    var first_class_row: u32 = std.math.maxInt(u32);
+    var i: u32 = 0;
+    while (i < root.namedChildCount()) : (i += 1) {
+        const n = root.namedChild(i);
+        if (isClass(n)) {
+            first_class_row = @min(first_class_row, n.start().row);
+            continue;
+        }
+        if (!std.mem.eql(u8, n.kind(), "function_definition")) continue;
+        if (n.start().row > first_class_row) continue;
+        const nm = n.field("name");
+        if (nm.isNull()) continue;
+
+        const raw = try paramsOf(arena, n);
+        const params = try arena.alloc(Param, raw.len);
+        for (raw, 0..) |p, k| params[k] = .{
+            .ty = try arena.dupe(u8, p.ty),
+            .name = try arena.dupe(u8, p.name),
+        };
+
+        try out.append(arena, .{
+            .display = try arena.dupe(u8, nm.text()),
+            .lower = try lower(arena, nm.text()),
+            .params = params,
+            .ret = if (returnAnnotation(n)) |a| try arena.dupe(u8, a.text()) else "",
+            .row = n.start().row,
+        });
+    }
+    return out.toOwnedSlice(arena);
+}
 
 // ---------------------------------------------------------------------------
 
@@ -154,35 +227,20 @@ pub fn check(
 
     const loads_hints = fileLoadsTypehints(src);
 
-    // 1. Signatures of functions that a plain unqualified call can reach.
-    //
-    //    Only the ones at file level and BEFORE the first class: every func
-    //    after the first class is a method of it (FINDINGS F-21), and an
-    //    unqualified call to a method resolves by different rules. Including
-    //    them would produce arity errors on correct code.
-    var sigs = std.StringHashMap(Sig).init(arena);
-    var first_class_row: u32 = std.math.maxInt(u32);
-    {
-        var i: u32 = 0;
-        while (i < root.namedChildCount()) : (i += 1) {
-            const n = root.namedChild(i);
-            if (isClass(n)) {
-                first_class_row = @min(first_class_row, n.start().row);
-                continue;
-            }
-            if (!std.mem.eql(u8, n.kind(), "function_definition")) continue;
-            if (n.start().row > first_class_row) continue;
-            const nm = n.field("name");
-            if (nm.isNull()) continue;
-            const sig = Sig{
-                .name = nm.text(),
-                .params = try paramsOf(arena, n),
-                .row = n.start().row,
-            };
-            const key = try lower(arena, nm.text());
-            // A redefinition is Ring's problem, not ours; keep the first.
-            if (!sigs.contains(key)) try sigs.put(key, sig);
-        }
+    var sigs = std.StringHashMap(Collected).init(arena);
+    for (try collectTopSigs(arena, root)) |s| {
+        // same-file redefinition: the project layer reports it as C22; for
+        // local checking keep the first, matching what a reader sees first
+        if (!sigs.contains(s.lower)) try sigs.put(s.lower, s);
+    }
+
+    // Duplicates INTRODUCED by this file's loads: running this file is C22
+    // before its first line. Anchored at the first load statement, because
+    // the loads are what join the two definitions.
+    for (ctx.duplicates) |d| {
+        const anchor = firstLoad(root) orelse root;
+        try report.add(gpa, file, anchor, .err, "rpp/type-duplicate-func", "loading this file defines {s}() twice — Error (C22), the program cannot start", .{d.name}, "Ring rejects a duplicate function name at LOAD time: 'Function redefinition, function is already defined!'. The two definitions this file's loads bring together are named in the locations below; nothing after the load line ever runs. Remove one, or stop loading one of the two files. See FINDINGS F-26.");
+        try report.add(gpa, file, anchor, .note, "rpp/type-duplicate-func", "{s}() is defined at {s}:{d} and again at {s}:{d}", .{ d.name, d.file_a, d.row_a + 1, d.file_b, d.row_b + 1 }, "");
     }
 
     var w = Walker{
@@ -202,13 +260,62 @@ const Walker = struct {
     arena: std.mem.Allocator,
     report: *chk.Report,
     file: []const u8,
-    sigs: *std.StringHashMap(Sig),
+    sigs: *std.StringHashMap(Collected),
     loads_hints: bool,
     ctx: Ctx,
+
+    /// Where a callable name resolves, in Ring's own order — a conflicted
+    /// name resolves NOWHERE, because the program carrying both defs is C22.
+    const Resolved = union(enum) {
+        none,
+        conflicted,
+        local: Collected,
+        remote: ExternSig,
+    };
+
+    fn resolve(self: *Walker, lowname: []const u8) Resolved {
+        if (self.ctx.conflicted) |c| {
+            if (c.contains(lowname)) return .conflicted;
+        }
+        if (self.sigs.get(lowname)) |s| return .{ .local = s };
+        if (self.ctx.extern_sigs) |e| {
+            if (e.get(lowname)) |x| return .{ .remote = x };
+        }
+        return .none;
+    }
 
     fn visit(self: *Walker, n: ts.Node, in_class: bool) !void {
         const kind = n.kind();
         const now_in_class = in_class or isClass(n);
+
+        // Ring's brace block runs in the OBJECT's scope: inside
+        // `StzCharQ("x") { ? Name() }` the call `Name()` resolves to the
+        // object's method, never to a global function that happens to share
+        // the name. The first version of this walker did not know that, and
+        // reported 340+ false arity errors across Softanza's test suite —
+        // every one a method call inside braces. The HEAD of the brace
+        // expression (the object being entered) is still caller-scope and
+        // still checked; only the body statements are method-land.
+        if (std.mem.eql(u8, kind, "brace_expression")) {
+            if (n.namedChildCount() > 0) try self.visit(n.namedChild(0), now_in_class);
+            var i: u32 = 1;
+            while (i < n.namedChildCount()) : (i += 1) try self.visit(n.namedChild(i), true);
+            return;
+        }
+        // `new Thing(args) { body }` — same rule: the class name and the
+        // constructor arguments are caller-scope, the body is object-scope.
+        if (std.mem.eql(u8, kind, "new_expression")) {
+            var i: u32 = 0;
+            while (i < n.namedChildCount()) : (i += 1) {
+                const c = n.namedChild(i);
+                const ck = c.kind();
+                const head = std.mem.eql(u8, ck, "qualified_identifier") or
+                    std.mem.eql(u8, ck, "identifier") or
+                    std.mem.eql(u8, ck, "arguments");
+                try self.visit(c, now_in_class or !head);
+            }
+            return;
+        }
 
         if (std.mem.eql(u8, kind, "function_definition")) try self.checkFunction(n);
         if (std.mem.eql(u8, kind, "call_expression")) try self.checkCall(n, now_in_class);
@@ -244,6 +351,43 @@ const Walker = struct {
             // RULE 4. A returned literal that contradicts the annotation.
             try self.checkReturns(n, t);
         }
+
+        // RULE 6. An annotated parameter reassigned to a literal of a
+        // contradicting category inside the body. The reassignment is a
+        // certainty; the annotation declared otherwise; one of them lies.
+        for (params) |p| {
+            if (p.ty.len == 0) continue;
+            if (!isNumericType(p.ty) and !isTextType(p.ty) and !isAggregateType(p.ty)) continue;
+            try self.walkAssigns(n, n, p);
+        }
+    }
+
+    fn walkAssigns(self: *Walker, n: ts.Node, owner: ts.Node, p: Param) !void {
+        // brace/new bodies assign OBJECT attributes — `o { x = 5 }` touches
+        // o's x, not the parameter x — so they are not this function's story
+        if (!nodeEql(n, owner) and
+            (std.mem.eql(u8, n.kind(), "function_definition") or isClass(n) or
+                std.mem.eql(u8, n.kind(), "brace_expression") or
+                std.mem.eql(u8, n.kind(), "new_expression"))) return;
+
+        if (std.mem.eql(u8, n.kind(), "assignment_expression") and n.namedChildCount() >= 2) {
+            const lhs = n.namedChild(0);
+            if (std.mem.eql(u8, lhs.kind(), "identifier") and
+                std.ascii.eqlIgnoreCase(lhs.text(), p.name))
+            {
+                const lit = literalOf(n.namedChild(1));
+                const bad = switch (lit) {
+                    .text => isNumericType(p.ty),
+                    .number => isTextType(p.ty) or isAggregateType(p.ty),
+                    .none => false,
+                };
+                if (bad) {
+                    try self.report.add(self.gpa, self.file, n, .warn, "rpp/type-declared-conflict", "'{s}' is declared '{s} {s}' and reassigned here to a literal {s}", .{ p.name, p.ty, p.name, lit.word() }, "The parameter's annotation and this assignment contradict each other, and Ring enforces neither — the code runs with the literal's real type while every reader of the signature believes the annotation. Fix whichever is wrong. See FINDINGS F-24.");
+                }
+            }
+        }
+        var i: u32 = 0;
+        while (i < n.childCount()) : (i += 1) try self.walkAssigns(n.child(i), owner, p);
     }
 
     /// Returns whose value is a literal of the wrong category. Only literals:
@@ -284,31 +428,62 @@ const Walker = struct {
         if (in_class) return;
 
         const key = lower(self.arena, callee) catch return;
-        const sig = self.sigs.get(key) orelse return;
+        const sig: Collected, const from: []const u8 = switch (self.resolve(key)) {
+            .none, .conflicted => return,
+            .local => |s| .{ s, "" },
+            .remote => |x| .{ x.sig, x.file },
+        };
 
         // RULE 2. Arity. Ring DOES enforce this: R19 too few, R20 too many.
         const nargs = argCount(n);
         const nparams: u32 = @intCast(sig.params.len);
         if (nargs != nparams) {
             const code = if (nargs < nparams) "R19" else "R20";
-            try self.report.add(self.gpa, self.file, n, .err, "rpp/type-arity", "{s}() takes {d} argument(s), called with {d} — Error ({s}) at run time", .{ sig.name, nparams, nargs, code }, "Ring checks arity even though it does not check types: R19 is 'Calling function with less number of parameters', R20 'with extra'. Ring has no default parameters, so the count is exact. The definition is in this file and before the first class, so this call cannot be reaching a different one.");
+            if (from.len == 0) {
+                try self.report.add(self.gpa, self.file, n, .err, "rpp/type-arity", "{s}() takes {d} argument(s), called with {d} — Error ({s}) at run time", .{ sig.display, nparams, nargs, code }, "Ring checks arity even though it does not check types: R19 is 'Calling function with less number of parameters', R20 'with extra'. Ring has no default parameters, so the count is exact. The definition is in this file and before the first class, so this call cannot be reaching a different one.");
+            } else {
+                try self.report.add(self.gpa, self.file, n, .err, "rpp/type-arity", "{s}() takes {d} argument(s), called with {d} — Error ({s}) at run time (defined in {s})", .{ sig.display, nparams, nargs, code, from }, "The definition is reached through this file's load graph, and it is the ONLY one: Ring rejects a second definition of the same name with Error (C22) at load time, so no program containing this call can be running a different definition of it. See FINDINGS F-26.");
+            }
             return; // the argument types below would only add noise
         }
 
-        // RULE 3. A literal argument that contradicts the parameter type.
+        // RULE 3. An argument whose type is KNOWN contradicting the declared
+        // parameter type. Known means: a literal, or a call to a function
+        // whose return annotation declares it. Anything else is Ring-dynamic
+        // and left alone.
         var i: u32 = 0;
         while (i < nparams) : (i += 1) {
             const p = sig.params[i];
             if (p.ty.len == 0) continue;
             const a = argAt(n, i) orelse continue;
+
             const lit = literalOf(a);
-            const bad = switch (lit) {
-                .text => isNumericType(p.ty),
-                .number => isTextType(p.ty) or isAggregateType(p.ty),
-                .none => false,
-            };
-            if (bad) {
-                try self.report.add(self.gpa, self.file, a, .warn, "rpp/type-arg-mismatch", "{s}() declares '{s} {s}', called here with a literal {s}", .{ sig.name, p.ty, p.name, lit.word() }, "Ring accepts this: parameter annotations are parsed and thrown away, never checked. The call runs and the operators inside behave as the value's real type — Sum(\"a\",\"b\") on 'int x, int y' returns \"ab\", not 3. See FINDINGS F-24 and DESIGN_TOOLCHAIN section 3.");
+            if (lit != .none) {
+                const bad = switch (lit) {
+                    .text => isNumericType(p.ty),
+                    .number => isTextType(p.ty) or isAggregateType(p.ty),
+                    .none => false,
+                };
+                if (bad) {
+                    try self.report.add(self.gpa, self.file, a, .warn, "rpp/type-arg-mismatch", "{s}() declares '{s} {s}', called here with a literal {s}", .{ sig.display, p.ty, p.name, lit.word() }, "Ring accepts this: parameter annotations are parsed and thrown away, never checked. The call runs and the operators inside behave as the value's real type — Sum(\"a\",\"b\") on 'int x, int y' returns \"ab\", not 3. See FINDINGS F-24 and DESIGN_TOOLCHAIN section 3.");
+                }
+                continue;
+            }
+
+            // a nested call whose callee DECLARES its return type
+            if (std.mem.eql(u8, a.kind(), "call_expression")) {
+                const inner = calleeName(a);
+                if (inner.len == 0) continue;
+                const ikey = lower(self.arena, inner) catch continue;
+                const iret = switch (self.resolve(ikey)) {
+                    .none, .conflicted => continue,
+                    .local => |s| s.ret,
+                    .remote => |x| x.sig.ret,
+                };
+                if (iret.len == 0) continue;
+                if (categoriesConflict(iret, p.ty)) {
+                    try self.report.add(self.gpa, self.file, a, .warn, "rpp/type-declared-conflict", "{s}() declares '{s} {s}', but {s}() declares that it returns {s}", .{ sig.display, p.ty, p.name, inner, iret }, "Two declarations contradict each other: the parameter says one category, the return annotation of the call feeding it says another. One of them is lying — and Ring will not say which, because it enforces neither. Fix whichever declaration is wrong. See FINDINGS F-24.");
+                }
             }
         }
     }
@@ -333,6 +508,33 @@ const Walker = struct {
 fn isClass(n: ts.Node) bool {
     const k = n.kind();
     return std.mem.eql(u8, k, "class_definition") or std.mem.eql(u8, k, "class_statement");
+}
+
+/// Two DECLARED types whose categories cannot both be true of one value.
+/// Only pairs where both sides are in Ring's hint vocabulary and the
+/// categories are disjoint — `char` and class names stay out of it.
+fn categoriesConflict(a: []const u8, b: []const u8) bool {
+    const aN = isNumericType(a);
+    const aT = isTextType(a);
+    const aG = isAggregateType(a);
+    const bN = isNumericType(b);
+    const bT = isTextType(b);
+    const bG = isAggregateType(b);
+    if (aN and (bT or bG)) return true;
+    if (aT and (bN or bG)) return true;
+    if (aG and (bN or bT)) return true;
+    return false;
+}
+
+/// The first load statement of a file — the anchor for reports about what
+/// the loads, together, cause.
+fn firstLoad(root: ts.Node) ?ts.Node {
+    var i: u32 = 0;
+    while (i < root.namedChildCount()) : (i += 1) {
+        const n = root.namedChild(i);
+        if (std.mem.eql(u8, n.kind(), "load_statement")) return n;
+    }
+    return null;
 }
 
 fn nodeEql(a: ts.Node, b: ts.Node) bool {
@@ -680,6 +882,174 @@ test "clean annotated code produces nothing at all" {
         for (rep.findings.items) |f| std.debug.print("unexpected: {s} — {s}\n", .{ f.rule, f.message });
         return error.FalsePositive;
     }
+}
+
+test "a declared return feeding a contradicting declared parameter" {
+    // GetCount declares it returns a number; Greet declares it takes a
+    // string. Both are declarations; one of them is lying.
+    try expectRule(std.testing.allocator,
+        \\load "typehints.ring"
+        \\? Greet(GetCount())
+        \\
+        \\number func GetCount()
+        \\    return 42
+        \\
+        \\func Greet(string s)
+        \\    return s
+        \\
+    , "rpp/type-declared-conflict", true);
+}
+
+test "a declared return matching the declared parameter is silent" {
+    try expectRule(std.testing.allocator,
+        \\load "typehints.ring"
+        \\? Greet(GetName())
+        \\
+        \\string func GetName()
+        \\    return "x"
+        \\
+        \\func Greet(string s)
+        \\    return s
+        \\
+    , "rpp/type-declared-conflict", false);
+}
+
+test "an UNANNOTATED call result is never judged" {
+    try expectRule(std.testing.allocator,
+        \\? Greet(GetCount())
+        \\
+        \\func GetCount()
+        \\    return 42
+        \\
+        \\func Greet(string s)
+        \\    return s
+        \\
+    , "rpp/type-declared-conflict", false);
+}
+
+test "an annotated parameter reassigned to a contradicting literal" {
+    try expectRule(std.testing.allocator,
+        \\func F(int x)
+        \\    x = "abc"
+        \\    return x
+        \\
+    , "rpp/type-declared-conflict", true);
+}
+
+test "reassignment to a matching literal, or of an unannotated param, is silent" {
+    try expectRule(std.testing.allocator,
+        \\func F(int x, y)
+        \\    x = 5
+        \\    y = "abc"
+        \\    return x
+        \\
+    , "rpp/type-declared-conflict", false);
+}
+
+test "a call inside a brace block is a METHOD call and is never checked" {
+    // Show(p) exists as a global with 1 param; inside `o { Show() }` the
+    // name resolves to o's method. 340+ false positives on Softanza's test
+    // suite taught this rule.
+    try expectRule(std.testing.allocator,
+        \\o = new Thing
+        \\o { Show() }
+        \\StzCharQ("x") { ? Show() }
+        \\
+        \\func Show p
+        \\    return p
+        \\
+        \\class Thing
+        \\    func Show
+        \\        return 1
+        \\
+    , "rpp/type-arity", false);
+}
+
+test "the HEAD of a brace expression is still caller scope, still checked" {
+    try expectRule(std.testing.allocator,
+        \\Wrap(1, 2) { ? Anything() }
+        \\
+        \\func Wrap p
+        \\    return p
+        \\
+    , "rpp/type-arity", true);
+}
+
+test "a nested function's assignments belong to the nested function" {
+    // inner G's own `x` is a different variable; F's annotated x untouched
+    try expectRule(std.testing.allocator,
+        \\func F(int x)
+        \\    return x
+        \\
+        \\func G(x)
+        \\    x = "abc"
+        \\    return x
+        \\
+    , "rpp/type-declared-conflict", false);
+}
+
+test "cross-file: an extern signature is checked and named" {
+    const gpa = std.testing.allocator;
+    const p = ts.Parser.init();
+    defer p.deinit();
+    var arena_state = std.heap.ArenaAllocator.init(gpa);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var ext = std.StringHashMap(ExternSig).init(arena);
+    const params = try arena.alloc(Param, 2);
+    params[0] = .{ .ty = "", .name = "a" };
+    params[1] = .{ .ty = "", .name = "b" };
+    try ext.put("helper", .{ .file = "lib.ring", .sig = .{
+        .display = "Helper",
+        .lower = "helper",
+        .params = params,
+        .ret = "",
+        .row = 0,
+    } });
+
+    const src = "? Helper(1)\n";
+    const tree = p.parse(src).?;
+    defer tree.deinit();
+    var rep = chk.Report.init(gpa);
+    defer rep.deinit(gpa);
+    try check(gpa, tree.root(), "app.ring", src, &rep, .{ .extern_sigs = &ext });
+
+    var hit = false;
+    for (rep.findings.items) |f| {
+        if (std.mem.eql(u8, f.rule, "rpp/type-arity") and
+            std.mem.indexOf(u8, f.message, "lib.ring") != null) hit = true;
+    }
+    try std.testing.expect(hit);
+}
+
+test "cross-file: a conflicted name is skipped, and the duplicate reported" {
+    const gpa = std.testing.allocator;
+    const p = ts.Parser.init();
+    defer p.deinit();
+    var arena_state = std.heap.ArenaAllocator.init(gpa);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var conf = std.StringHashMap(void).init(arena);
+    try conf.put("same", {});
+    const dups = [_]DupNote{.{ .name = "Same", .file_a = "a.ring", .row_a = 0, .file_b = "b.ring", .row_b = 0 }};
+
+    const src = "load \"a.ring\"\nload \"b.ring\"\n? Same(1,2,3)\n";
+    const tree = p.parse(src).?;
+    defer tree.deinit();
+    var rep = chk.Report.init(gpa);
+    defer rep.deinit(gpa);
+    try check(gpa, tree.root(), "main.ring", src, &rep, .{ .conflicted = &conf, .duplicates = &dups });
+
+    var dup_hit = false;
+    var arity_hit = false;
+    for (rep.findings.items) |f| {
+        if (std.mem.eql(u8, f.rule, "rpp/type-duplicate-func")) dup_hit = true;
+        if (std.mem.eql(u8, f.rule, "rpp/type-arity")) arity_hit = true;
+    }
+    try std.testing.expect(dup_hit);
+    try std.testing.expect(!arity_hit); // conflicted: checking either def would be arbitrary
 }
 
 test "the scan-wide load downgrades the error to a note" {
