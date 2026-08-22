@@ -48,6 +48,22 @@ pub const FileInfo = struct {
     /// normalized resolved load targets (only ones that MAY be in the tree)
     loads: [][]const u8,
     loads_typehints: bool,
+    /// Did tree-sitter parse this file completely?
+    ///
+    /// A file that did NOT is excluded from the project layer entirely --
+    /// it exports no signatures and receives no cross-file findings. The
+    /// reason is measured, not theoretical: on a partially-parsed file the
+    /// recovery invented call shapes that are not in the source. Softanza's
+    /// stzListOfPairsTest.ring produced an arity report for `SortLists()`
+    /// sitting inside a BLOCK COMMENT, and tempo.ring one for a method call
+    /// `Q("x").IsNumberInString()` that is not a global call at all. Both
+    /// files already carry `rpp/unparsed`, whose promise is exactly "no
+    /// rules were applied to this file" -- the cross-file layer was
+    /// breaking that promise.
+    ///
+    /// The cost is real and is accepted: genuine findings in unparsed files
+    /// are lost. A false positive in a clean file costs more.
+    parsed_ok: bool,
 };
 
 /// Parse one file, extract what the project layer needs, FREE the tree.
@@ -66,11 +82,14 @@ pub fn scanFile(
         .sigs = &.{},
         .loads = &.{},
         .loads_typehints = std.mem.indexOf(u8, src, "typehints") != null,
+        .parsed_ok = false,
     };
 
     const tree = parser.parse(src) orelse return info;
     defer tree.deinit();
 
+    if (tree.root().hasError()) return info; // no signatures, no edges
+    info.parsed_ok = true;
     info.sigs = try types.collectTopSigs(arena, tree.root());
 
     const dir = dirOf(path);
@@ -258,6 +277,18 @@ pub const Project = struct {
     /// Strings inside the view (names, paths, signature types) reference the
     /// project arena and stay valid; only the maps and slices are scratch.
     pub fn viewFor(self: *Project, scratch: std.mem.Allocator, i: u32) !View {
+        // A file that did not parse gets an EMPTY view: no extern signatures,
+        // no conflicts, no duplicates. `rpp/unparsed` already promises "no
+        // rules were applied to this file", and this is what keeps that
+        // promise true now that a cross-file layer exists. See FileInfo.
+        if (!self.files[i].parsed_ok) {
+            return .{
+                .extern_sigs = std.StringHashMap(types.ExternSig).init(scratch),
+                .conflicted = std.StringHashMap(void).init(scratch),
+                .duplicates = &.{},
+            };
+        }
+
         var first = std.StringHashMap(DefSite).init(scratch);
         var second = std.StringHashMap(DefSite).init(scratch);
         try collectSites(&first, &second, self.files, i);
@@ -328,6 +359,33 @@ pub const Project = struct {
 
 // ---------------------------------------------------------------------------
 
+test "an unparsed file neither exports signatures nor receives findings" {
+    var a = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer a.deinit();
+    const al = a.allocator();
+    const p = ts.Parser.init();
+    defer p.deinit();
+
+    // `/*` opens a block comment that swallows the rest -- tree-sitter
+    // recovers by inventing shapes, and one of those inventions produced a
+    // real false positive on Softanza (SortLists() INSIDE a comment).
+    const broken = "func Real a, b\n    return a\n\n/*======= SortLists()\n";
+    const info = try scanFile(al, p, "broken.ring", broken);
+    try std.testing.expect(!info.parsed_ok);
+    try std.testing.expectEqual(@as(usize, 0), info.sigs.len); // exports nothing
+
+    const good = "func Fine x\n    return x\n";
+    const ginfo = try scanFile(al, p, "good.ring", good);
+    try std.testing.expect(ginfo.parsed_ok);
+    try std.testing.expectEqual(@as(usize, 1), ginfo.sigs.len);
+
+    var files = [_]FileInfo{ info, ginfo };
+    var proj = try Project.build(al, &files);
+    const v = try proj.viewFor(al, 0); // the unparsed one
+    try std.testing.expectEqual(@as(u32, 0), v.extern_sigs.count());
+    try std.testing.expectEqual(@as(usize, 0), v.duplicates.len);
+}
+
 test "normPath folds dots and case" {
     var a = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer a.deinit();
@@ -351,12 +409,12 @@ test "closure, conflict and join-point on a synthetic graph" {
     const sigSameI = [_]types.Collected{.{ .display = "Same", .lower = "same", .params = &.{}, .ret = "", .row = 1 }};
 
     var files = [_]FileInfo{
-        .{ .path = "lib.ring", .norm = "lib.ring", .sigs = @constCast(&sigHelper), .loads = &.{}, .loads_typehints = false },
-        .{ .path = "app.ring", .norm = "app.ring", .sigs = &.{}, .loads = @constCast(&[_][]const u8{"lib.ring"}), .loads_typehints = false },
-        .{ .path = "dup_a.ring", .norm = "dup_a.ring", .sigs = @constCast(&sigSameA), .loads = &.{}, .loads_typehints = false },
-        .{ .path = "dup_b.ring", .norm = "dup_b.ring", .sigs = @constCast(&sigSameB), .loads = &.{}, .loads_typehints = false },
-        .{ .path = "dup_main.ring", .norm = "dup_main.ring", .sigs = &.{}, .loads = @constCast(&[_][]const u8{ "dup_a.ring", "dup_b.ring" }), .loads_typehints = false },
-        .{ .path = "indep.ring", .norm = "indep.ring", .sigs = @constCast(&sigSameI), .loads = &.{}, .loads_typehints = false },
+        .{ .path = "lib.ring", .norm = "lib.ring", .sigs = @constCast(&sigHelper), .loads = &.{}, .loads_typehints = false, .parsed_ok = true },
+        .{ .path = "app.ring", .norm = "app.ring", .sigs = &.{}, .loads = @constCast(&[_][]const u8{"lib.ring"}), .loads_typehints = false, .parsed_ok = true },
+        .{ .path = "dup_a.ring", .norm = "dup_a.ring", .sigs = @constCast(&sigSameA), .loads = &.{}, .loads_typehints = false, .parsed_ok = true },
+        .{ .path = "dup_b.ring", .norm = "dup_b.ring", .sigs = @constCast(&sigSameB), .loads = &.{}, .loads_typehints = false, .parsed_ok = true },
+        .{ .path = "dup_main.ring", .norm = "dup_main.ring", .sigs = &.{}, .loads = @constCast(&[_][]const u8{ "dup_a.ring", "dup_b.ring" }), .loads_typehints = false, .parsed_ok = true },
+        .{ .path = "indep.ring", .norm = "indep.ring", .sigs = @constCast(&sigSameI), .loads = &.{}, .loads_typehints = false, .parsed_ok = true },
     };
 
     var p = try Project.build(al, &files);

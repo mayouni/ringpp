@@ -124,6 +124,7 @@ fn runCheck(gpa: std.mem.Allocator, w: anytype, path: []const u8) !u8 {
                 .sigs = &.{},
                 .loads = &.{},
                 .loads_typehints = false,
+                .parsed_ok = false, // unreadable: no signatures, no findings
             });
             continue;
         };

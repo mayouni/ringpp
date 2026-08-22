@@ -34,6 +34,12 @@ pub const Node = struct {
         return c.ts_node_is_missing(self.raw);
     }
 
+    /// Does this node, or anything under it, contain a parse error?
+    /// On the root, this answers "did the whole file parse".
+    pub fn hasError(self: Node) bool {
+        return c.ts_node_has_error(self.raw);
+    }
+
     pub fn start(self: Node) Point {
         const p = c.ts_node_start_point(self.raw);
         return .{ .row = p.row, .col = p.column };
