@@ -18,8 +18,13 @@ without leaving Ring and without fighting it.
 2. **Type safety for large Ring projects.** A static checker built on a
    vendored tree-sitter grammar plus Ring's own `typehints` channel — the
    annotations Ring's parser already accepts on purpose and currently
-   throws away. On its first real run it found **99 dormant crashes** in
-   one mature library and **one** in Ring's own applications.
+   throws away. It reads across the **load graph**, so a call in one file
+   is checked against a definition in another. On real codebases it found
+   **two functions in Ring's own standard library that have never worked**
+   — `encrypt_ex` and `decrypt_ex` call the wrong function and die with
+   `R20` on every call — with **zero false positives across Ring's 1,959
+   files**. See [the case study](docs/CASE-TYPE-SAFETY.md), which also
+   records the three false positives it *did* produce and what they cost.
 3. **Governability for business-domain projects.** Static analysis
    (`check`), explanation (`why`), and gates that assert behaviour — so a
    bank, a ministry, or a platform team can *audit* a Ring codebase, not
@@ -99,6 +104,7 @@ checker recommends. One project, one culture.
 
 | | |
 |---|---|
+| **[docs/CASE-TYPE-SAFETY.md](docs/CASE-TYPE-SAFETY.md)** | **What the checker actually found** — two dead functions in Ring's own standard library, two live bugs in Softanza, and the three false positives it produced along the way. |
 | **[docs/VM-CONTRACT.md](docs/VM-CONTRACT.md)** | The abstract interface: exactly what Ring++ needs from the VM, as observable behaviours, probe-checked on every load — and a proposed contract both parties could agree on. |
 | **[docs/FINDINGS.md](docs/FINDINGS.md)** | What the Ring VM actually does, measured. Read this first — two of its numbers killed the design I set out to write. |
 | **[docs/DESIGN.md](docs/DESIGN.md)** | The library half: what Ring++ is, the layer map, the surface, safety, upgrades, `myctiger`, Softanza, and the risks. |

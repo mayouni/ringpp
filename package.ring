@@ -46,6 +46,8 @@ aPackageInfo = [
 		"README.md",
 		"LICENSE",
 		"docs/FINDINGS.md",
+		"docs/CASE-TYPE-SAFETY.md",
+		"docs/VM-CONTRACT.md",
 		"docs/DESIGN.md",
 		"examples/README.md",
 		"examples/01-patch-a-large-buffer/example.ring",
