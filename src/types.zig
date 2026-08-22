@@ -171,6 +171,76 @@ pub const Collected = struct {
     row: u32,
 };
 
+/// A class as the checker needs it: its own methods, and its parent's name.
+///
+/// The grammar NESTS class_definition nodes — `class Child from Parent` is
+/// parsed inside Parent's node, though Ring treats classes as siblings — so
+/// a class's OWN methods are the function_definitions before any nested
+/// class_definition, and nothing deeper.
+pub const ClassInfo = struct {
+    display: []const u8,
+    lower: []const u8,
+    /// "" when the class declares no parent
+    parent_lower: []const u8,
+    methods: []Collected,
+};
+
+/// Every class in a file, flattened out of the grammar's nesting.
+pub fn collectClasses(arena: std.mem.Allocator, root: ts.Node) ![]ClassInfo {
+    var out = std.ArrayList(ClassInfo){};
+    try walkClasses(arena, root, &out);
+    return out.toOwnedSlice(arena);
+}
+
+fn walkClasses(arena: std.mem.Allocator, n: ts.Node, out: *std.ArrayList(ClassInfo)) !void {
+    if (isClass(n)) {
+        const nm = n.field("name");
+        if (!nm.isNull()) {
+            var parent: []const u8 = "";
+            const p = n.field("parent");
+            if (!p.isNull()) {
+                // class_parent -> qualified_identifier -> identifier
+                var q = p;
+                while (q.namedChildCount() > 0) q = q.namedChild(0);
+                parent = try lower(arena, q.text());
+            }
+
+            var methods = std.ArrayList(Collected){};
+            var i: u32 = 0;
+            while (i < n.namedChildCount()) : (i += 1) {
+                const c = n.namedChild(i);
+                if (isClass(c)) break; // a nested class ends THIS class's body
+                if (!std.mem.eql(u8, c.kind(), "function_definition")) continue;
+                const mn = c.field("name");
+                if (mn.isNull()) continue;
+
+                const raw = try paramsOf(arena, c);
+                const params = try arena.alloc(Param, raw.len);
+                for (raw, 0..) |pp, k| params[k] = .{
+                    .ty = try arena.dupe(u8, pp.ty),
+                    .name = try arena.dupe(u8, pp.name),
+                };
+                try methods.append(arena, .{
+                    .display = try arena.dupe(u8, mn.text()),
+                    .lower = try lower(arena, mn.text()),
+                    .params = params,
+                    .ret = if (returnAnnotation(c)) |a| try arena.dupe(u8, a.text()) else "",
+                    .row = c.start().row,
+                });
+            }
+
+            try out.append(arena, .{
+                .display = try arena.dupe(u8, nm.text()),
+                .lower = try lower(arena, nm.text()),
+                .parent_lower = parent,
+                .methods = try methods.toOwnedSlice(arena),
+            });
+        }
+    }
+    var i: u32 = 0;
+    while (i < n.childCount()) : (i += 1) try walkClasses(arena, n.child(i), out);
+}
+
 /// Signatures a plain unqualified call can reach: file level, BEFORE the
 /// first class — every func after the first class is a method of it
 /// (FINDINGS F-21), and an unqualified call to a method resolves by
@@ -243,12 +313,19 @@ pub fn check(
         try report.add(gpa, file, anchor, .note, "rpp/type-duplicate-func", "{s}() is defined at {s}:{d} and again at {s}:{d}", .{ d.name, d.file_a, d.row_a + 1, d.file_b, d.row_b + 1 }, "");
     }
 
+    var classes = std.StringHashMap(ClassInfo).init(arena);
+    for (try collectClasses(arena, root)) |c| {
+        // a redefined class is Ring's problem; keep the first, as with funcs
+        if (!classes.contains(c.lower)) try classes.put(c.lower, c);
+    }
+
     var w = Walker{
         .gpa = gpa,
         .arena = arena,
         .report = report,
         .file = file,
         .sigs = &sigs,
+        .classes = &classes,
         .loads_hints = loads_hints,
         .ctx = ctx,
     };
@@ -261,6 +338,11 @@ const Walker = struct {
     report: *chk.Report,
     file: []const u8,
     sigs: *std.StringHashMap(Collected),
+    /// every class in this file, by lower-case name -- the parent chain is
+    /// walked through this, and an absent link means we refuse to guess
+    classes: *std.StringHashMap(ClassInfo),
+    /// the class whose body we are inside, if any
+    current_class: ?ClassInfo = null,
     loads_hints: bool,
     ctx: Ctx,
 
@@ -287,6 +369,20 @@ const Walker = struct {
     fn visit(self: *Walker, n: ts.Node, in_class: bool) !void {
         const kind = n.kind();
         const now_in_class = in_class or isClass(n);
+
+        // The grammar nests class_definition nodes, so entering one both
+        // sets the current class AND must restore the previous on the way
+        // out -- a nested Child would otherwise leak into Parent's tail.
+        const saved_class = self.current_class;
+        defer self.current_class = saved_class;
+        if (isClass(n)) {
+            const nm = n.field("name");
+            if (!nm.isNull()) {
+                if (lower(self.arena, nm.text())) |k| {
+                    self.current_class = self.classes.get(k);
+                } else |_| {}
+            }
+        }
 
         // Ring's brace block runs in the OBJECT's scope: inside
         // `StzCharQ("x") { ? Name() }` the call `Name()` resolves to the
@@ -416,18 +512,75 @@ const Walker = struct {
         while (i < n.childCount()) : (i += 1) try self.walkReturns(n.child(i), owner, ret_ty);
     }
 
+    /// Resolve an unqualified call made INSIDE class `cls`, in the order
+    /// Ring actually uses. Measured 2026-08-23, five reproducers, FINDINGS
+    /// F-27: own method -> inherited method -> global function -> builtin.
+    /// A method wins over a same-named global even when INHERITED.
+    ///
+    /// Returns null the moment the answer is not certain — an unknown
+    /// parent class means an unknown method table, and guessing there is
+    /// exactly the false positive this checker cannot afford.
+    fn resolveInClass(self: *Walker, cls: ClassInfo, lowname: []const u8) ?Resolved {
+        var cur = cls;
+        var hops: u32 = 0;
+        while (hops < 32) : (hops += 1) {
+            for (cur.methods) |m| {
+                if (std.mem.eql(u8, m.lower, lowname)) return .{ .local = m };
+            }
+            if (cur.parent_lower.len == 0) break; // no parent: the chain ends
+            const nxt = self.classes.get(cur.parent_lower) orelse return null; // unknown parent
+            cur = nxt;
+        }
+        if (hops >= 32) return null; // cycle or absurd depth: refuse to guess
+
+        // No method anywhere up the chain, and every link was known, so the
+        // name falls through to an ordinary function.
+        return self.resolve(lowname);
+    }
+
     fn checkCall(self: *Walker, n: ts.Node, in_class: bool) !void {
         const callee = calleeName(n);
         if (callee.len == 0) return;
 
-        // Inside a class body an unqualified call finds a METHOD before
-        // anything else (FINDINGS F-17), so a same-named global function is
-        // not necessarily what runs. Arity and argument types are both
-        // undecidable here without resolving the class, so neither is
-        // reported. That is coverage given up to keep certainty.
-        if (in_class) return;
+        // `call draw(oGame, self)` invokes a function held in a VARIABLE --
+        // Ring's dynamic-call keyword. The name is a variable read, not a
+        // reference to any definition, so its arity says nothing about the
+        // method or function of that name. Ring's own gameengine does this
+        // constantly: `draw` is both an attribute holding a callback and a
+        // method, and the first version of this rule reported three false
+        // errors in ring127/libraries because of it.
+        const parent = n.parent();
+        if (!parent.isNull() and
+            std.mem.eql(u8, parent.kind(), "call_keyword_expression")) return;
 
         const key = lower(self.arena, callee) catch return;
+
+        // Inside a class body, resolution starts at the class (F-27). This
+        // was previously abandoned entirely — coverage given up because a
+        // method shadows a same-named global (F-17). It is recoverable when
+        // the whole method chain is visible; when it is not, we still give
+        // up, but now only in that case.
+        if (in_class) {
+            const cls = self.current_class orelse return;
+            const r = self.resolveInClass(cls, key) orelse return;
+            const sig: Collected, const from: []const u8 = switch (r) {
+                .none, .conflicted => return,
+                .local => |s| .{ s, "" },
+                .remote => |x| .{ x.sig, x.file },
+            };
+            const nargs = argCount(n);
+            const nparams: u32 = @intCast(sig.params.len);
+            if (nargs != nparams) {
+                const code = if (nargs < nparams) "R19" else "R20";
+                if (from.len == 0) {
+                    try self.report.add(self.gpa, self.file, n, .err, "rpp/type-arity", "{s}() takes {d} argument(s), called with {d} — Error ({s}) at run time", .{ sig.display, nparams, nargs, code }, "Inside a class body an unqualified call resolves to a method first — the class's own, then an inherited one — before any global of that name (FINDINGS F-27). The whole chain was visible here, so this is the definition that runs.");
+                } else {
+                    try self.report.add(self.gpa, self.file, n, .err, "rpp/type-arity", "{s}() takes {d} argument(s), called with {d} — Error ({s}) at run time (defined in {s})", .{ sig.display, nparams, nargs, code, from }, "No method of this name exists on the class or anywhere up its parent chain, so the call falls through to an ordinary function (FINDINGS F-27), reached through this file's load graph.");
+                }
+            }
+            return;
+        }
+
         const sig: Collected, const from: []const u8 = switch (self.resolve(key)) {
             .none, .conflicted => return,
             .local => |s| .{ s, "" },
@@ -768,14 +921,99 @@ test "the right number of arguments is silent" {
     , "rpp/type-arity", false);
 }
 
-test "a method is not arity-checked as a function (F-21, F-17)" {
-    // Every func after the first class is a method, and an unqualified call
-    // inside a class finds the method first. Both make arity undecidable.
+test "a call inside a class IS checked against the class's own method" {
+    // This test used to assert the opposite -- that arity inside a class was
+    // undecidable -- and it was wrong. Ring raises R20 here (measured), and
+    // the whole method chain is visible, so the checker can say so. F-27.
     try expectRule(std.testing.allocator,
         \\class Thing
         \\    func Go
         \\        return Helper(1,2,3)
-        \\    func Helper(a)
+        \\    func Helper a
+        \\        return a
+        \\
+    , "rpp/type-arity", true);
+}
+
+test "a method wins over a same-named global, so the METHOD's arity applies" {
+    // Helper the global takes 1 and would be satisfied; Helper the method
+    // takes 2 and is what runs (measured). Reporting is therefore correct.
+    try expectRule(std.testing.allocator,
+        \\func Helper x
+        \\    return x
+        \\
+        \\class Thing
+        \\    func Go
+        \\        return Helper(1)
+        \\    func Helper a, b
+        \\        return a
+        \\
+    , "rpp/type-arity", true);
+}
+
+test "an INHERITED method is found through the parent chain" {
+    try expectRule(std.testing.allocator,
+        \\class Parent
+        \\    func Helper a, b
+        \\        return a
+        \\
+        \\class Child from Parent
+        \\    func Go
+        \\        return Helper(1)
+        \\
+    , "rpp/type-arity", true);
+}
+
+test "an UNKNOWN parent class means we refuse to guess" {
+    // Elsewhere may define Helper with any arity, or not at all. The chain
+    // is broken, so nothing is reported -- coverage given up on purpose.
+    try expectRule(std.testing.allocator,
+        \\func Helper x
+        \\    return x
+        \\
+        \\class Child from SomethingNotInThisFile
+        \\    func Go
+        \\        return Helper(1, 2, 3)
+        \\
+    , "rpp/type-arity", false);
+}
+
+test "with no method anywhere up a KNOWN chain, the global applies" {
+    try expectRule(std.testing.allocator,
+        \\func Helper a, b
+        \\    return a
+        \\
+        \\class Base
+        \\    func Other
+        \\        return 1
+        \\
+        \\class Child from Base
+        \\    func Go
+        \\        return Helper(1)
+        \\
+    , "rpp/type-arity", true);
+}
+
+test "`call name(...)` is a dynamic call through a variable, never checked" {
+    // Ring's gameengine: `draw` is BOTH an attribute holding a callback and
+    // a method. `call draw(a, b)` invokes the callback, so the method's
+    // arity is irrelevant. Three false errors in ring127/libraries came
+    // from missing this.
+    try expectRule(std.testing.allocator,
+        \\class T
+        \\    draw = ""
+        \\    func draw oGame
+        \\        call draw(oGame, self)
+        \\
+    , "rpp/type-arity", false);
+}
+
+test "a correct call inside a class stays silent" {
+    try expectRule(std.testing.allocator,
+        \\class Thing
+        \\    func Go
+        \\        return Helper(1, 2)
+        \\    func Helper a, b
         \\        return a
         \\
     , "rpp/type-arity", false);

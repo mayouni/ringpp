@@ -670,6 +670,50 @@ directory where every file defines its own `Helper()`): files are related
 **only through `load` edges they actually contain**. The scan root is not
 a program — the load graph is.
 
+### F-27. Inside a class, a method beats a same-named global — even an inherited one
+
+Measured 2026-08-23, five reproducers on Ring 1.27. The resolution order
+for an **unqualified** call made inside a class body is:
+
+```
+own method  ->  inherited method  ->  global function  ->  builtin
+```
+
+and **arity is enforced at every step**:
+
+| the case | Ring says |
+|---|---|
+| class defines `Helper(a,b)`, call `Helper(1)` | `R19` |
+| no method; global `Helper(a,b)`, call `Helper(1)` | `R19` |
+| parent defines `Helper(a,b)`, call `Helper(1)` in child | `R19` |
+| method `Helper(a,b)` **and** global `Helper(x)`, call `Helper(1)` | `R19` — **the method wins** |
+| **parent's** `Helper(a,b)` and global `Helper(x)`, call `Helper(1)` | `R19` — **inherited still wins** |
+
+The last two are the ones that matter. A same-named global does **not**
+rescue a wrong call, and inheritance does not weaken the rule.
+
+**What this recovers.** [F-17](#f-17) established that a method shadows a
+same-named builtin, and the checker's first version responded by giving
+up on *every* call inside a class body — hundreds of thousands of call
+sites in a large project, unchecked. F-27 says that surrender was too
+broad: when the whole method chain is visible, the call is decidable with
+the same certainty as a top-level one.
+
+**Where it still refuses**, and both are real limits rather than laziness:
+
+- **an unknown parent class** — `class Child from SomethingElsewhere`.
+  The parent's method table is unknown, so any name not defined on the
+  child could resolve to an inherited method of any arity. Nothing is
+  reported.
+- **a cycle or absurd depth** in the parent chain (guarded at 32 hops).
+
+**A grammar detail that shapes the implementation.** tree-sitter nests
+`class_definition` nodes — `class Child from Parent` is parsed *inside*
+Parent's node — although Ring treats classes as siblings. A class's own
+methods are therefore the `function_definition` children **before** any
+nested `class_definition`, and the walker must restore the enclosing
+class on the way out or a child's table leaks into its parent's tail.
+
 ### F-4. Cheap-looking calls that are not cheap
 
 Net cost per call, 300,000 iterations, loop baseline subtracted
