@@ -3,6 +3,19 @@
 **Write more performant, more governable Ring — in Ring itself. And learn,
 along the way, why Ring is built the way it is.**
 
+## Two halves — which is which, before anything else
+
+|  | what it is | how you get it | what it needs |
+|---|---|---|---|
+| **The library** | pointer-backed buffers, zero-copy views, a list index phase, a sub-state sandbox — measured ways to stop paying costs Ring's design already lets you avoid | a normal Ring package: `ringpm install ringpp`, then **`load "ringpp.ring"`** | **pure Ring.** Stock `ring.exe` and nothing else — it works wherever Ring works, including WASM |
+| **The CLI** | type checking, static analysis and explanation for **large** Ring projects — measured on [Softanza](https://github.com/mansourayouni/stzlib): **923,000 lines across 6,014 files in 43 seconds** | **one prebuilt binary**, shipped inside the same package: `ringpp check myproject/` | **nothing at all.** You run it; you compile nothing. No C compiler, no clang, no toolchain — ever |
+
+Either half is usable alone. They meet in the middle: the checker's rules
+exist because the library's measurements found the traps, and the library's
+idioms are what the checker recommends.
+
+---
+
 Ring++ came out of a real evaluation. The engineering team of a bank
 running Ring in production was impressed by the language — and when they
 tested it against their larger projects, **type safety** was the concern
@@ -15,11 +28,14 @@ without leaving Ring and without fighting it.
    phases, sandboxes — each one a documented, measured way to stop paying
    a cost Ring's design already lets you avoid. No C, no extension, no
    rewrite in another language.
-2. **Type safety for large Ring projects.** A static checker built on a
-   vendored tree-sitter grammar plus Ring's own `typehints` channel — the
-   annotations Ring's parser already accepts on purpose and currently
-   throws away. It reads across the **load graph**, so a call in one file
-   is checked against a definition in another. On real codebases it found
+2. **Type safety for large Ring projects.** A static checker built on
+   **[`tree-sitter-ring`](https://github.com/ysdragon/tree-sitter-ring),
+   the Ring grammar written by Youssef Saeed
+   ([`@ysdragon`](https://github.com/ysdragon))** — vendored here under
+   its MIT licence — plus Ring's own `typehints` channel, the annotations
+   Ring's parser already accepts on purpose and currently throws away. It
+   reads across the **load graph**, so a call in one file is checked
+   against a definition in another. On real codebases it found
    **two functions in Ring's own standard library that have never worked**
    — `encrypt_ex` and `decrypt_ex` call the wrong function and die with
    `R20` on every call — with **zero false positives across Ring's 1,959
@@ -41,8 +57,8 @@ without leaving Ring and without fighting it.
    always stated. Three of the eight examples conclude that plain Ring is
    the right answer for their shape; that balance *is* the curriculum.
 
-**Ring++ is an independent project.** It depends on nothing but Ring
-itself — no other package, no extension to compile, no toolchain. It is
+**Ring++ is dependency-free.** It needs nothing but Ring itself — no other
+package, no extension to compile, no toolchain. It is
 developed alongside [Softanza](https://github.com/mansourayouni/stzlib)
 and used by it, but it is not part of it and never requires it. And
 because it builds on Ring's internals, it names **exactly** what it needs
@@ -68,12 +84,8 @@ oBuf.Poke(0, "hello")
 ? oBuf.Peek(0, 5)        # --> hello
 ```
 
-That is the whole dependency story. The library half is **pure Ring**,
-loads in one line, and works wherever Ring works — including WASM.
-
-The `ringpp` **CLI** — type checking, static analysis, explanation —
-**ships with the package as one prebuilt binary** for your platform
-(~4 MB, made with Zig). You run it; you compile nothing:
+The same install puts the `ringpp` **CLI** on your machine — one prebuilt
+binary, made with Zig:
 
 ```
 ringpp check myproject/     # type safety + the measured lint rules
@@ -95,17 +107,6 @@ been run, because this machine cannot run them.
 and gated**. `powershell -File tests\run-all.ps1` runs everything.*
 
 ---
-
-## Two halves, one install
-
-| half | what it is | you need |
-|---|---|---|
-| `load "ringpp.ring"` | the **library** — buffers, zero-copy views, list phases, sandboxes. Pure Ring. | stock `ring.exe` |
-| `ringpp` | the **governance tool** — type checking on Ring's own annotation channel, the lint rules measured in FINDINGS, `why` for every diagnostic and Ring error code | the shipped binary, nothing else |
-
-They meet in the middle: the checker's rules exist because the library's
-measurements found the traps, and the library's idioms are what the
-checker recommends. One project, one culture.
 
 ## Start here
 
@@ -213,3 +214,33 @@ the process on purpose**; run each in its own shell.
    default — prepare the text, don't send it. Findings go to the Ring
    Google Group, posted by Mansour. *One exception:* he asks explicitly
    to publish, after reviewing the finding himself.
+
+## Credits
+
+**Mahmoud Fayed** — for Ring, and for the design this project is built on
+rather than around. The annotation channel Ring++ reads was put there
+deliberately; the list/string asymmetry the library exploits is a
+considered tradeoff, not an accident. Commitment 5 above is meant
+literally: this is a schoolcase in his patterns of thinking.
+
+**Youssef Saeed ([`@ysdragon`](https://github.com/ysdragon))** — for
+**[`tree-sitter-ring`](https://github.com/ysdragon/tree-sitter-ring)**,
+the Ring grammar the entire type-safety half stands on. It is vendored
+here under its MIT licence (`vendor/tree-sitter-ring/LICENSE`) and built
+into the shipped binary, so every `ringpp check` is running his work. It
+was adopted rather than written from scratch because it independently
+reached the same reading of Ring's type annotations that the measurements
+here did — the strongest signal available that the reading is right.
+Grammar findings from this project go back to him as
+[issues](https://github.com/ysdragon/tree-sitter-ring/issues), never
+patches around him. And when this project reported one case-sensitivity
+defect in `ring_state_findvar`, his follow-up turned it into **four** —
+including `ring_state_newvar`, whose failure mode (a variable that exists
+and cannot be addressed) was worse than the one originally reported. The
+fix landed as
+[`b6aea3d`](https://github.com/ring-lang/ring/commit/b6aea3d58fce7b544bd2381f7c1b27655ce2c094),
+credited to both.
+
+**The tree-sitter authors** — for the runtime, also vendored under MIT
+(`vendor/tree-sitter/`). Full third-party licence list in
+[`LICENSE`](LICENSE).

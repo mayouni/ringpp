@@ -72,7 +72,11 @@ class, a file that did not parse, a name with two definitions.
 `encrypt_ex`, `decrypt_ex`, and `DrawDividendChart()` called with no
 argument against a one-parameter definition.
 
-**Softanza — 6,012 files, 25 MB, 40 seconds:**
+**Softanza's library tree — 6,014 files, 922,964 lines, 25.5 MB, 43
+seconds** (minimum of three runs; the path is `stzlib/libraries`, and it
+is named because the repository root also holds 5,368 generated `.ring`
+files under `.claude` that are tooling scratch, not the project — counting
+those would inflate every number on this page):
 
 | | |
 |---|---:|
@@ -152,3 +156,18 @@ ringpp check <your-project>
 ```
 
 No compiler, no toolchain, no configuration. One shipped binary, and Ring.
+
+## Credit
+
+Every finding on this page was read through
+**[`tree-sitter-ring`](https://github.com/ysdragon/tree-sitter-ring)**, the
+Ring grammar by **Youssef Saeed ([`@ysdragon`](https://github.com/ysdragon))**,
+vendored here under its MIT licence. It was adopted rather than written
+from scratch for a reason worth stating: it had independently arrived at
+the same reading of Ring's type annotations that the measurements in
+[FINDINGS F-24](FINDINGS.md) reached — *"type is skipped by the Ring parser
+but kept here"* — and two parties reaching one conclusion separately is the
+strongest evidence available that the conclusion is right. Grammar defects
+found here go back to him as
+[issues](https://github.com/ysdragon/tree-sitter-ring/issues), never as
+patches routed around him.

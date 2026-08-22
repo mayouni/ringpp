@@ -1,6 +1,6 @@
 # Ring++
 
-**Ring++ is an independent project.** It depends on nothing but Ring itself:
+**Ring++ is dependency-free.** It needs nothing but Ring itself:
 no other package, no extension, no DLL, no sibling repository. It is
 developed alongside Softanza and used by it, and is not part of it.
 

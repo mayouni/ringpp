@@ -2,7 +2,7 @@
 #
 # This gate used to point at D:\GitHub\stzlib\...\stkPointer.ring, which
 # made Ring++'s own test suite unrunnable by anyone who does not also have
-# Softanza checked out next to it. Ring++ is an independent project and a
+# Softanza checked out next to it. Ring++ is dependency-free and a
 # Ring package; its gates may not depend on another repository.
 #
 # The stzlib corpus check still runs when that tree happens to be present,

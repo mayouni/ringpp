@@ -30,10 +30,17 @@
 
 aPackageInfo = [
 	:name		= "Ring++",
-	:description	= "Safe, measured access to Ring's low-level surface: " +
-			  "pointer-backed buffers and views, a list index phase, " +
-			  "and a sub-state sandbox. Every facility rests on a " +
-			  "primitive Ring already provides.",
+	:description	= "Two halves, one install. (1) A PURE RING LIBRARY, " +
+			  "used with load 'ringpp.ring': pointer-backed buffers " +
+			  "and views, a list index phase, and a sub-state " +
+			  "sandbox -- safe, measured access to Ring's low-level " +
+			  "surface, every facility resting on a primitive Ring " +
+			  "already provides. (2) A CLI as ONE PREBUILT BINARY, " +
+			  "for type checking, static analysis and explanation of " +
+			  "large Ring projects -- measured on Softanza: 923,000 " +
+			  "lines across 6,014 files in 43 seconds. " +
+			  "Dependency-free: needs nothing but Ring, and no " +
+			  "compiler or toolchain, ever.",
 	:folder		= "ringpp",
 	:developer	= "Mansour Ayouni",
 	:email		= "kalidianow@gmail.com",
@@ -94,8 +101,8 @@ aPackageInfo = [
 		"bin/macos-arm64/ringpp"
 	],
 
-	# Nothing. That is deliberate and worth stating: Ring++ is independent
-	# of Softanza and of every other package.
+	# Nothing. That is deliberate and worth stating: Ring++ is
+	# DEPENDENCY-FREE -- of Softanza and of every other package.
 	:libs		= [],
 
 	# Runs the behavioural probe, which is the only honest thing to do on
