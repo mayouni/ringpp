@@ -8,7 +8,7 @@ along the way, why Ring is built the way it is.**
 |  | what it is | how you get it | what it needs |
 |---|---|---|---|
 | **The library** | pointer-backed buffers, zero-copy views, a list index phase, a sub-state sandbox — measured ways to stop paying costs Ring's design already lets you avoid | a normal Ring package: `ringpm install ringpp`, then **`load "ringpp.ring"`** | **pure Ring.** Stock `ring.exe` and nothing else — it works wherever Ring works, including WASM |
-| **The CLI** | type checking, static analysis and explanation for **large** Ring projects — measured on [Softanza](https://github.com/mansourayouni/stzlib): **923,000 lines across 6,014 files in 43 seconds** | **one prebuilt binary**, shipped inside the same package: `ringpp check myproject/` | **nothing at all.** You run it; you compile nothing. No C compiler, no clang, no toolchain — ever |
+| **The CLI** | type checking, static analysis and explanation for **large** Ring projects — measured on [Softanza](https://github.com/mayouni/stzlib): **923,000 lines across 6,014 files in 43 seconds** | **one prebuilt binary**, shipped inside the same package: `ringpp check myproject/` | **nothing at all.** You run it; you compile nothing. No C compiler, no clang, no toolchain — ever |
 
 Either half is usable alone. They meet in the middle: the checker's rules
 exist because the library's measurements found the traps, and the library's
@@ -59,7 +59,7 @@ without leaving Ring and without fighting it.
 
 **Ring++ is dependency-free.** It needs nothing but Ring itself — no other
 package, no extension to compile, no toolchain. It is
-developed alongside [Softanza](https://github.com/mansourayouni/stzlib)
+developed alongside [Softanza](https://github.com/mayouni/stzlib)
 and used by it, but it is not part of it and never requires it. And
 because it builds on Ring's internals, it names **exactly** what it needs
 from them in one short document — [docs/VM-CONTRACT.md](docs/VM-CONTRACT.md)

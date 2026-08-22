@@ -115,7 +115,7 @@ aPackageInfo = [
 	:setup		= "",
 	:remove		= "",
 
-	:providerusername = "mansourayouni",
-	:website	= "https://github.com/mansourayouni/ringpp",
+	:providerusername = "mayouni",
+	:website	= "https://github.com/mayouni/ringpp",
 	:branch		= "main"
 ]
