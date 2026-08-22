@@ -18,3 +18,16 @@ _probe*.bin
 .DS_Store
 Thumbs.db
 *~
+
+# Ring++ is an independent project. `.central/` is coordination state from
+# the Softanza estate's harness -- an inbox, an outbox and a status page --
+# which was tracked here and does not belong in a public Ring package.
+# Ignored rather than merely deleted: the harness may write it again, and a
+# regenerated file must not silently re-enter the history.
+.central/
+
+# Same reason: Central rewrites WHATS-NEXT.md with the estate's cross-repo
+# plan (reference-design versions, the UI law, contracts) and instructions to
+# open a mailbox under D:/GitHub/softanza. None of that is Ring++'s roadmap
+# or a reader's business. Ring++'s own plan is docs/PHASE_PLAN.md.
+WHATS-NEXT.md
