@@ -1,0 +1,16 @@
+# The shipped CLI binaries must never be touched by line-ending conversion.
+#
+# core.autocrlf is true on the maintainer's machine, and without this file
+# git decides "is it binary?" by looking for NUL bytes in the first 8 KB. It
+# gets it right for these files today -- but a heuristic is the wrong thing
+# to stake a user's install on, and the Linux and macOS binaries carry no
+# .exe to hint with. A single CRLF rewrite inside an ELF header produces a
+# file that still looks fine in `git status` and fails on someone else's
+# machine with no diagnosis available from here.
+#
+# The binaries are named, rather than globbing bin/** and exempting the
+# README: `binary` is a macro for `-text -diff`, and clawing `diff` back
+# afterwards is easy to get subtly wrong. Naming them leaves every text
+# file in bin/ completely untouched.
+bin/**/ringpp     binary
+bin/**/ringpp.exe binary

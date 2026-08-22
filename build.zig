@@ -21,7 +21,18 @@ const grammar_sources = [_][]const u8{
 // -fno-sanitize=undefined: Zig turns UBSan on for C in Debug/ReleaseSafe, and
 // tree-sitter's generated parser trips it (harmlessly) on the way through its
 // table. Same reason RingScript's build.zig carries the flag.
-const c_flags = [_][]const u8{ "-std=c11", "-w", "-fno-sanitize=undefined" };
+// -D_POSIX_C_SOURCE: tree-sitter's parser.c and tree.c call fdopen() for
+// their dot-graph debug output. Under -std=c11 on glibc/musl that is not
+// declared, so a Linux or macOS cross-build fails with four errors while
+// the Windows build is perfectly happy. Declaring the POSIX level is the
+// portable fix; the debug feature itself is never used here.
+const c_flags = [_][]const u8{
+    "-std=c11",
+    "-w",
+    "-fno-sanitize=undefined",
+    "-D_POSIX_C_SOURCE=200809L",
+    "-D_DARWIN_C_SOURCE", // macOS gates fdopen behind this one instead
+};
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});

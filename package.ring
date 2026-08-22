@@ -20,9 +20,12 @@
 	repository for anyone who wants to adapt the CLI; only they need the
 	Zig compiler.
 
-	Platform binaries present today: Windows x64. The macOS and Linux
-	binaries are pending a build on (or cross-compile for) those platforms;
-	the platform file lists below say honestly which exist.
+	Five binaries ship: Windows x64, Linux x64 and arm64 (static musl, so
+	one file runs on any Linux), macOS x64 and arm64. Windows and Linux x64
+	were EXECUTED against the fixtures and agree rule-for-rule; the other
+	three are compiled and format-checked but have not been run, because
+	the build machine cannot run them. bin/README.md carries that table --
+	the distinction is kept visible rather than rounded up to "supported".
 */
 
 aPackageInfo = [
@@ -45,6 +48,7 @@ aPackageInfo = [
 		"rpp/probe.ring",
 		"README.md",
 		"LICENSE",
+		"bin/README.md",
 		"docs/FINDINGS.md",
 		"docs/CASE-TYPE-SAFETY.md",
 		"docs/VM-CONTRACT.md",
@@ -74,13 +78,21 @@ aPackageInfo = [
 	],
 
 	# The CLI binary, per platform. RingPM installs the right list for the
-	# host. Windows exists today; the other two are listed the moment they
-	# are built -- an empty list is honest, a stale one is not.
+	# host; both architectures are shipped per OS because the manifest has
+	# no arch dimension, and picking the wrong one is a clear error message
+	# while shipping neither is a broken install. See bin/README.md for
+	# which file is which, and how far each one is verified.
 	:windowsfiles	= [
 		"bin/win64/ringpp.exe"
 	],
-	:macosfiles	= [],
-	:ubuntufiles	= [],
+	:ubuntufiles	= [
+		"bin/linux-x64/ringpp",
+		"bin/linux-arm64/ringpp"
+	],
+	:macosfiles	= [
+		"bin/macos-x64/ringpp",
+		"bin/macos-arm64/ringpp"
+	],
 
 	# Nothing. That is deliberate and worth stating: Ring++ is independent
 	# of Softanza and of every other package.

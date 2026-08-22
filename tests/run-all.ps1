@@ -135,6 +135,54 @@ $exCount = ([regex]::Matches($exOut, "^PASS ", "Multiline")).Count
 if (-not $exOk) { $fail++; $exOut -split "`n" | Select-Object -Last 8 | ForEach-Object { "       $_" } }
 Pop-Location
 
+# The package manifest promises a prebuilt binary per platform, and a
+# promise nobody checks is how `ringpm install` starts failing on a machine
+# nobody here owns. This asserts that every file the manifest lists exists,
+# and -- because a file existing says nothing about what is IN it -- that
+# each platform binary carries the right magic bytes for its target. A
+# Windows .exe copied into bin/linux-x64 would pass an existence check and
+# fail on the user's machine.
+Push-Location $root
+$magic = @{
+    "bin/win64/ringpp.exe"    = @(0x4D, 0x5A)                    # MZ   -- PE
+    "bin/linux-x64/ringpp"    = @(0x7F, 0x45, 0x4C, 0x46)        # ELF
+    "bin/linux-arm64/ringpp"  = @(0x7F, 0x45, 0x4C, 0x46)        # ELF
+    "bin/macos-x64/ringpp"    = @(0xCF, 0xFA, 0xED, 0xFE)        # Mach-O 64 LE
+    "bin/macos-arm64/ringpp"  = @(0xCF, 0xFA, 0xED, 0xFE)        # Mach-O 64 LE
+}
+# .NET rather than Get-Content: -AsByteStream is PowerShell 7 and this
+# machine runs 5.1, where the same read needs -Encoding Byte. Reading the
+# bytes directly works on both and cannot be silently decoded as text.
+$pkg = [IO.File]::ReadAllText((Join-Path $root "package.ring"))
+$binBad = @()
+foreach ($f in $magic.Keys) {
+    if (-not $pkg.Contains($f)) { $binBad += "$f not listed in package.ring"; continue }
+    $p = Join-Path $root $f
+    if (-not (Test-Path $p)) { $binBad += "$f listed but missing"; continue }
+    $fs = [IO.File]::OpenRead($p)
+    $head = New-Object byte[] 4
+    $null = $fs.Read($head, 0, 4)
+    $fs.Close()
+    $want = $magic[$f]
+    for ($i = 0; $i -lt $want.Count; $i++) {
+        if ($head[$i] -ne $want[$i]) { $binBad += "$f is not the format it claims"; break }
+    }
+}
+# And the reverse direction: a manifest entry with no file on disk. Only the
+# file ARRAYS are scanned -- :run holds a shell command that also ends in
+# .ring, and reading it as a path is a false positive this gate already had.
+$arrays = [regex]::Matches($pkg, '(?s):(files|windowsfiles|macosfiles|ubuntufiles)\s*=\s*\[(.*?)\]')
+foreach ($a in $arrays) {
+    foreach ($m in [regex]::Matches($a.Groups[2].Value, '"([^"]+)"')) {
+        $rel = $m.Groups[1].Value
+        if (-not (Test-Path (Join-Path $root $rel))) { $binBad += "$rel listed but missing" }
+    }
+}
+"{0} {1,-16} {2}" -f $(if ($binBad.Count -eq 0) { "PASS" } else { "FAIL" }), "pkg binaries",
+    $(if ($binBad.Count -eq 0) { "5 platform binaries listed, present, and the right format" } else { "" })
+if ($binBad.Count) { $fail++; $binBad | Select-Object -Unique | ForEach-Object { "       $_" } }
+Pop-Location
+
 ""
 if ($fail -eq 0) { "ALL GATES PASSED" } else { "$fail GATE(S) FAILED" }
 exit $fail

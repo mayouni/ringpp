@@ -84,6 +84,13 @@ ringpp why R4               # explain the Ring error you actually saw
 The Zig source of the CLI is in the repository; only someone who wants to
 *adapt* the CLI installs the Zig compiler.
 
+Five prebuilt binaries ship: Windows x64, Linux x64 and arm64 (static
+musl — one file for any Linux), macOS x64 and arm64.
+[`bin/README.md`](bin/README.md) says which is which **and how far each
+one is verified** — Windows and Linux x64 were executed against the full
+fixture set; the other three are compiled and format-checked but have not
+been run, because this machine cannot run them.
+
 *Status: the library, the CLI, and eight measured examples are **built
 and gated**. `powershell -File tests\run-all.ps1` runs everything.*
 
