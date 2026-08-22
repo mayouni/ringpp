@@ -1,0 +1,20 @@
+# Build output and caches. .zig-cache alone is ~488 MB and rebuilds on
+# demand; zig-out is the produced binary.
+.zig-cache/
+zig-out/
+
+# Scratch data written by examples. Example 05 builds a data file and
+# removes it, but a run killed mid-way leaves one behind.
+_example*.bin
+_p05*.bin
+_probe*.bin
+
+# Ring/Softanza engine artefacts
+*.ringo
+*.obj
+*.pdb
+
+# Editor / OS noise
+.DS_Store
+Thumbs.db
+*~
