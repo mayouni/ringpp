@@ -8,6 +8,41 @@ If you are an AI session working here, this file is the whole brief.
 
 ---
 
+## The mission — restated by Mansour, 2026-08-23
+
+Five commitments, in order. Review every change against them.
+
+1. **More performant Ring, in Ring itself** — never by leaving the language.
+2. **Build on Mahmoud's internal design** and take maximum advantage of it,
+   keeping the tradeoff *equilibrated* between plain Ring and Ring++ code.
+   Never fight the design, never break its culture.
+3. **An educational framework with comparative testability** — same task,
+   Ring and Ring++, side by side, byte-identical, measured — teaching the
+   internal design of Ring *and its rationale*. For learners of low-level
+   programming, the project is schoolcase material in Mahmoud Fayed's
+   **patterns of thinking**, not in his implementation.
+4. **Type safety for large Ring projects**, through the vendored
+   tree-sitter checker and Ring's own `typehints` channel. This is the
+   strategic centre: it is the practical answer to a real bank engineering
+   team whose remaining concern about Ring at scale was exactly this.
+   (The team is not named in public documents.)
+5. **One shipped binary.** The CLI is a single prebuilt Zig binary that
+   ships with the package. No C compiler, no clang, no toolchain is ever
+   required or suggested to a user. The Zig *source* is provided; only an
+   adapter of the CLI installs the Zig compiler.
+
+Strategically: Ring++ makes Ring projects in business domains **more
+governable** (static analysis) and **more efficient**, relying on nothing
+but Ring. And because it builds on internals that may change, it maintains
+an **abstract interface** — [docs/VM-CONTRACT.md](docs/VM-CONTRACT.md),
+machine-checked by `rpp/probe.ring` on every load — kept small enough to
+one day propose to Mahmoud as a contract both parties agree on.
+
+**Descoped, 2026-08-23:** the compiled-kernel half (old T4–T7). The
+headroom measurements stay as research (`bench/headroom/`,
+`DESIGN_TOOLCHAIN.md`), but no compilation is promised, suggested, or
+required. If it returns, it returns as its own proposal.
+
 ## The thesis, and why it is not "pointers are fast"
 
 Ring++ does **not** exist because pointers beat Ring operations. On most work

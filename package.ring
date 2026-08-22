@@ -13,9 +13,16 @@
 	package works wherever RingPM puts it. Verified by loading it from an
 	unrelated drive with an unrelated working directory.
 
-	The `ringpp` CLI (check / why / ast) is a separate, optional Zig build
-	and is deliberately NOT part of this package: a Ring package should not
-	require a C toolchain to install. Build it from source when you want it.
+	The `ringpp` CLI (type checking, static analysis, `why`) SHIPS WITH THE
+	PACKAGE as one prebuilt binary per platform (~4 MB, made with Zig). The
+	user runs it and compiles nothing -- no C compiler, no clang, no
+	toolchain is required or suggested, ever. The Zig source is in the
+	repository for anyone who wants to adapt the CLI; only they need the
+	Zig compiler.
+
+	Platform binaries present today: Windows x64. The macOS and Linux
+	binaries are pending a build on (or cross-compile for) those platforms;
+	the platform file lists below say honestly which exist.
 */
 
 aPackageInfo = [
@@ -63,6 +70,15 @@ aPackageInfo = [
 		"tests/fuzz_bounds.ring",
 		"tests/name_collision.ring"
 	],
+
+	# The CLI binary, per platform. RingPM installs the right list for the
+	# host. Windows exists today; the other two are listed the moment they
+	# are built -- an empty list is honest, a stale one is not.
+	:windowsfiles	= [
+		"bin/win64/ringpp.exe"
+	],
+	:macosfiles	= [],
+	:ubuntufiles	= [],
 
 	# Nothing. That is deliberate and worth stating: Ring++ is independent
 	# of Softanza and of every other package.

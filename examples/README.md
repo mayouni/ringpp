@@ -1,4 +1,20 @@
-# Ring++ by example
+# Ring++ by example — a school of Ring's internal design
+
+**These examples are the educational framework of the project, not its
+marketing.** Each one takes an ordinary task, solves it twice — plain Ring
+and Ring++, same file, same data — and asserts the two produce byte-identical
+output before any number is printed. The *diff* between the two solutions is
+the lesson, and the lesson is always about **Ring's own internal design and
+its rationale**: why strings cross call boundaries by copy, why a list's
+build order decides its read cost, why `substr` scales with the source, why
+a sub-state is cheap to keep and expensive to create.
+
+The goal is an advanced Ring programmer who takes maximum advantage of
+Mahmoud Fayed's design **without fighting it or breaking its culture** — and
+who learns, from a language deliberately built small and lightweight, the
+*patterns of thinking* that made it so. That is why three of the eight
+examples conclude that plain Ring is the right answer for their shape: the
+curriculum is the equilibrium, not the speedup.
 
 Every example here is **one runnable file** holding the raw-Ring way and the
 Ring++ way side by side. Each one:

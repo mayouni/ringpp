@@ -306,22 +306,23 @@ or is deleted — it must not go on silently returning `NULL`.
 
 ## The toolchain half
 
+> **Reframed by Mansour, 2026-08-23.** The product is the library plus
+> **one shipped binary** — type safety and static analysis, no compilation
+> story, no C compiler ever suggested to a user. **T3–T7 are descoped to a
+> research annex**: the designs and headroom measurements stay
+> (`DESIGN_TOOLCHAIN.md`, `bench/headroom/`), and if a compiled half ever
+> returns it returns as its own proposal with its own gates. T1 and T2 —
+> which carried most of the value and are **built** — are the whole
+> toolchain promise now, delivered as `bin/<platform>/ringpp`.
+
 Phases **T1–T7** live in
 [DESIGN_TOOLCHAIN.md §10](DESIGN_TOOLCHAIN.md#10-phases-and-gates--the-toolchain-half).
-They run after P0–P3 and are gated by the same P0 question. In short:
 
-| | | needs toolchain? |
+| | | status |
 |---|---|---|
-| **T1** | `ringpp check` — the FINDINGS rules as lint | no |
-| **T2** | level 1 type checking and `ringpp why` — **built** | no |
-| **T3** | vendored VM + CLI skeleton | yes |
-| **T4** | one compiled kernel, end to end | yes |
-| **T5** | `ringpp build`, five targets from one host | yes |
-| **T6** | compile-and-cache (the "JIT") | yes |
-| **T7** | *conditional* — anything more ambitious | yes |
-
-T1 and T2 need nothing installed and carry most of the value. **Build
-those first**, whatever happens to the rest.
+| **T1** | `ringpp check` — the FINDINGS rules as lint | **built, gated, shipped** |
+| **T2** | level 1 type checking and `ringpp why` | **built, gated, shipped** |
+| **T3–T7** | vendored VM, compiled kernels, cross-builds, cache | *research annex — descoped 2026-08-23* |
 
 ### T2 — `ringpp why`: *status*
 

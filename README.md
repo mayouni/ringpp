@@ -1,18 +1,49 @@
 # Ring++
 
-**A high-level, safe way into Ring's low-level surface — for Ring
-programmers who hit a wall and do not want to leave the language.**
+**Write more performant, more governable Ring — in Ring itself. And learn,
+along the way, why Ring is built the way it is.**
 
-Ring++ exists to remove Ring's weakness in **performant, data-intensive
-work**: banking, government and consumer platforms, with the data
-volumes, complex processing, optimisation, ML and AI that come with
-them. The answer to those needs should not be "rewrite that part in
-another language." It should be Ring.
+Ring++ came out of a real evaluation. The engineering team of a bank
+running Ring in production was impressed by the language — and when they
+tested it against their larger projects, **type safety** was the concern
+that remained. Ring++ is the practical answer to that concern, built
+without leaving Ring and without fighting it.
+
+## What Ring++ is, in five commitments
+
+1. **More performant Ring, in Ring.** Buffers, zero-copy views, list
+   phases, sandboxes — each one a documented, measured way to stop paying
+   a cost Ring's design already lets you avoid. No C, no extension, no
+   rewrite in another language.
+2. **Type safety for large Ring projects.** A static checker built on a
+   vendored tree-sitter grammar plus Ring's own `typehints` channel — the
+   annotations Ring's parser already accepts on purpose and currently
+   throws away. On its first real run it found **99 dormant crashes** in
+   one mature library and **one** in Ring's own applications.
+3. **Governability for business-domain projects.** Static analysis
+   (`check`), explanation (`why`), and gates that assert behaviour — so a
+   bank, a ministry, or a platform team can *audit* a Ring codebase, not
+   just run it. Relying on nothing but Ring.
+4. **An educational framework with comparative testability.** Every
+   example is one file holding the plain-Ring way and the Ring++ way,
+   asserting byte-identical output, printing the measured difference, and
+   explaining *why Ring behaves as it does*. The goal is advanced
+   programmers who take advantage of Ring's internal design **without
+   fighting it or breaking its culture**.
+5. **A schoolcase for low-level programming, in Mahmoud Fayed's patterns
+   of thinking.** Not his implementation — his *way*: a small opinionated
+   surface over something vast, simplicity as a feature, and the tradeoff
+   always stated. Three of the eight examples conclude that plain Ring is
+   the right answer for their shape; that balance *is* the curriculum.
 
 **Ring++ is an independent project.** It depends on nothing but Ring
-itself — no other package, no extension to compile, no DLL. It is
+itself — no other package, no extension to compile, no toolchain. It is
 developed alongside [Softanza](https://github.com/mansourayouni/stzlib)
-and used by it, but it is not part of it and never requires it.
+and used by it, but it is not part of it and never requires it. And
+because it builds on Ring's internals, it names **exactly** what it needs
+from them in one short document — [docs/VM-CONTRACT.md](docs/VM-CONTRACT.md)
+— machine-checked on every load, so a future Ring that changes something
+is detected and named, never fought.
 
 ---
 
@@ -35,40 +66,40 @@ oBuf.Poke(0, "hello")
 That is the whole dependency story. The library half is **pure Ring**,
 loads in one line, and works wherever Ring works — including WASM.
 
-The `ringpp` **CLI** (`check`, `why`, `ast`) is a separate, optional Zig
-build and is deliberately *not* in the package: installing a Ring library
-should never require a C toolchain. Build it from source when you want
-static analysis.
+The `ringpp` **CLI** — type checking, static analysis, explanation —
+**ships with the package as one prebuilt binary** for your platform
+(~4 MB, made with Zig). You run it; you compile nothing:
 
-*Status: the library, the CLI's analysis half, and eight measured
-examples are **built and gated**. The compiler half (T3–T7) is designed
-and not yet built. `powershell -File tests\run-all.ps1` runs everything.*
+```
+ringpp check myproject/     # type safety + the measured lint rules
+ringpp why R4               # explain the Ring error you actually saw
+```
+
+**No C compiler, no clang, no toolchain is required or suggested — ever.**
+The Zig source of the CLI is in the repository; only someone who wants to
+*adapt* the CLI installs the Zig compiler.
+
+*Status: the library, the CLI, and eight measured examples are **built
+and gated**. `powershell -File tests\run-all.ps1` runs everything.*
 
 ---
 
-## Two halves, two altitudes of installation
+## Two halves, one install
 
-| you install | you get | download |
-|---|---|---:|
-| `load "ringpp.ring"` | the **library half** — buffers, zero-copy views, list phases, sandboxes. Stock `ring.exe`, every platform Ring runs on, including WASM. | ~0 |
-| \+ `ringpp` | **type checking and static analysis** — `check`, `why`. Needs no compiler at all. | ~0 |
-| \+ any C compiler already on the machine | **compiled kernels**, 27–3000× | 0 |
-| \+ vendored Zig, this host's targets | **cross-compilation** to Windows, Linux x64/arm64, macOS x64/arm64 from one machine | 63 MB |
+| half | what it is | you need |
+|---|---|---|
+| `load "ringpp.ring"` | the **library** — buffers, zero-copy views, list phases, sandboxes. Pure Ring. | stock `ring.exe` |
+| `ringpp` | the **governance tool** — type checking on Ring's own annotation channel, the lint rules measured in FINDINGS, `why` for every diagnostic and Ring error code | the shipped binary, nothing else |
 
-The toolchain is **tiered, not all-or-nothing**: with no optimising
-compiler at all you already get 22–72× on numeric kernels, so the big
-download buys vectorisation and cross-compilation, not entry. Measured
-in [`bench/toolchain/`](bench/toolchain), on Zig 0.15.2 **and** 0.16.0.
-
-The second needs the first: a compiled kernel handed a Ring string pays
-~750 µs per megabyte to receive it, which erases any speedup.
-**`RppBuffer` is the calling convention of the compiled half** — which is
-why these are one project and not two.
+They meet in the middle: the checker's rules exist because the library's
+measurements found the traps, and the library's idioms are what the
+checker recommends. One project, one culture.
 
 ## Start here
 
 | | |
 |---|---|
+| **[docs/VM-CONTRACT.md](docs/VM-CONTRACT.md)** | The abstract interface: exactly what Ring++ needs from the VM, as observable behaviours, probe-checked on every load — and a proposed contract both parties could agree on. |
 | **[docs/FINDINGS.md](docs/FINDINGS.md)** | What the Ring VM actually does, measured. Read this first — two of its numbers killed the design I set out to write. |
 | **[docs/DESIGN.md](docs/DESIGN.md)** | The library half: what Ring++ is, the layer map, the surface, safety, upgrades, `myctiger`, Softanza, and the risks. |
 | **[docs/DESIGN_TOOLCHAIN.md](docs/DESIGN_TOOLCHAIN.md)** | The toolchain half: types, compilation, static analysis, the vendored VM, what Julia teaches and where the analogy breaks. |
@@ -95,10 +126,29 @@ doubles its capacity and every crossing into C costs ~100 ns. The
 library's most common correct answer must be *no*, and it should be able
 to say so at runtime.
 
-## The headroom the toolchain half adds
+## The annotation channel — the discovery type safety stands on
 
-Identical algorithms, Ring 1.27 interpreted versus `zig cc -O2` native
-([`bench/headroom/`](bench/headroom)):
+**Ring's parser already accepts type annotations, on purpose** —
+`/* Support Type Identifier */`, `stmt.c:1217` — and
+`ring_state_stringtokens` hands them back verbatim. `int func Sum(int x,
+int y)` runs today on stock `ring.exe`. Ring++ consumes a channel that
+already exists and is currently thrown away — the clearest possible case
+of building on Mahmoud's design rather than around it. Annotated Ring++
+source **always keeps running under stock Ring**; the checker adds
+meaning, never syntax.
+
+(Measured before building: the two halves of an annotation are different
+mechanisms — parameter types are a parser feature that costs nothing,
+while a *return* annotation is a variable read that needs
+`typehints.ring` loaded or it raises `R24`. [FINDINGS
+F-24](docs/FINDINGS.md) has the table; the checker knows the difference.)
+
+## Research annex: the measured native headroom
+
+Compilation is **not part of the Ring++ product** — no C compiler, no
+toolchain is ever asked of a user. But the headroom was measured, and the
+numbers are kept because they map where Ring's own boundary sits
+([`bench/headroom/`](bench/headroom), [`docs/DESIGN_TOOLCHAIN.md`](docs/DESIGN_TOOLCHAIN.md)):
 
 | kernel | Ring | native | ratio |
 |---|---:|---:|---:|
@@ -106,13 +156,8 @@ Identical algorithms, Ring 1.27 interpreted versus `zig cc -O2` native
 | dot product, 1 M doubles | 92 ms | 0.96 ms | **96×** |
 | byte scan, 5 MB | 645 ms | 0.22 ms | **~3000×** |
 
-And the discovery that makes it reachable without a fork: **Ring's
-parser already accepts type annotations on purpose** —
-`/* Support Type Identifier */`, `stmt.c:1217` — and
-`ring_state_stringtokens` hands them back verbatim. `int func Sum(int x,
-int y)` runs today on stock `ring.exe`. Ring++ consumes a channel that
-already exists and is currently thrown away. Annotated Ring++ source
-must always keep running under stock Ring.
+If a compiled half is ever built, it will be proposed separately, with
+its own gates — and `RppBuffer` is already its calling convention.
 
 ## The one story that explains the whole design
 
@@ -146,9 +191,9 @@ the process on purpose**; run each in its own shell.
 2. **Survive Ring upgrades untouched.** A ~30-name declared surface,
    one behavioural probe per name, honest degradation instead of
    breakage.
-3. **No dependency the user must install.** Pure Ring, one `load`. Zig
-   appears only for the maintainer's upgrade matrix and for strictly
-   optional later planes.
+3. **No dependency the user must install.** The library is pure Ring, one
+   `load`. The CLI is one shipped binary. The Zig *compiler* is needed
+   only by someone adapting the CLI's source — never by a user.
 4. **Measure, never assume.** Every claim is an A/B differing in one
    thing, and **every claim ships with the pattern it hurts**.
 5. **Never open a pull request or an issue on `ring-lang/ring`** by
