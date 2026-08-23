@@ -86,7 +86,9 @@ module.exports = grammar({
 		[$.function_definition, $.param_list],
 		[$.function_definition],
 		[$.function_definition, $.typed_parameter],
+		[$.exit_statement],
 		[$.return_statement],
+		[$.loop_statement],
 	],
 
 	rules: {
@@ -445,15 +447,27 @@ module.exports = grammar({
 			),
 
 		exit_statement: ($) =>
-			prec.right(
-				seq(choice(keyword("exit"), keyword("break")), optional($._expression)),
+			choice(
+				choice(keyword("exit"), keyword("break")),
+				// Dynamic precedence keeps `exit <expr>` together — bare
+				// `exit`/`break` is only used when no expression follows
+				prec.dynamic(
+					1,
+					seq(choice(keyword("exit"), keyword("break")), $._simple_expression),
+				),
 			),
 
 		loop_statement: ($) =>
-			prec.right(
-				seq(
-					choice(keyword("loop"), keyword("continue")),
-					optional($._expression),
+			choice(
+				choice(keyword("loop"), keyword("continue")),
+				// Dynamic precedence keeps `loop <expr>` together — bare
+				// `loop`/`continue` is only used when no expression follows
+				prec.dynamic(
+					1,
+					seq(
+						choice(keyword("loop"), keyword("continue")),
+						$._simple_expression,
+					),
 				),
 			),
 
@@ -864,22 +878,34 @@ module.exports = grammar({
 				$.null,
 			),
 
+		// Ring's scanner accumulates the entire word, then classifies it
+		// as keyword / number / identifier (ring_scanner_checktoken,
+		// scanner.c:261). A word like `3Copies` fails ring_scanner_isnumber
+		// and becomes a single IDENTIFIER; `42` passes and becomes NUMBER.
+		// (Floats differ: `.` is an operator, so `3.14` is NUMBER+`.`+
+		// NUMBER, merged later by ring_scanner_floatmark.)
+		//
+		// Tree-sitter can't read whole words — it matches regexes
+		// char-by-char. Its lexical resolution is: (1) lexical precedence,
+		// (2) match length, (3) declaration order. Both tokens here are
+		// at default precedence (0), so step 1 is a no-op. Moving `number`
+		// before `identifier` makes step 3 break ties in favour of
+		// `number` (pure numbers like `42`, `0xFF`), while step 2 lets
+		// longer identifier runs (`3Copies`) win by match length —
+		// producing the same outcome as Ring's whole-word classification.
+		number: ($) =>
+			token(
+				choice(
+					/0+[xX][0-9a-fA-F](_*[0-9a-fA-F])*/,
+					/[0-9](_*[0-9])*\.[0-9](_*[0-9])*[fF]?/,
+					/[0-9](_*[0-9])*[fF]?/,
+				),
+			),
+
 		identifier: ($) => ident(),
 
 		qualified_identifier: ($) =>
 			prec.left(seq($.identifier, repeat(seq(".", $.identifier)))),
-
-		number: ($) =>
-			token(
-				prec(
-					1,
-					choice(
-						/0+[xX][0-9a-fA-F](_*[0-9a-fA-F])*/,
-						/[0-9](_*[0-9])*\.[0-9](_*[0-9])*[fF]?/,
-						/[0-9](_*[0-9])*[fF]?/,
-					),
-				),
-			),
 
 		string: ($) =>
 			choice($._string_double, $._string_single, $._string_backtick),

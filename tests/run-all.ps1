@@ -166,6 +166,23 @@ $exCount = ([regex]::Matches($exOut, "^PASS ", "Multiline")).Count
 if (-not $exOk) { $fail++; $exOut -split "`n" | Select-Object -Last 8 | ForEach-Object { "       $_" } }
 Pop-Location
 
+# The four cases from ysdragon/tree-sitter-ring#2. Ring accepts all four; the
+# grammar vendored at 65b185e rejected only case 4, and v1.1.1 fixed it. This
+# gate exists so a future grammar bump cannot quietly undo that -- and so the
+# three cases that ALWAYS worked cannot quietly break, which is the regression
+# a one-case gate would miss. See upstream\tree-sitter-ring-notes.md.
+Push-Location $root
+$i2dir = "tests\fixtures\tsring_issue2"
+$i2bad = @()
+foreach ($c in (Get-ChildItem (Join-Path $root $i2dir) -Filter *.ring | Sort-Object Name)) {
+    $o = & $ringpp check $c.FullName 2>&1 | Out-String
+    if ($o -match "rpp/unparsed") { $i2bad += $c.Name }
+}
+"{0} {1,-16} {2}" -f $(if ($i2bad.Count -eq 0) { "PASS" } else { "FAIL" }), "tsring #2",
+    $(if ($i2bad.Count -eq 0) { "all 4 digit-leading cases parse (grammar v1.1.1)" } else { "" })
+if ($i2bad.Count) { $fail++; $i2bad | ForEach-Object { "       $_ is rejected -- the grammar regressed" } }
+Pop-Location
+
 # The package manifest promises a prebuilt binary per platform, and a
 # promise nobody checks is how `ringpm install` starts failing on a machine
 # nobody here owns. This asserts that every file the manifest lists exists,

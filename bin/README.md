@@ -2,7 +2,16 @@
 
 One prebuilt CLI per platform, so **no user ever installs a compiler**.
 All five are produced from the same source by Zig 0.15.2, cross-compiled
-from one Windows host in about 45 seconds total.
+from one Windows host in about 90 seconds total.
+
+**Grammar: `tree-sitter-ring` v1.1.1** (`b44d254`), vendored under
+`vendor/tree-sitter-ring/` and statically linked into every binary here.
+All five were rebuilt when the grammar was bumped — a shipped binary that
+disagrees with the vendored source about what parses is the kind of
+inconsistency nobody finds until a user reports it. Verified after the
+rebuild: `bin/win64` and `bin/linux-x64` both accept
+`tests/fixtures/tsring_issue2/case4_nested_digit.ring`, which the previous
+grammar rejected.
 
 | file | format, verified with `file(1)` | size | how far it is verified |
 |---|---|---:|---|
