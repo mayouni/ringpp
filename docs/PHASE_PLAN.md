@@ -15,6 +15,36 @@ House rules, taken from `ringscript/docs/REPAIR_PLAN.md`:
   marked done until its gate has actually been run and its output
   pasted under it.
 
+> **This rule was broken from the first commit until 2026-08-23**, and
+> the audit that found it went looking for something smaller. Four
+> defects, in rising order of embarrassment:
+>
+> 1. the file went 13 commits without an update while the type checker
+>    gained cross-file resolution, class-body resolution and two new
+>    rules — so it stated the **opposite of the truth** (*"no checking
+>    inside class bodies"*);
+> 2. it kept routing unbuilt work to **T4**, a phase descoped further
+>    down the same file;
+> 3. **P3 read "not started"** while six of its seven idioms and 22 of
+>    its assertions were green;
+> 4. **P1 read "not started" in the very commit that shipped it** —
+>    `rpp/probe.ring` and `tests/probe_smoke.ring` are both in `65b185e`.
+>    The marker was never right, not once.
+>
+> And P1's gate *command* was `ring rpp\probe.ring`, which **prints
+> nothing and exits 0**, because that file is a library. A gate that
+> passes by doing nothing sat in this plan from the beginning, looking
+> runnable.
+>
+> The failure mode is worth naming, because nothing here catches it: the
+> gates run the *code*, and **no gate reads this file**. A plan cannot be
+> gated by a test, only by the habit of editing it in the commit that
+> invalidates it — and the direction of the errors is the tell. Three of
+> the four **understated** what was built, which is the direction nobody
+> checks, because a project that undersells itself never trips an alarm.
+> Where a claim below has been overtaken it is corrected in place and the
+> correction says so, rather than rewritten into looking prescient.
+
 ---
 
 ## The premise — settled, not a gate
@@ -27,11 +57,20 @@ Nothing below waits on a workload census.
 
 What the domains do change is **ordering**. Data-intensive and ML/AI
 work is dominated by dense numeric arrays, large record streams, and
-tight inner loops — which puts `RppBuffer`/`RppView` (P2), `RppIndexed`
-(P3), and the compiled numeric kernels (T4) ahead of everything else,
-and puts `RppArray` deliberately *after* the compiler, because a packed
-numeric buffer is 2.2× **slower** than a Ring list until the loop around
-it is native (F-15).
+tight inner loops — which puts `RppBuffer`/`RppView` (P2) and
+`RppIndexed` (P3) ahead of everything else.
+
+**Amended 2026-08-23.** This paragraph used to put "the compiled numeric
+kernels (T4)" in that same first rank, and to place `RppArray`
+deliberately *after the compiler*. T4 is descoped (see *The toolchain
+half* below), so there is no compiler to be after. `RppArray` is
+therefore **not scheduled at all**, and the reason is the measurement
+that always governed it: a packed numeric buffer is 2.2× **slower** than
+a Ring list until the loop around it is native ([F-15](FINDINGS.md)).
+Without a native loop it is a pessimisation with a nice name. If the
+compiled half ever returns as its own proposal, `RppArray` returns with
+it; until then, shipping it would be the project contradicting its own
+number.
 
 ## P0 — Baselines *(one afternoon, not a permission gate)*
 
@@ -79,15 +118,29 @@ Each row carries its degradation policy (HARD / SOFT / INFO).
 **Gate.**
 
 ```bash
-D:\ring127\bin\ring.exe rpp\probe.ring
+cd tests && D:\ring127\bin\ring.exe probe_smoke.ring
 ```
 
-prints one line per row, ends with `PROBE: n/n OK on Ring 1.27.0`, and
+prints one line per row, ends with `PROBE OK — n rows on this Ring`, and
 exits 0. Then deliberately break one row (rename a probe's target to a
 name that does not exist) and confirm it exits non-zero and names the
-row. Runs in under one second.
+row.
 
-*Status: not started.*
+*Status (corrected 2026-08-23 — it read **"not started"**): **built and
+green.** 9 rows, exit 0, 0.10 s. Run as `P1 probe` in the suite.*
+
+**Two corrections to the gate as written**, both found by running it:
+
+- the command was `ring rpp\probe.ring`, which **prints nothing and
+  exits 0**. `rpp/probe.ring` is a library — it defines the rows, it does
+  not run them. A gate that passes by producing no output is the worst
+  kind, and this one had been sitting in the plan looking runnable. The
+  runner is `tests/probe_smoke.ring`, and it must run **from `tests/`**
+  because it loads `../ringpp.ring`;
+- the expected string was `PROBE: n/n OK on Ring 1.27.0`; the probe
+  actually prints `PROBE OK — n rows on this Ring`. The suite matches on
+  `PROBE OK`, so the gate was real — only its description here was
+  wrong.
 
 ---
 
@@ -196,7 +249,35 @@ in place, in the real application.
    check against the old path. If the speedup is under 2×, say so and
    keep the old code.
 
-*Status: not started.*
+*Status (corrected 2026-08-23 — it read **"not started"**, which was
+wrong in the direction people do not check for): **gate parts 1 and 2 are
+built and green**, gate part 3 is not started.*
+
+All seven idioms exist — six in [`rpp/idioms.ring`](../rpp/idioms.ring),
+with `RppReport` in [`rpp/probe.ring`](../rpp/probe.ring) because it
+reports the probe's own rows — and are gated by 22 assertions in
+[`tests/idioms.ring`](../tests/idioms.ring), run as `P3 idioms` in the
+suite. **Three deviations from the gate as
+written above**, recorded because a gate quietly run differently is a
+gate not run:
+
+- the break-even case uses a **60,000**-item list, not 80,000;
+- it asserts **≥20×** on the permuted read rather than reproducing the
+  ~95× — a floor is stable across machines in a way a point figure is
+  not, and this gate has to pass on a laptop that is also compiling;
+- staleness surfaces as **`Release` returning FALSE plus advice**, not
+  as a warning naming the size change. The `sort()`/`reverse()` caveat
+  the plan demands *is* asserted by name.
+
+**What is left is part 3, and it is the honest gap.** No hot path in a
+real application has been rewritten in Ring++ and measured at production
+size. [`bench/workload/`](../bench/workload/README.md) records the
+attempt: it got as far as finding that the target module could not be
+driven through its own API — three defects, listed there — and step (c)
+says plainly that it has not been started. Until part 3 lands, every
+performance claim this project makes is a **benchmark** claim, not a
+production one. That distinction is the reason this status was worth
+correcting rather than rounding up.
 
 ---
 
@@ -321,16 +402,23 @@ Phases **T1–T7** live in
 | | | status |
 |---|---|---|
 | **T1** | `ringpp check` — the FINDINGS rules as lint | **built, gated, shipped** |
-| **T2** | level 1 type checking and `ringpp why` | **built, gated, shipped** |
+| **T2** | type checking and `ringpp why` — level 1, then **across the load graph and inside class bodies** | **built, gated, shipped** |
 | **T3–T7** | vendored VM, compiled kernels, cross-builds, cache | *research annex — descoped 2026-08-23* |
+
+The shipped artefact is five prebuilt binaries — Windows, Linux x64 and
+arm64, macOS x64 and arm64 ([`bin/README.md`](../bin/README.md), which
+records how far each one is verified) — carrying `tree-sitter-ring`
+**v1.1.1**, whose one open defect against this project was fixed
+upstream and re-measured ([`upstream/`](../upstream/README.md)).
 
 ### T2 — `ringpp why`: *status*
 
 **The diagnostic half is built and gated** ([`src/why.zig`](../src/why.zig),
 `ringpp why`, gate `T2 why gate` in `tests/run-all.ps1`).
 
-A catalog of 14 entries — the 9 rules `check` can emit, plus 5 traps a
-linter cannot see (F-18, F-20, F-21, F-22, F-23) — each with a symptom,
+A catalog of **21 entries** — the **16 rules** `check` can emit (9 lint +
+7 type), plus 5 traps a linter cannot see (F-18, F-20, F-21, F-22, F-23)
+— each with a symptom,
 a cause, a fix, the bench program that produces its numbers, the pattern
 the fix makes worse, and its upstream state. Reachable three ways: by
 rule, by finding id, and **by the Ring error code the user actually
@@ -346,9 +434,10 @@ decorative, and both were verified by breaking them on purpose:
 - every `F-n` cited must exist as a heading in `FINDINGS.md` —
   `docs/FINDINGS.md` is handed to the module in `build.zig` for this.
 
-### T2 — level 1 type checking: *built*
+### T2 — level 1 type checking: *built, then deepened*
 
-[`src/types.zig`](../src/types.zig), five rules, gated by `T2 type gate`.
+[`src/types.zig`](../src/types.zig) + [`src/project.zig`](../src/project.zig),
+**seven rules**, gated by `T2 type gate` and `T2 xfile gate`.
 
 Measuring Ring before writing it corrected the design. **A Ring type
 annotation is two mechanisms sharing one syntax** ([FINDINGS
@@ -364,6 +453,8 @@ expression reading a global that only `typehints.ring` defines —
 | `rpp/type-arg-mismatch` | warn | a *literal* contradicting the annotation; Ring runs it and concatenates |
 | `rpp/type-return-mismatch` | warn | a returned *literal* contradicting the return annotation |
 | `rpp/type-not-a-hint` | note | a fixed near-miss list only (`bool` → `boolean`) |
+| `rpp/type-duplicate-func` | error | two definitions of one name in a load graph is `C22` **at load**; the program never starts ([F-26](FINDINGS.md)) |
+| `rpp/type-declared-conflict` | note | the same name defined differently in files that never meet — a refusal, not a finding |
 
 **What it found on its first real run.** 99 arity call sites in 46
 distinct functions across Softanza's 5,949 files, plus one in Ring's own
@@ -379,15 +470,68 @@ correct code in Ring's own samples. Two structural guards fixed it, at
 the cost of no longer seeing a class name used as a return type. After
 them, Ring's corpus yields exactly one type finding and it is real.
 
-The rules give up coverage in three places on purpose, each recorded at
-the site: no checking inside class bodies (an unqualified call finds a
-method first, F-17), no functions registered after the first class (they
-are methods, F-21), and only literals judged for type (anything computed
-is genuinely unknown in a dynamic language).
+### T2 — deepened: across files, and inside classes
 
-**Still open under T2:** nothing. Level 2 — *compilable* — is T4's, and
-so is the `ringpp why <function>` form in [CLI.md](CLI.md); asking for
-it today says so rather than reporting a typo.
+*Three commits after the section above was written, and it invalidated
+two of its sentences. Both are corrected here rather than quietly edited
+away.*
+
+**Across files** ([`src/project.zig`](../src/project.zig), commit
+`3275e27`). A call in one file is now checked against a definition in
+another, through the **load graph**. It is sound rather than heuristic
+because Ring makes it so: a duplicate function name is `C22` at *load*
+time and the program never starts ([F-26](FINDINGS.md)), so within one
+graph a resolving name has exactly **one** live definition. Where that
+certainty is unavailable the checker refuses and says so — an unknown
+parent class, a name with two definitions, a file that did not parse.
+
+**Inside class bodies** (commit `e1ed273`). The sentence above — *"no
+checking inside class bodies"* — **is no longer true.** Calls in a class
+body are now resolved in Ring's own measured order: own method →
+inherited → global → builtin, with arity enforced at every step
+([F-27](FINDINGS.md)). What made it safe was measuring the order first;
+what makes it honest is that resolution stops and reports nothing when a
+parent class is not visible.
+
+**What the deepened checker found** *(a different run from the level-1
+one above, and a different rule set — the two counts are not in
+conflict)*. Ring's own 1,959 files → **3 errors, all real, zero
+false positives** — including `encrypt_ex`/`decrypt_ex` in the shipped
+standard library, which have never worked. Softanza's 6,012 → 99 arity
+findings, of which **97 are in dead archives**; saying that mattered more
+than the count. Two live shadowing bugs were found and fixed. The whole
+run is written up in [CASE-TYPE-SAFETY.md](CASE-TYPE-SAFETY.md), *with
+the three false positives it produced and what they cost*.
+
+**The three false positives are the reason this section exists.** Each
+was a Ring scoping rule the checker did not know, and **not one would
+have been caught by a test written from imagination** — all three came
+from running real corpora: brace blocks run in object scope; a call
+invented by error-recovery inside a file that did not parse; and Ring's
+`call` keyword invoking a function held in a variable. The second was a
+*broken promise* — `rpp/unparsed` says no rules were applied, while the
+cross-file layer was applying them anyway (fixed in `0277f10`, at the
+knowing cost of discarding 12 genuine duplicates in a file that cannot
+run).
+
+The rules still give up coverage on purpose in two places, each recorded
+at the site: no functions registered after the first class (they are
+methods, [F-21](FINDINGS.md)), and only literals judged for type —
+anything computed is genuinely unknown in a dynamic language.
+
+**Still open under T2:** nothing.
+
+> **Two items are currently unowned, and that is a decision, not an
+> oversight to fix silently.** Level 2 type checking (*compilable*) and
+> the `ringpp why <function>` form in [CLI.md](CLI.md) were both routed
+> to **T4**, which was descoped on 2026-08-23. They therefore have no
+> phase. Level 2 arguably belongs with the compiled half if it ever
+> returns; `ringpp why <function>` does not depend on a compiler at all
+> and could be a small T2 follow-up. **Which is which is the author's
+> call** — this file names them rather than reassigning them, because
+> the last time it went stale it was by quietly keeping a phase that no
+> longer existed. Asking for either today prints that it is not built,
+> rather than reporting a typo.
 
 ---
 
