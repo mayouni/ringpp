@@ -85,23 +85,47 @@ Those run a normal Linux and a 1.3 MB runtime is nothing to them. If
 as Linux arm64. If it means an ESP32, the honest answer is that Ring is
 the wrong runtime and MicroRing is the conversation, not Ring++.
 
-## 4. What must be measured before anything is promised
-
-**The build half has one blocking unknown**, and it is deliberately the
-first gate:
+## 4. The blocking unknown — measured, and the answer is split
 
 > **Is a `.ringo` portable across architectures?**
+>
+> **Yes for the bytecode. No for a program that touches native
+> extensions — and the reason is not the one anyone would guess.**
 
-Every number in F-28 is Windows x64. If bytecode written on Windows does
-not load on Linux arm64, then "build for any platform from any platform"
-collapses into "build for your own platform", which is a much smaller —
-though still useful — product. It was not tested because no non-Windows
-Ring runtime was on the machine.
+Measured in phase B0 ([F-29](FINDINGS.md)), gate
+[`tests/b0_bytecode.ps1`](../tests/b0_bytecode.ps1). A Linux
+x86_64-musl Ring runtime was cross-compiled from Ring's own sources with
+`zig cc` (43 files, 24 s, 2.78 MB) and driven under WSL.
 
-**Nothing about cross-platform output may be claimed until this is
-measured.** WSL Ubuntu is present and already used to verify the Linux
-CLI binary, so the x64 half of the answer is cheap. arm64 needs a real
-device or an emulator, and that is a deliberate cost, not a default.
+| | result |
+|---|---|
+| pure-Ring bytecode, Windows x64 → Linux x64 | **byte-identical output** — ints, floats (`1/3` → `0.33` on both), string case, `ascii`/`char`, loops, list indexing |
+| the same program plus `load "stdlib.ring"` | **fails on Linux** with `R38`, `libring_odbc.so` — while succeeding on Windows |
+
+**The failure is not stdlib and not the bytecode.** A `loadlib` that
+fails is **silent on Windows and fatal on Linux**. `stdlib.ring` reaches
+extensions it does not need for `upper()`; Windows shrugs, Linux stops.
+Proved both ways: an empty directory with only `ring.exe` + `ring.dll`
+runs the stdlib program and exits 0, so Windows genuinely does not need
+the extension either.
+
+**So the design constraint is now known, and it is sharper than
+"portable or not":**
+
+> The bytecode travelling is **necessary and not sufficient**. A build
+> half must resolve `loadlib` at *package* time or carry the target's
+> extensions — otherwise an executable built and tested on Windows fails
+> on Linux, for a library it never calls, in the user's hands rather
+> than at build time.
+
+Also learned, and worth watching more than the Ring version: the object
+file is **text** and carries `# OBJECT 1.25` while Ring reports 1.27.0.
+**The object format is versioned separately from the language**, and it
+— not the Ring version — is what would silently invalidate every
+already-packaged program.
+
+**Still unmeasured: arm64.** Everything above is x64→x64. The honest
+claim today is *"portable between x64 platforms"* and nothing wider.
 
 ## 5. The sibling tools
 

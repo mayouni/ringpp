@@ -1022,6 +1022,67 @@ The bytecode route above reaches a runnable artefact with none of them.
 That gap is the whole argument for the build half, and it is Ring's own
 mechanism — not something added to it.
 
+### F-29. Bytecode crosses platforms; a *failed* `loadlib` does not
+
+*Measured 2026-08-23, phase B0. Gate: `tests/b0_bytecode.ps1`.*
+
+**The bytecode format is portable.** A `.ringo` compiled by Ring 1.27 on
+**Windows x64** and executed by a Ring 1.27 runtime cross-compiled for
+**Linux x86_64-musl** produced **byte-identical output** across integer
+arithmetic, float formatting (`1/3` → `0.33` on both), string case,
+`ascii`/`char`, loop accumulation and list indexing.
+
+The object file is **text**, and it carries its own version:
+
+```
+# Ring Object File
+# OBJECT 1.25
+```
+
+**`OBJECT 1.25` while `ring.exe` reports 1.27.0** — the object format is
+versioned *separately from the language*. That number is the thing to
+watch: it, not the Ring version, is what would silently invalidate every
+already-packaged program.
+
+### The half that does not travel, and it is not the bytecode
+
+A program whose only sin is `load "stdlib.ring"` behaves **differently on
+the two platforms running the same bytes**:
+
+| | Windows x64 | Linux x86_64 |
+|---|---|---|
+| `pure.ringo` (no `load`) | correct | **identical** |
+| `lib.ringo` (`load "stdlib.ring"`) | correct, **exit 0** | **`Error (R38)`**, `libring_odbc.so` |
+
+The cause is not the bytecode and not stdlib. It is that **a `loadlib`
+that fails is silent on Windows and fatal on Linux.** `stdlib.ring`
+reaches native extensions it does not need for `upper()`; on Windows the
+missing library is shrugged off, on Linux it raises R38 and stops the
+program.
+
+Proved by isolation, both directions:
+
+- an **empty directory** holding only `ring.exe` + `ring.dll` (1.3 MB, no
+  `extensions/`, no `libraries/`, no `ring_*.dll`) runs `lib.ringo`
+  correctly and exits **0** — so Windows genuinely does not need the
+  extension;
+- the same `lib.ringo` on Linux dies on `libring_odbc.so`, a library the
+  program never calls.
+
+**The consequence for packaging is the finding.** An executable built and
+tested on Windows can fail on Linux *for a library it does not use*, and
+the failure appears at run time in the user's hands, not at build time.
+Any build half must therefore either resolve `loadlib` at package time or
+carry the platform's extensions — the bytecode being portable is
+necessary and **not sufficient**.
+
+### What is still unmeasured
+
+**arm64.** Everything above is x64→x64. Whether a `.ringo` loads on
+`aarch64` is untested — it needs a device or an emulator, which is a
+deliberate cost rather than a default. Until it is measured, the honest
+claim is *"portable between x64 platforms"*, and nothing wider.
+
 ---
 
 ## Part 5 — Safety, measured

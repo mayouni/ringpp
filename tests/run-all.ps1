@@ -166,6 +166,20 @@ $exCount = ([regex]::Matches($exOut, "^PASS ", "Multiline")).Count
 if (-not $exOk) { $fail++; $exOut -split "`n" | Select-Object -Last 8 | ForEach-Object { "       $_" } }
 Pop-Location
 
+# B0 — is a .ringo portable across platforms (FINDINGS F-29). Needs a Linux
+# Ring runtime, which it cross-compiles with `zig cc` when zig is present and
+# runs under WSL; without either it prints its own SKIP and exits 0. It is in
+# the suite so the answer cannot rot silently under a future Ring: the object
+# format is versioned separately from the language (OBJECT 1.25 vs Ring
+# 1.27.0), so this is exactly the claim that can go stale without anyone
+# touching Ring++.
+Push-Location $root
+$b0 = & powershell -File (Join-Path $root "tests\b0_bytecode.ps1") -Quiet 2>&1 | Out-String
+$b0line = ($b0 -split "`n" | Where-Object { $_ -match '^(PASS|FAIL|SKIP) b0' } | Select-Object -First 1)
+if ($b0line) { $b0line.TrimEnd() } else { "FAIL {0,-16} {1}" -f "b0 bytecode", "no verdict line" }
+if ($b0line -match '^FAIL' -or -not $b0line) { $fail++ }
+Pop-Location
+
 # The four cases from ysdragon/tree-sitter-ring#2. Ring accepts all four; the
 # grammar vendored at 65b185e rejected only case 4, and v1.1.1 fixed it. This
 # gate exists so a future grammar bump cannot quietly undo that -- and so the

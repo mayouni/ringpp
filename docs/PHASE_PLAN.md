@@ -561,21 +561,46 @@ designing, not after.
 **Gate.**
 
 ```bash
-cd tests && D:\ring127\bin\ring.exe probe_smoke.ring   # unrelated; B0 has no gate script yet
+powershell -File tests\b0_bytecode.ps1
 ```
 
-*(B0's gate is not yet written, and saying so is the point — see the
-house rule at the top of this file about gates that look runnable and are
-not.)* What it must do: compile a `.ringo` on Windows x64, carry it to a
-**Linux x64** Ring runtime (WSL Ubuntu is present and already used to
-verify the shipped CLI binary), and run it. Record whether it loads, and
-whether output is byte-identical. Then the same for **arm64**, which
-needs a real device or an emulator and is a deliberate cost.
+Compiles two fixtures on the host, cross-compiles a Linux x86_64-musl
+Ring runtime with `zig cc` if one is not supplied (43 files, ~25 s),
+runs the **same bytes** under WSL, and compares output byte for byte.
+Prints `SKIP` with a named reason when no Linux runtime can be obtained.
+Verified non-vacuous in both directions: it **fails** when handed a Linux
+binary that is not Ring, and **skips** when the VM sources are absent.
 
-Record the answer in `docs/FINDINGS.md` as F-29, whichever way it goes.
-**A negative result closes most of this half and is worth just as much.**
+*Status: **done, 2026-08-23** — `PASS b0 bytecode`,
+[F-29](FINDINGS.md).*
 
-*Status: **not started**.*
+**The answer is split, and the second half is the useful one.**
+
+| | result |
+|---|---|
+| pure-Ring bytecode, Windows x64 → Linux x64 | **byte-identical** — ints, floats (`1/3` → `0.33` both), string case, `ascii`/`char`, loops, list indexing |
+| the same plus `load "stdlib.ring"` | **fails on Linux**, `R38` on `libring_odbc.so`, while succeeding on Windows |
+
+The failure is neither the bytecode nor stdlib: **a `loadlib` that fails
+is silent on Windows and fatal on Linux.** An empty directory holding
+only `ring.exe` + `ring.dll` runs the stdlib program and exits 0, so
+Windows does not need the extension either — it simply does not mind its
+absence.
+
+So the constraint on any build half is now known and is sharper than
+"portable or not": **the bytecode travelling is necessary and not
+sufficient.** Packaging must resolve `loadlib` at build time or carry the
+target's extensions, or an executable tested on Windows fails on Linux
+for a library it never calls — in the user's hands, not at build time.
+
+Also learned: the object file is **text** and says `# OBJECT 1.25` while
+Ring reports 1.27.0. **The object format is versioned separately from the
+language**, and it is what would silently invalidate already-packaged
+programs.
+
+**Still unmeasured: arm64.** Everything is x64→x64; the honest claim is
+*"portable between x64 platforms"* and nothing wider. That is the first
+thing B1 would have to close.
 
 ### B1–Bn — not scheduled, and deliberately so
 
