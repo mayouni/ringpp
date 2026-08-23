@@ -977,6 +977,53 @@ tokenising, and giving a risky computation a blast radius.
 
 ---
 
+### F-28. A `.ringo` embeds everything `load` pulled in, and runs with no compiler
+
+*Measured 2026-08-23, Ring 1.27. This is the finding the build half rests
+on, so it was established before any of it was designed.*
+
+`ring file.ring -go` writes a `.ringo` object file, and `ring file.ringo`
+**executes it directly**. No C compiler is involved at any point.
+
+**`load` is resolved at compile time and its target is absorbed into the
+bytecode:**
+
+| program | `.ringo` |
+|---|---:|
+| `? "hello"` — no `load` | **301 bytes** |
+| the same plus `load "stdlib.ring"` | **221,794 bytes** |
+
+That 737× is stdlib being *carried inside the object file*, not
+referenced from it. The consequence is the useful one: **one `.ringo`
+carries the whole Ring-source dependency tree of a program.**
+
+**The runtime it needs is two files and 1.3 MB.** Verified by copying
+`ring.exe` (0.60 MB) and `ring.dll` (0.63 MB) into an empty directory
+with nothing else — no `libraries/`, no source — and running both object
+files there. Both printed correct output and exited 0. The 477 MB Ring
+install is not the runtime; 171 MB of it is Qt.
+
+**What this does *not* cover, and the limits are the point:**
+
+- **Native extensions cannot be embedded.** Anything reached by
+  `loadlib` — the ~131 non-Qt `ring_*.dll` — is opened at run time and
+  must ship beside the executable. A console or server program can be one
+  file; a GUI or database program cannot.
+- **Bytecode portability across architectures is UNMEASURED.** Every
+  figure above is Windows x64. Whether a `.ringo` written here loads on
+  Linux arm64 has not been tested, because no non-Windows Ring runtime
+  was available on this machine. **Nothing may be claimed about
+  cross-platform output until that is measured** — it is the first gate
+  of the build half for exactly that reason.
+
+**Why it matters.** Ring's own `ring2exe` generates a `.c` file and then
+shells out to **Visual C++, GCC or Clang** (`tools/ring2exe/README.md`).
+The bytecode route above reaches a runnable artefact with none of them.
+That gap is the whole argument for the build half, and it is Ring's own
+mechanism — not something added to it.
+
+---
+
 ## Part 5 — Safety, measured
 
 Four programs, four separate processes

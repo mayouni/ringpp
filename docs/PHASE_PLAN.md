@@ -535,6 +535,69 @@ anything computed is genuinely unknown in a dynamic language.
 
 ---
 
+## The build half *(proposed 2026-08-23 — B0 only is scheduled)*
+
+> **Shipping a Ring program on any platform, with no compiler.** Design
+> and measured feasibility in [DESIGN_BUILD.md](DESIGN_BUILD.md);
+> the mechanism is [F-28](FINDINGS.md).
+
+Ring already emits bytecode that runs with no C compiler
+(`ring app.ring -go` → `ring app.ringo`), `load` is resolved at compile
+time so the object file **carries its whole Ring-source dependency
+tree**, and the runtime that executes it is `ring.exe` + `ring.dll` =
+**1.3 MB**, verified in an empty directory. Ring's own `ring2exe`
+meanwhile writes a `.c` file and shells out to Visual C++, GCC or Clang.
+Same shape as the other two halves: **the mechanism is already in Ring
+and nobody can reach it.**
+
+### B0 — is bytecode portable across architectures?
+
+**The one blocking unknown, and the only phase scheduled.** Every figure
+in F-28 is Windows x64. If a `.ringo` written on Windows does not load on
+Linux, then "build for any platform from any platform" is not a product
+and the whole half shrinks to something smaller — worth knowing before
+designing, not after.
+
+**Gate.**
+
+```bash
+cd tests && D:\ring127\bin\ring.exe probe_smoke.ring   # unrelated; B0 has no gate script yet
+```
+
+*(B0's gate is not yet written, and saying so is the point — see the
+house rule at the top of this file about gates that look runnable and are
+not.)* What it must do: compile a `.ringo` on Windows x64, carry it to a
+**Linux x64** Ring runtime (WSL Ubuntu is present and already used to
+verify the shipped CLI binary), and run it. Record whether it loads, and
+whether output is byte-identical. Then the same for **arm64**, which
+needs a real device or an emulator and is a deliberate cost.
+
+Record the answer in `docs/FINDINGS.md` as F-29, whichever way it goes.
+**A negative result closes most of this half and is worth just as much.**
+
+*Status: **not started**.*
+
+### B1–Bn — not scheduled, and deliberately so
+
+Three decisions are the author's and are not derivable from any
+measurement ([DESIGN_BUILD.md §6](DESIGN_BUILD.md)):
+
+1. **Bare-metal microcontrollers are out.** A 1.2 MB VM with a GC and
+   dynamic `loadlib` does not fit an ESP32. *Linux-class* embedded — a
+   Raspberry Pi, a gateway — is in, and is the same work as Linux arm64.
+   If the brief keeps bare metal, this half begins with a promise it
+   cannot keep; MicroRing is that conversation.
+2. **Cross-platform means Ring++ distributes Ring runtimes**, which is a
+   commitment and arguably a governance question for Mahmoud rather than
+   only a technical one.
+3. **This may belong upstream.** Ring owns `ring2exe`. A compiler-free
+   build path is arguably a *finding* — and the standing rule here is
+   that a finding travels better than a patch.
+
+Nothing below B0 is designed until those are answered.
+
+---
+
 ## Standing gate: every phase re-runs `bench/`
 
 `bench/` is the regression suite for the *assumptions*, not the code.
