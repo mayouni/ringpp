@@ -19,9 +19,12 @@ is one condition and has been built and regression-checked.
 | 2 | [empty catch grows the VM stack](empty-catch-stack/) | ring-lang/ring | yes, verified | **APPLIED** — [#1644](https://github.com/ring-lang/ring/pull/1644) closed, fix landed as [`cda2ecf0`](https://github.com/ring-lang/ring/commit/cda2ecf05a39c0e7268623f918934157fe64c603) (*"Free stack when we catch an error"*) + test [`22beec8c`](https://github.com/ring-lang/ring/commit/22beec8cc999f520d6bf0ab8d7e8f28dcb152f80) |
 | 3 | [`ring_state_findvar` name case](state-findvar/) | ring-lang/ring | yes, verified | **APPLIED** — [#1645](https://github.com/ring-lang/ring/pull/1645) closed, fix landed as [`b6aea3d`](https://github.com/ring-lang/ring/commit/b6aea3d58fce7b544bd2381f7c1b27655ce2c094) + test [`ed69e68`](https://github.com/ring-lang/ring/commit/ed69e6824652025651638e6ee7d7262b2accba08), credited to Mansour Ayouni and Youssef Saeed |
 | 4 | [two pointer-API doc notes](pointer-api-docs/) | ring-lang/ring | docs only | **CLOSED** — [#1646](https://github.com/ring-lang/ring/pull/1646), declined with reasons worth keeping (below) |
-| 5 | [grammar findings](tree-sitter-ring-notes.md) | ysdragon/tree-sitter-ring | no | **OPEN** — [issue #2](https://github.com/ysdragon/tree-sitter-ring/issues/2) |
+| 5 | [grammar findings](tree-sitter-ring-notes.md) | ysdragon/tree-sitter-ring | no | **FIXED upstream** — [issue #2](https://github.com/ysdragon/tree-sitter-ring/issues/2) fixed by Youssef Saeed in [`287afffb`](https://github.com/ysdragon/tree-sitter-ring/commit/287afffb), shipped as v1.1.1. Re-measured 2026-08-23: wrongly-rejected files **18 → 11** across 10,233, seven fixed, no regressions. Issue still open pending our confirmation. |
+| 6 | [reply with the re-measured number](tree-sitter-ring-issue2-reply.md) | ysdragon/tree-sitter-ring#2 | no | **DRAFTED, NOT SENT** — the confirmation that closes #2. Mansour posts it. |
 
-**Nothing is pending.** Every finding from this project has been sent.
+**One item is pending:** the reply at row 6. It is written and waiting on the
+author — it carries a correction of a number this project already published,
+so it should not go out unread.
 
 ## Considered and deliberately not sent
 

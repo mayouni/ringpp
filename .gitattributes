@@ -14,3 +14,14 @@
 # file in bin/ completely untouched.
 bin/**/ringpp     binary
 bin/**/ringpp.exe binary
+
+# Vendored third-party sources check out BYTE-EXACT, never line-ending
+# converted. These are someone else's release artefacts and the project makes
+# provenance claims about them -- upstream/tree-sitter-ring-notes.md quotes
+# sha cb5bb1e7 for v1.1.1's parser.c and invites the maintainer to check it.
+#
+# Without this, core.autocrlf rewrote parser.c on checkout from 21,848,802
+# bytes to 22,412,612, so the working copy no longer matched the release it
+# claimed to be. Git had stored the file correctly; only the checkout was
+# wrong, which is the version anyone would actually compare.
+vendor/** -text

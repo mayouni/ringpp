@@ -186,25 +186,46 @@ position (5 files, all Softanza):**
 **The two Ring-corpus files that improved contain no digit-leading
 identifier at all.** They were fixed by v1.1.1's *other* change — the
 `exit`/`loop` rework from `prec.right(seq(kw, optional($._expression)))`
-to a `choice` with `prec.dynamic`:
+to a `choice` with `prec.dynamic`.
 
-| file | the construct |
-|---|---|
-| `applications/tictactoe3d/tictactoe3d.ring` | `exit \t\t\t# Exit from the Events Loop` — a **bare `exit` followed only by a trailing comment** |
-| `applications/eightpuzzle3d/EightPuzzleGame3D.ring` | same construct, twice |
-
-Reduced to a reproducer, and v1.1.1 accepts it:
+**The minimal reproducer, verified against both grammars:**
 
 ```ring
-func Main
-	while true
-		exit 			# a bare exit with a trailing comment
-	end
+func A
+	exit
+
+func B
+	? 1
 ```
 
+| | verdict |
+|---|---|
+| grammar at `65b185e` (pre-fix) | **rejects**, at `4:1` — the `func B` line |
+| grammar at **v1.1.1** | accepts |
+| `ring -norun` | accepts |
+
+A bare `exit` (or `loop`) as a function's last statement made the old
+`optional($._expression)` reach past the end of the function and try to
+consume the **next `func` declaration** as its operand. That is why
+`tictactoe3d.ring` failed at `560:2` — the `func` *after* the `exit`, not
+the `exit` itself.
+
+**How this was nearly got wrong, since the lesson is the same one as
+above.** The first reproducer written for this was
+`exit \t\t\t# Exit from the Events Loop` inside a `while`, on the theory
+that the trailing comment was the trigger. **It does not reproduce** — the
+pre-fix grammar accepts it, and so does v1.1.1. The comment is not
+involved at all, and neither is the loop: a plain `exit` with no comment
+reproduces just as well, provided another `func` follows. It was caught by
+rebuilding the old grammar and actually running the reproducer against it
+rather than reasoning from the diff.
+
+*Second time this file records the same mistake. **Check that a minimal
+reproducer actually reproduces before sending it.***
+
 This was never filed from here. It is reported now because the credit is
-his either way, and because it means **v1.1.1 fixed two classes of
-false rejection, not one**.
+his either way, and because it means **v1.1.1 fixed two classes of false
+rejection, not one**.
 
 ## What is still too strict (11 files) — the next report, if there is one
 
