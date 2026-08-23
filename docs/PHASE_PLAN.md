@@ -602,7 +602,74 @@ programs.
 *"portable between x64 platforms"* and nothing wider. That is the first
 thing B1 would have to close.
 
-### B1–Bn — not scheduled, and deliberately so
+### B1 — `ringpp deps`: what must ship beside the program
+
+**Scheduled and built because it is needed under every branch of the
+decisions below**, and because B0 left a concrete hole: the bytecode
+travels, the native libraries do not, and the failure surfaces at run
+time on the user's machine rather than at build time.
+
+It is answerable statically because of Ring's own idiom:
+
+```ring
+if iswindows()   LoadLib("ring_odbc.dll")
+but ismacosx()   LoadLib("libring_odbc.dylib")
+but islinux()    LoadLib("libring_odbc.so")
+ok
+```
+
+**The platform branch is decided at run time; the file names are
+literals.** So the complete set of native libraries a program can reach,
+on every platform, is visible in the source. `ringpp deps` walks the load
+closure — following into Ring's own tree when given `--ring` — collects
+every `LoadLib` and `loadlibfile` literal, and collapses the three
+spellings onto one row per library.
+
+**Gate.**
+
+```bash
+powershell -File tests\run-all.ps1     # gate `b1 deps`
+```
+
+Three assertions, and the third is the one that matters:
+
+1. a program reaching `stdlib.ring` must name **`libring_odbc.so`** — the
+   exact library that killed B0's fixture on Linux;
+2. a program with no `load` must be reported **PURE RING**;
+3. **with no `--ring`, the loads cannot be followed, so the answer must be
+   a refusal and a non-zero exit — never "pure".**
+
+That third one is gated harder than the happy path on purpose. A
+dependency report that answers *"nothing to worry about"* when it could
+not look is the same defect `tests/fidelity.ps1` carried from its first
+commit, and it would be worse here: it would be believed at exactly the
+moment someone ships. Verified non-vacuous — removing the `load` from the
+fixture fires all three.
+
+*Status: **done, 2026-08-24**. It predicts, without running anything, the
+failure B0 needed a Linux runtime to discover:*
+
+```
+    windows            macos                  linux                  declared in
+    ring_odbc.dll      libring_odbc.dylib     libring_odbc.so        odbclib.ring:2
+    ring_mysql.dll     libring_mysql.dylib    libring_mysql.so       mysqllib.ring:2
+    ring_sqlite.dll    libring_sqlite.dylib   libring_sqlite.so      sqlitelib.ring:2
+    ring_internet.dll  libring_internet.dylib libring_internet.so    internetlib.ring:2
+    ring_openssl.dll   libring_openssl.dylib  libring_openssl.so     openssllib.ring:2
+    ring_pgsql.dll     libring_pgsql.dylib    libring_pgsql.so       postgresqllib.ring:2
+```
+
+**Six extensions, to call `upper()`.** That is what `load "stdlib.ring"`
+costs a program that wants one string function, and it is the strongest
+argument yet for a `deps` command existing at all — no one would guess it.
+
+Two limits, both recorded at the site: a `loadlib` whose argument is
+computed is reported as **unresolved rather than guessed at**, and a
+library whose real name begins with `lib` lands in two rows instead of
+one (`src/deps.zig`, the test named `KNOWN GAP`). Neither bites on Ring
+today; both are stated rather than discovered later.
+
+### B2–Bn — not scheduled, and deliberately so
 
 Three decisions are the author's and are not derivable from any
 measurement ([DESIGN_BUILD.md §6](DESIGN_BUILD.md)):

@@ -127,6 +127,31 @@ already-packaged program.
 **Still unmeasured: arm64.** Everything above is x64→x64. The honest
 claim today is *"portable between x64 platforms"* and nothing wider.
 
+## 4b. What B1 built, and the number that justifies it
+
+`ringpp deps <file.ring> [--ring <dir>]` — **built 2026-08-24**, gate
+`b1 deps`. It answers the question B0 opened, and it answers it
+statically because Ring's own idiom writes all three platform file names
+as literals in the source.
+
+The result on a program whose only sin is `load "stdlib.ring"`:
+
+> **Six native extensions — ODBC, MySQL, SQLite, internet, OpenSSL,
+> PostgreSQL — reachable, in order to call `upper()`.**
+
+That number is the argument for the command. Nobody would guess it, it is
+invisible in the source of the program itself, and on Linux the first of
+them is fatal. `ringpp deps` names `libring_odbc.so` without running
+anything — the same failure B0 needed a cross-compiled Linux runtime and
+a WSL round trip to find.
+
+**It refuses rather than reassures.** Without `--ring` it cannot follow
+`load "stdlib.ring"`, so it prints **NO VERDICT**, names the loads it
+could not resolve, and exits non-zero. It never reports "pure Ring" for a
+program it failed to read — that specific refusal is gated harder than
+the happy path, because it is the one that would be believed at the
+moment someone ships.
+
 ## 5. The sibling tools
 
 RingServer, RingScript and MicroRing are all checked out beside this

@@ -166,6 +166,37 @@ $exCount = ([regex]::Matches($exOut, "^PASS ", "Multiline")).Count
 if (-not $exOk) { $fail++; $exOut -split "`n" | Select-Object -Last 8 | ForEach-Object { "       $_" } }
 Pop-Location
 
+# B1 — `ringpp deps`: what must ship beside a program. Three assertions,
+# and the third is the one that matters. A dependency report that answers
+# "nothing to worry about" when it could not follow the loads is the same
+# defect tests/fidelity.ps1 carried for a year, so the refusal is gated
+# harder than the happy path.
+Push-Location $root
+$depsBad = @()
+$fx = Join-Path $root "tests\fixtures\deps"
+
+# 1. a program reaching stdlib must name the library that killed B0 on Linux
+$d1 = & $ringpp deps (Join-Path $fx "uses_stdlib.ring") --ring "D:\ring127" 2>&1 | Out-String
+if ($d1 -notmatch "libring_odbc\.so")   { $depsBad += "stdlib program does not name libring_odbc.so" }
+if ($d1 -notmatch "ring_odbc\.dll")     { $depsBad += "stdlib program does not name the windows spelling" }
+
+# 2. a pure program must be called pure
+$d2 = & $ringpp deps (Join-Path $fx "pure.ring") --ring "D:\ring127" 2>&1 | Out-String
+if ($d2 -notmatch "PURE RING")          { $depsBad += "pure program not reported as pure" }
+
+# 3. THE ONE THAT MATTERS: with no --ring the loads cannot be followed, so
+#    the answer must be a refusal and a non-zero exit -- never "pure".
+$d3 = & $ringpp deps (Join-Path $fx "uses_stdlib.ring") 2>&1 | Out-String
+$d3code = $LASTEXITCODE
+if ($d3 -match "PURE RING")             { $depsBad += "claimed PURE RING while unable to follow its loads" }
+if ($d3 -notmatch "NO VERDICT")         { $depsBad += "did not refuse a verdict it could not reach" }
+if ($d3code -eq 0)                      { $depsBad += "exited 0 on an unanswerable question" }
+
+"{0} {1,-16} {2}" -f $(if ($depsBad.Count -eq 0) { "PASS" } else { "FAIL" }), "b1 deps",
+    $(if ($depsBad.Count -eq 0) { "names the native libs; refuses a verdict it cannot reach" } else { "" })
+if ($depsBad.Count) { $fail++; $depsBad | ForEach-Object { "       $_" } }
+Pop-Location
+
 # B0 — is a .ringo portable across platforms (FINDINGS F-29). Needs a Linux
 # Ring runtime, which it cross-compiles with `zig cc` when zig is present and
 # runs under WSL; without either it prints its own SKIP and exits 0. It is in

@@ -7,6 +7,7 @@ const check = @import("check.zig");
 const why = @import("why.zig");
 const types = @import("types.zig");
 const project = @import("project.zig");
+const deps = @import("deps.zig");
 
 const version = "0.1.0";
 
@@ -63,6 +64,21 @@ pub fn main() !u8 {
     if (std.mem.eql(u8, cmd, "check") or std.mem.eql(u8, cmd, "c")) {
         const path = if (args.len > 2) args[2] else ".";
         return try runCheck(gpa, w, path);
+    }
+    if (std.mem.eql(u8, cmd, "deps") or std.mem.eql(u8, cmd, "d")) {
+        if (args.len < 3) {
+            try w.print("usage: ringpp deps <file.ring> [--ring <dir>]\n", .{});
+            return 1;
+        }
+        var ring_root: ?[]const u8 = null;
+        var i: usize = 3;
+        while (i < args.len) : (i += 1) {
+            if (std.mem.eql(u8, args[i], "--ring") and i + 1 < args.len) {
+                ring_root = args[i + 1];
+                i += 1;
+            }
+        }
+        return try deps.run(gpa, w, args[2], ring_root);
     }
     if (std.mem.eql(u8, cmd, "why") or std.mem.eql(u8, cmd, "w")) {
         return try why.run(w, if (args.len > 2) args[2] else null);
