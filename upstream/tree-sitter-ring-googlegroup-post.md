@@ -1,64 +1,66 @@
-# Google Group post — tree-sitter-ring v1.1.1
+# Google Group post — an answer to Youssef
 
 **Status: DRAFTED, NOT SENT.** For the Ring Google Group, posted by
 Mansour. The GitHub reply it links to **is** already posted:
 [issue #2, comment 5384766820](https://github.com/ysdragon/tree-sitter-ring/issues/2#issuecomment-5384766820).
 
-Kept short on purpose — the group gets the headline and the link, not the
-tables. Everything quantitative lives in the linked comment.
+Written as an answer to Youssef, in public, so the rest of the group gets
+the useful part: what tree-sitter buys a Ring programmer, and why this
+project leans on it. Short on purpose — the numbers live in the link.
 
 ---
 
-**Subject:** tree-sitter-ring v1.1.1 — two parsing fixes, measured over 10,233 Ring files
+**Subject:** Re: tree-sitter-ring — v1.1.1 fixes it, and why I depend on this grammar
 
-Youssef Saeed's tree-sitter grammar for Ring
-(https://github.com/ysdragon/tree-sitter-ring) is at v1.1.1, and it fixes
-two constructs that Ring accepts but the grammar was rejecting:
+Youssef,
 
-1. a **digit-leading identifier whose call is an argument to another
-   call** — `? Wrap(3Copies("x"))`. Ring accepts it; the grammar did not.
-   Statement-level `? 3Copies("x")` always worked, which is what made it
-   hard to spot.
-
-2. a bare **`exit` or `loop` as a function's last statement**, followed by
-   another `func`. The old rule reached past the end of the function and
-   tried to take the next `func` declaration as the operand of `exit`:
-
-```ring
-func A
-    exit
-
-func B
-    ? 1
-```
-
-I re-measured after the fix, over **10,233 files** — a full Ring 1.27
-install (4,221) and the Softanza library tree (6,012) — with Ring itself
-as the judge: every disagreement is settled by `ring <file> -norun`, never
-by the grammar's opinion.
-
-**Files the grammar wrongly rejects: 18 → 11. Seven fixed, no
-regressions.**
-
-Of the 11 that remain, 8 are Ring's own **changeable-syntax** material
-(`language/tests/scripts/natural/`, `samples/Language/ChangeSyntax/`,
-`samples/UsingNaturalLib/`), where a program redefines Ring's keywords at
-run time. I do not think a static grammar can follow that, and I am not
-sure it should try — worth saying out loud rather than filing as defects.
-
-This matters beyond one grammar: editor support, syntax highlighting and
-static analysis for Ring all end up standing on it, so a false rejection
-there becomes a false error in someone's editor.
-
-Full numbers, the reproducers, and the provenance of what was measured:
+v1.1.1 fixes it. I re-measured over **10,233 Ring files** — a full Ring
+1.27 install plus my Softanza library tree — and the files your grammar
+wrongly rejects went **18 → 11**, seven fixed, nothing broken. Details and
+reproducers are in the issue:
 
 https://github.com/ysdragon/tree-sitter-ring/issues/2#issuecomment-5384766820
 
-That comment also retracts a figure I published in my original report — a
-"0.16% disagreement rate" that came from a measurement harness whose
-forward direction, it turns out, had never matched anything. The finding
-itself was hand-bisected and stands; the percentage should not be quoted.
-Better said plainly than left in circulation.
+Since the group may wonder what this is about, the short version.
 
-Thanks to Youssef for the turnaround — a narrowed reproducer went in and a
-fix came back.
+**What tree-sitter gives Ring.** It is a parser generator that produces a
+real syntax tree with exact source positions, and keeps parsing after a
+mistake instead of giving up at the first one. That is what lets a tool say
+*"line 13, column 45"* rather than *"something is wrong somewhere"*. Ring's
+own compiler is built to run programs, not to answer questions about them,
+so anything that wants to **read** Ring — an editor, a highlighter, a
+formatter, a static analyser — otherwise has to reimplement Ring's syntax
+and slowly drift from it. Youssef's grammar means we write that once.
+
+**Why I use it.** I am building static type checking for large Ring
+projects, because that is the one thing a serious engineering team asks
+about before committing to a language at scale. It reads a whole project
+across `load` boundaries and reports things like a function called with the
+wrong number of arguments — before the program runs, not at line 4,000 in
+production. On Ring's own standard library it found two functions that have
+never worked. That checker sees Ring through this grammar.
+
+**One rule I would recommend to anyone doing the same:** the grammar is a
+*lens, never a judge*. When it and Ring disagree about whether a file is
+valid, **Ring is right, always** — the grammar has a bug. That is exactly
+how this one was found: the grammar rejected
+
+```ring
+? Wrap(3Copies("x"))
+```
+
+which Ring accepts happily. A digit-leading identifier was fine on its own,
+and fine as a call — but not as an argument *to another call*. Five real
+files in my library hit it. v1.1.1 also fixed a second one I had never
+reported: a bare `exit` at the end of a function would swallow the next
+`func` declaration.
+
+One correction while I am here: the *0.16%* figure I published with the
+original report should not be quoted — it came from a measuring script of
+mine that was silently broken. The finding was hand-verified and stands;
+the percentage did not deserve to be printed.
+
+Thank you for the turnaround, Youssef. A narrowed reproducer went in and a
+fix came back, and Ring tooling is better for it.
+
+Mansour
