@@ -29,7 +29,16 @@ $ran = 0
 function Invoke-Leashed([string]$script, [string]$workdir) {
     $out = [System.IO.Path]::GetTempFileName()
     $err = [System.IO.Path]::GetTempFileName()
-    $p = Start-Process -FilePath $Ring -ArgumentList $script -WorkingDirectory $workdir `
+    # The path MUST be quoted. Start-Process -ArgumentList takes one command
+    # line, not an argv array, so an unquoted path is split on spaces and Ring
+    # is handed several arguments instead of one file. Found by cloning the
+    # repository into a directory whose name contained a space: all eight
+    # examples "failed" identically, having never run. That is every Windows
+    # user whose account name has a space in it -- C:\Users\John Smith\ringpp
+    # -- which is a large share of them. The rest of the suite uses the call
+    # operator (& $Ring $file), which passes argv properly and was never
+    # affected; this was the one launch that did not.
+    $p = Start-Process -FilePath $Ring -ArgumentList "`"$script`"" -WorkingDirectory $workdir `
         -PassThru -NoNewWindow -RedirectStandardOutput $out -RedirectStandardError $err
     $sw = [Diagnostics.Stopwatch]::StartNew()
     $peak = 0

@@ -34,20 +34,51 @@ Pop-Location
 
 # The Zig side: unit tests plus the T1 gate.
 Push-Location $root
-$null = & zig build test 2>&1
-"{0} {1,-16}" -f $(if ($LASTEXITCODE -eq 0) { "PASS" } else { "FAIL" }), "T1 zig test"
-if ($LASTEXITCODE -ne 0) { $fail++ }
+
+# The unit tests need the Zig COMPILER, which a package user is promised they
+# will never need. So its absence is a named SKIP, not a failure -- the same
+# policy as the optional corpus gate below. Anyone adapting the CLI has Zig
+# and gets the gate; anyone who merely installed the package does not, and
+# must still be able to run this suite green.
+$zig = Get-Command zig -ErrorAction SilentlyContinue
+if ($zig) {
+    $null = & zig build test 2>&1
+    "{0} {1,-16}" -f $(if ($LASTEXITCODE -eq 0) { "PASS" } else { "FAIL" }), "T1 zig test"
+    if ($LASTEXITCODE -ne 0) { $fail++ }
+} else {
+    "{0} {1,-16} {2}" -f "SKIP", "T1 zig test", "no zig on PATH -- the CLI source tests need the compiler"
+}
+
+# Which ringpp binary the gates below drive. A fresh clone has NO zig-out --
+# it is gitignored -- so hardcoding it made the documented command
+# `powershell -File tests\run-all.ps1` fail five gates for everyone who
+# cloned the repository, while a perfectly good binary sat in bin\win64.
+# Found by actually cloning it. Preference order: a developer's fresh build
+# first, the shipped binary second, and the choice is PRINTED, because a
+# suite that silently tests a different artefact than you think is worse
+# than one that fails.
+$ringpp = $null
+foreach ($cand in @("zig-out\bin\ringpp.exe", "bin\win64\ringpp.exe")) {
+    if (Test-Path (Join-Path $root $cand)) { $ringpp = Join-Path $root $cand; break }
+}
+if (-not $ringpp) {
+    "FAIL {0,-16} {1}" -f "T1 cli", "no ringpp.exe in zig-out\bin or bin\win64"
+    $fail++
+    $ringpp = "ringpp.exe"   # let the gates below fail loudly rather than crash
+} else {
+    "     {0,-16} {1}" -f "using", (Resolve-Path $ringpp -Relative)
+}
 
 # T1. SELF-CONTAINED, and that is the point. This gate used to scan a path
 # inside D:\GitHub\stzlib, which made Ring++'s own suite unrunnable by anyone
-# who does not also have Softanza checked out beside it. Ring++ is an
-# independent project and a Ring package; its gates may not require another
+# who does not also have Softanza checked out beside it. Ring++ is
+# dependency-free and a Ring package; its gates may not require another
 # repository to exist.
 #
 # Assert the RULE, never a line number: fixture lines move when the fixture
 # is edited, and pinning stkPointer.ring:720:44 once failed for the right
 # rule at the wrong address.
-$chk = & ".\zig-out\bin\ringpp.exe" check "tests\fixtures\lint_bad.ring" 2>&1 | Out-String
+$chk = & $ringpp check "tests\fixtures\lint_bad.ring" 2>&1 | Out-String
 $ok = ($chk -match "rpp/varptr-unknown-name") -and
       ($chk -match "rpp/empty-catch") -and
       ($chk -match "rpp/substr-in-loop")
@@ -59,7 +90,7 @@ if (-not $ok) { $fail++ }
 # not run is a green nobody earned (PX, CENTRAL-PXLATENCY-01).
 $corpus = "D:\GitHub\stzlib\libraries\stzlib\core\system"
 if (Test-Path $corpus) {
-    $cOut = & ".\zig-out\bin\ringpp.exe" check $corpus 2>&1 | Out-String
+    $cOut = & $ringpp check $corpus 2>&1 | Out-String
     $cOk = ($cOut -match "rpp/varptr-unknown-name") -and ($cOut -match "0 warn")
     "{0} {1,-16} {2}" -f $(if ($cOk) { "PASS" } else { "FAIL" }), "T1 corpus", "optional: Softanza present, dead varptr found"
     if (-not $cOk) { $fail++ }
@@ -75,19 +106,19 @@ $whyOk = $true
 # Every rule the binary advertises, plus every rule the check gate just
 # printed. The first set proves the listing is not lying; the second proves
 # check and why cannot drift apart in the field.
-$listed = & ".\zig-out\bin\ringpp.exe" why 2>&1 | Out-String
+$listed = & $ringpp why 2>&1 | Out-String
 $whyRules = (
     ([regex]::Matches($listed, "rpp/[a-z-]+") | ForEach-Object { $_.Value }) +
     ([regex]::Matches($chk,    "rpp/[a-z-]+") | ForEach-Object { $_.Value })
 ) | Sort-Object -Unique
 if ($whyRules.Count -lt 9) { $whyOk = $false; "       expected at least 9 rules, listed $($whyRules.Count)" }
 foreach ($r in $whyRules) {
-    $null = & ".\zig-out\bin\ringpp.exe" why $r 2>&1
+    $null = & $ringpp why $r 2>&1
     if ($LASTEXITCODE -ne 0) { $whyOk = $false; "       no why entry for $r" }
 }
-$byCode = & ".\zig-out\bin\ringpp.exe" why R4 2>&1 | Out-String
+$byCode = & $ringpp why R4 2>&1 | Out-String
 if ($byCode -notmatch "rpp/empty-catch") { $whyOk = $false; "       R4 did not resolve to rpp/empty-catch" }
-$null = & ".\zig-out\bin\ringpp.exe" why R99 2>&1
+$null = & $ringpp why R99 2>&1
 if ($LASTEXITCODE -eq 0) { $whyOk = $false; "       an unknown query must exit non-zero" }
 "{0} {1,-16} {2}" -f $(if ($whyOk) { "PASS" } else { "FAIL" }), "T2 why gate", "$($whyRules.Count) rule(s) explained; R4 resolves; unknown exits 1"
 if (-not $whyOk) { $fail++ }
@@ -96,14 +127,14 @@ if (-not $whyOk) { $fail++ }
 # clean one must produce absolutely nothing. Every defect in the bad fixture
 # was confirmed against Ring 1.27 before its rule was written.
 $tyOk = $true
-$bad = & ".\zig-out\bin\ringpp.exe" check "tests\fixtures\types_bad.ring" 2>&1 | Out-String
+$bad = & $ringpp check "tests\fixtures\types_bad.ring" 2>&1 | Out-String
 foreach ($r in @("rpp/type-arity","rpp/type-arg-mismatch","rpp/type-hints-missing","rpp/type-not-a-hint")) {
     if ($bad -notmatch [regex]::Escape($r)) { $tyOk = $false; "       $r did not fire on types_bad.ring" }
 }
 if ($bad -notmatch "R19") { $tyOk = $false; "       too-few-args was not reported as R19" }
 if ($bad -notmatch "R20") { $tyOk = $false; "       too-many-args was not reported as R20" }
 
-$good = & ".\zig-out\bin\ringpp.exe" check "tests\fixtures\types_good.ring" 2>&1 | Out-String
+$good = & $ringpp check "tests\fixtures\types_good.ring" 2>&1 | Out-String
 if ($good -match "rpp/type-") {
     $tyOk = $false
     "       FALSE POSITIVE on types_good.ring:"
@@ -115,7 +146,7 @@ if (-not $tyOk) { $fail++ }
 # T2, the PROJECT layer: cross-file checking through the load graph.
 # Every fixture verdict below was first confirmed by running Ring itself
 # (app.ring -> R19, dup_main.ring -> C22, indep_a.ring -> clean).
-$xf = & ".\zig-out\bin\ringpp.exe" check "tests\fixtures\xfile" 2>&1 | Out-String
+$xf = & $ringpp check "tests\fixtures\xfile" 2>&1 | Out-String
 $xfOk = ($xf -match "rpp/type-arity") -and ($xf -match "defined in .*lib\.ring") -and
         ($xf -match "rpp/type-duplicate-func") -and ($xf -match "dup_main") -and
         ($xf -notmatch "indep_")
