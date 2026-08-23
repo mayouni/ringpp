@@ -11,14 +11,28 @@
 > to be re-measured. It has been, on 2026-08-23; the results are in
 > [§ The re-measurement](#the-re-measurement) below.
 >
-> **The reply is drafted and NOT sent.** Findings go to the author.
+> **The reply is SENT** —
+> [issue #2, comment 5384766820](https://github.com/ysdragon/tree-sitter-ring/issues/2#issuecomment-5384766820),
+> 2026-08-23, posted by Mansour on his instruction. It reports 18 → 11
+> wrongly-rejected files and **retracts the ~0.16% below**. The issue was
+> left open for Youssef to close himself.
 
 Found by running `ringpp check` (which vendors this grammar) over 5,566
 Softanza files and Ring 1.27's own corpus, then asking `ring <file> -norun`
 to adjudicate every disagreement.
 
-**Measured disagreement rate: ~0.16%** — 9 files out of 5,566. That is a
-very good grammar; the note below is the residue.
+**~~Measured disagreement rate: ~0.16%~~ — ~~9 files out of 5,566~~.**
+
+> **RETRACTED 2026-08-23, and retracted publicly in the reply.** This
+> number came from `tests/fidelity.ps1`, whose forward direction searched
+> for a diagnostic name the checker has never emitted, and so matched
+> nothing on any corpus. It is left visible rather than deleted: withdrawing
+> a number you published is not the same as removing it. See
+> [§ The harness had to be repaired first](#the-harness-had-to-be-repaired-first-and-the-old-016-does-not-survive-it).
+> **The finding itself was hand-bisected and stands.** Only the percentage
+> was harness-derived.
+
+The grammar is a good one; the note below is the residue.
 
 ## The finding, as filed
 

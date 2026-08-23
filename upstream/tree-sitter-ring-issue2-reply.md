@@ -1,22 +1,20 @@
 # Reply to ysdragon/tree-sitter-ring#2 — the re-measured corpus number
 
-**Status: NOT SENT.** Standing rule — this goes out over Mansour's name,
-posted by him, after he has read it. Everything below the line is the
-comment body, ready to paste into
-[issue #2](https://github.com/ysdragon/tree-sitter-ring/issues/2).
+**Status: SENT** — 2026-08-23, over Mansour's name and on his instruction,
+after he read the two decisions below and ruled on the first.
+[issue #2, comment 5384766820](https://github.com/ysdragon/tree-sitter-ring/issues/2#issuecomment-5384766820).
+Everything below the line is the body exactly as posted; the preamble was
+not. The issue was left **open** for Youssef to close himself.
 
 Measured 2026-08-23. Working notes, with the full tables and the coverage
 caveats, are in [`tree-sitter-ring-notes.md`](tree-sitter-ring-notes.md).
 
-**Before sending, decide two things:**
+**The two decisions, as ruled:**
 
-1. **The 0.16% retraction.** The comment says plainly that the number in my
-   original report cannot be reproduced and should not be relied on. That
-   is true and I would rather say it than let him keep quoting it — but it
-   is your call whether it goes in, since it is my error being published.
-2. **Closing the issue.** The comment does not close it. If you want it
-   closed, say so in the last line; GitHub lets him close it himself, and
-   letting the maintainer close his own issue is the friendlier order.
+1. **The 0.16% retraction — KEPT**, on the author's instruction. It is in
+   the posted comment.
+2. **Closing the issue — not done.** The comment does not close it, and it
+   was left open so Youssef can close his own issue.
 
 ---
 
