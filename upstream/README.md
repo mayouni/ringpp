@@ -19,13 +19,16 @@ is one condition and has been built and regression-checked.
 | 2 | [empty catch grows the VM stack](empty-catch-stack/) | ring-lang/ring | yes, verified | **APPLIED** — [#1644](https://github.com/ring-lang/ring/pull/1644) closed, fix landed as [`cda2ecf0`](https://github.com/ring-lang/ring/commit/cda2ecf05a39c0e7268623f918934157fe64c603) (*"Free stack when we catch an error"*) + test [`22beec8c`](https://github.com/ring-lang/ring/commit/22beec8cc999f520d6bf0ab8d7e8f28dcb152f80) |
 | 3 | [`ring_state_findvar` name case](state-findvar/) | ring-lang/ring | yes, verified | **APPLIED** — [#1645](https://github.com/ring-lang/ring/pull/1645) closed, fix landed as [`b6aea3d`](https://github.com/ring-lang/ring/commit/b6aea3d58fce7b544bd2381f7c1b27655ce2c094) + test [`ed69e68`](https://github.com/ring-lang/ring/commit/ed69e6824652025651638e6ee7d7262b2accba08), credited to Mansour Ayouni and Youssef Saeed |
 | 4 | [two pointer-API doc notes](pointer-api-docs/) | ring-lang/ring | docs only | **CLOSED** — [#1646](https://github.com/ring-lang/ring/pull/1646), declined with reasons worth keeping (below) |
-| 5 | [grammar findings](tree-sitter-ring-notes.md) | ysdragon/tree-sitter-ring | no | **FIXED upstream** — [issue #2](https://github.com/ysdragon/tree-sitter-ring/issues/2) fixed by Youssef Saeed in [`287afffb`](https://github.com/ysdragon/tree-sitter-ring/commit/287afffb), shipped as v1.1.1. Re-measured 2026-08-23: wrongly-rejected files **18 → 11** across 10,233, seven fixed, no regressions. Issue still open pending our confirmation. |
+| 5 | [grammar findings](tree-sitter-ring-notes.md) | ysdragon/tree-sitter-ring | no | **FIXED upstream** — [issue #2](https://github.com/ysdragon/tree-sitter-ring/issues/2) fixed by Youssef Saeed in [`287afffb`](https://github.com/ysdragon/tree-sitter-ring/commit/287afffb), shipped as v1.1.1. Re-measured 2026-08-23: wrongly-rejected files **18 → 11** across 10,233, seven fixed, no regressions. Confirmation sent (row 6); issue left open for Youssef to close. |
 | 6 | [reply with the re-measured number](tree-sitter-ring-issue2-reply.md) | ysdragon/tree-sitter-ring#2 | no | **SENT** — [comment](https://github.com/ysdragon/tree-sitter-ring/issues/2#issuecomment-5384766820), 2026-08-23, posted by Mansour. Carries the retraction of the 0.16%. Issue left open for Youssef to close. |
 | 7 | [Google Group post](tree-sitter-ring-googlegroup-post.md) | Ring Google Group | no | **DRAFTED, NOT SENT** — announces v1.1.1 to the group and links to row 6. Mansour posts it. |
+| 8 | [`encrypt_ex`/`decrypt_ex` call the wrong function](stdlib-encrypt-ex/NOTE.md) | Ring Google Group | no | **DRAFTED, NOT SENT** — two functions in Ring's shipped stdlib that have never worked (`R20` on every call). Found by the type checker, confirmed by running it. Mansour posts it. |
 
-**One item is pending:** the Google Group post at row 7, waiting on the
-author. Row 6 is sent, and with it the retraction of this project's own
-0.16% — the first number it has had to withdraw.
+**Two items are pending**, both waiting on the author: the Google Group
+post at row 7, and the stdlib finding at row 8 — which had been sitting
+outside this table, so the index was undercounting its own backlog. Row 6
+is sent, and with it the retraction of this project's own 0.16%, the first
+number it has had to withdraw.
 
 ## Considered and deliberately not sent
 
