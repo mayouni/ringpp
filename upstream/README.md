@@ -23,10 +23,13 @@ is one condition and has been built and regression-checked.
 | 6 | [reply with the re-measured number](tree-sitter-ring-issue2-reply.md) | ysdragon/tree-sitter-ring#2 | no | **SENT** — [comment](https://github.com/ysdragon/tree-sitter-ring/issues/2#issuecomment-5384766820), 2026-08-23, posted by Mansour. Carries the retraction of the 0.16%. Issue left open for Youssef to close. |
 | 7 | [Google Group post](tree-sitter-ring-googlegroup-post.md) | Ring Google Group | no | **DRAFTED, NOT SENT** — announces v1.1.1 to the group and links to row 6. Mansour posts it. |
 | 8 | [`encrypt_ex`/`decrypt_ex` call the wrong function](stdlib-encrypt-ex/NOTE.md) | Ring Google Group | no | **DRAFTED, NOT SENT** — two functions in Ring's shipped stdlib that have never worked (`R20` on every call). Found by the type checker, confirmed by running it. Mansour posts it. |
+| 9 | [two more grammar defects](tree-sitter-ring-notes.md#what-is-still-too-strict--the-three-root-s-files-narrowed-2026-08-24) | ysdragon/tree-sitter-ring | no | **NARROWED, NOT SENT** — the three Softanza files still wrongly rejected after v1.1.1 are two defects unrelated to #2, both present in the pre-fix grammar: **U+017F / U+212A** (the only two non-ASCII codepoints Unicode case-folds into ASCII) break a file from anywhere in it, *including a comment*; and a **statement terminated by a period** is rejected. Reproducers, mechanism, controls and a `tsring open` gate are in place. Mansour sends it, if it is sent; #2 is not the place for it. |
 
-**Two items are pending**, both waiting on the author: the Google Group
-post at row 7, and the stdlib finding at row 8 — which had been sitting
-outside this table, so the index was undercounting its own backlog. Row 6
+**Three items are pending**, all waiting on the author: the Google Group
+post at row 7, the stdlib finding at row 8 — which had been sitting
+outside this table, so the index was undercounting its own backlog — and
+the two grammar defects at row 9, narrowed 2026-08-24 out of the residue
+the re-measurement left behind. Row 6
 is sent, and with it the retraction of this project's own 0.16%, the first
 number it has had to withdraw.
 

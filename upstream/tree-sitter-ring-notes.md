@@ -16,6 +16,16 @@
 > 2026-08-23, posted by Mansour on his instruction. It reports 18 → 11
 > wrongly-rejected files and **retracts the ~0.16% below**. The issue was
 > left open for Youssef to close himself.
+>
+> **TWO FURTHER DEFECTS, narrowed 2026-08-24 and NOT reported.** The three
+> Softanza files still wrongly rejected after v1.1.1 turned out to be two
+> defects unrelated to #2, both present in the pre-fix grammar: **U+017F and
+> U+212A** — the only two non-ASCII codepoints Unicode case-folds into ASCII —
+> break a file from anywhere in it, *including a comment*; and a **statement
+> terminated by a period** is rejected. Reproducers, mechanism and controls
+> are in [§ What is still too strict](#what-is-still-too-strict--the-three-root-s-files-narrowed-2026-08-24)
+> and gated by `tsring open`. **Nothing has been sent** — that is Mansour's
+> to send, and #2 should not be reopened for them.
 
 Found by running `ringpp check` (which vendors this grammar) over 5,566
 Softanza files and Ring 1.27's own corpus, then asking `ring <file> -norun`
@@ -241,19 +251,111 @@ This was never filed from here. It is reported now because the credit is
 his either way, and because it means **v1.1.1 fixed two classes of false
 rejection, not one**.
 
-## What is still too strict (11 files) — the next report, if there is one
+## What is still too strict — the three root-S files, narrowed 2026-08-24
 
-Eight on root R, three on root S. The root-R group is dominated by Ring's
-**changeable-syntax** feature (`language/tests/scripts/natural/*`,
-`samples/Language/ChangeSyntax/EnglishDemo.ring`,
-`samples/UsingNaturalLib/`), where a program redefines Ring's own keywords
-at run time. A fixed grammar cannot follow that, and it is not obvious it
-should try — that is a fair thing to say out loud rather than file as a
-defect. The remaining three on root S are
-`base/common/stzFuncs.ring`, `base/data/stzCharData.ring` and
-`base/test/char/47_showshortxtnl.ring`, and have not been narrowed to a
-reproducer. **No reproducer, no report** — that is the rule this project
-already learned the hard way, one section above.
+They have now been narrowed, and they are **two defects, neither of them the
+one filed as #2**. Both are present in the pre-fix grammar as well, so v1.1.1
+neither caused nor fixed them. Fixtures for all of it are in
+`tests/fixtures/tsring_open/`, gated by `tests\run-all.ps1` as
+`tsring open`.
+
+### Defect A — the two codepoints Unicode case-folds into ASCII
+
+`? "ſ"` alone is rejected by the grammar. `ring -norun` accepts it, silently,
+exit 0. The character is **U+017F LATIN SMALL LETTER LONG S**, and it breaks
+the file from anywhere in it:
+
+| where the character sits | grammar | Ring |
+|---|---|---|
+| in a double-quoted string | **rejects** | accepts |
+| in a single-quoted string | **rejects** | accepts |
+| **in a comment** | **rejects** | accepts |
+| in an identifier | **rejects** | accepts |
+| plain ASCII `s` (control) | accepts | accepts |
+
+That a **comment** kills the parse is what shows this is lexer-level and not a
+string rule.
+
+**The class is complete, not a sample.** One file per codepoint over 2,688
+codepoints — U+00A0–U+07FF, U+1E00–U+1FFF, U+2100–U+21FF, U+FB00–U+FB1F — was
+scanned in a single `ringpp check`. Exactly two were rejected:
+
+| | name | case-folds to |
+|---|---|---|
+| **U+017F** `ſ` | Latin small letter long s | `s` |
+| **U+212A** `K` | Kelvin sign | `k` |
+
+These are the only two non-ASCII codepoints in Unicode whose simple case
+folding produces an ASCII letter. U+212B `Å` (angstrom sign) folds to `å`,
+which is *not* ASCII — and it parses, which is the control that makes the rule
+a rule.
+
+**The mechanism, from the generated table.** `grammar.js` builds
+case-insensitive keywords with the `ci()` helper, mapping each letter to an
+explicit `[sS]` pair — the careful approach, and not itself the bug.
+tree-sitter then closes those classes under Unicode simple case folding, so
+the `s` class acquires U+017F and the `k` class acquires U+212A, and both are
+**subtracted from the catch-all identifier transition**:
+
+```c
+if (lookahead != 0 &&
+    (lookahead < '\t' || '\r' < lookahead) &&
+    lookahead != 0x17f &&
+    lookahead != 0x212a) ADVANCE(90);
+```
+
+That is the "any other character" edge, so once those two are cut out of it
+they have no transition left anywhere and the lex fails outright. 38
+occurrences in `src/parser.c`.
+
+**Not a v1.1.1 regression.** `git show 65b185e:vendor/tree-sitter-ring/src/parser.c
+| grep -c 0x17f` gives **38** as well — identical. It has been there since the
+initial import.
+
+Accounts for `base/data/stzCharData.ring` (the `ſ` on line 1321) and
+`base/test/char/47_showshortxtnl.ring` (line 25).
+
+### Defect B — a statement terminated by a period
+
+| | grammar | Ring |
+|---|---|---|
+| `foo("x").` | **rejects** | accepts |
+| `? "x".` | **rejects** | accepts |
+| `x = "a".` | **rejects** | accepts |
+| a bare `.` on its own line | **rejects** | accepts |
+| `foo("x")` — the same line without the dot | accepts | accepts |
+
+Narrowed from `base/common/stzFuncs.ring` line 2690,
+`StzRaise("...").`. **The decisive test:** that function extracted verbatim is
+555 bytes and is rejected; the identical function with that single period
+removed is 554 bytes and is accepted. One byte is the whole difference.
+
+**On impact, stated carefully so nobody misquotes it.** A line ending in `).`
+occurs **3,709 times across 1,187 files** in root S — and exactly **one** of
+those files is rejected. Almost every occurrence is inside a comment or a
+string, where it is harmless. That grep count is *not* the impact of this
+defect, and it is written down here precisely so it cannot be quoted as one.
+
+### Where the reported position is not the defect — a third time
+
+Both files reported a position nowhere near their trigger. `stzFuncs.ring` was
+reported at **2681:3**; the period is at **2690**. `47_showshortxtnl.ring` was
+reported at **14:1**, the opening quote of a string literal whose `ſ` is on
+line **25**. The grammar reports where it gave up, not where the trouble
+started.
+
+This file has now recorded the same lesson three times — twice as *check that
+a minimal reproducer actually reproduces*, once as this. It is the same lesson:
+**the first plausible explanation of a parse failure is usually the victim.**
+
+### Root R's eight — assessment unchanged
+
+Dominated by Ring's **changeable-syntax** feature
+(`language/tests/scripts/natural/*`,
+`samples/Language/ChangeSyntax/EnglishDemo.ring`, `samples/UsingNaturalLib/`),
+where a program redefines Ring's own keywords at run time. A fixed grammar
+cannot follow that, and it is not obvious it should try — that is a fair thing
+to say out loud rather than file as a defect. Not re-narrowed here.
 
 ## The harness had to be repaired first, and the old 0.16% does not survive it
 

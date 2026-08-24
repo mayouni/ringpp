@@ -228,6 +228,57 @@ foreach ($c in (Get-ChildItem (Join-Path $root $i2dir) -Filter *.ring | Sort-Obj
 if ($i2bad.Count) { $fail++; $i2bad | ForEach-Object { "       $_ is rejected -- the grammar regressed" } }
 Pop-Location
 
+# The OPEN defects in the vendored grammar, narrowed from the same corpus run
+# that confirmed #2. These fixtures are the inverse of the gate above: Ring
+# accepts all eight, and the grammar rejects the four xfail_ ones today.
+# Pinning the known-bad set is what makes the next grammar bump legible. An
+# xfail_ that starts parsing means upstream fixed it and the notes are now
+# stale; an ok_ that stops parsing means a fix was bought with a regression.
+# Both deserve to fail the build, which is why this gate is not a TODO in a
+# markdown file. See upstream\tree-sitter-ring-notes.md.
+Push-Location $root
+$opDir = Join-Path $root "tests\fixtures\tsring_open"
+$opBad = @()
+foreach ($c in (Get-ChildItem $opDir -Filter *.ring | Sort-Object Name)) {
+    $rejected = ((& $ringpp check $c.FullName 2>&1 | Out-String) -match "rpp/unparsed")
+    $expected = $c.Name.StartsWith("xfail_")
+    if ($rejected -ne $expected) {
+        if ($expected) { $opBad += "$($c.Name) now PARSES -- upstream fixed it; update the notes" }
+        else           { $opBad += "$($c.Name) no longer parses -- a fix cost a regression" }
+    }
+}
+"{0} {1,-16} {2}" -f $(if ($opBad.Count -eq 0) { "PASS" } else { "FAIL" }), "tsring open",
+    $(if ($opBad.Count -eq 0) { "4 known-bad + 4 controls unchanged (case-fold, trailing dot)" } else { "" })
+if ($opBad.Count) { $fail++; $opBad | ForEach-Object { "       $_" } }
+Pop-Location
+
+# A path into a temp directory cannot be a default. THREE scripts here were
+# hardcoded to an absolute path inside one session's scratchpad -- both
+# bench\toolchain\probe-*.ps1 and bench\treesitter\sweep.ps1 -- and every one
+# was dead the moment that session ended. Worse, each failed by quietly doing
+# nothing useful rather than by saying so, which is how the second and third
+# came to be written after the first had already rotted. The lesson only holds
+# if something checks it. Runtime-derived scratch ($env:TEMP, $PSScriptRoot)
+# is fine; it is the FROZEN name that rots.
+Push-Location $root
+$fossils = @()
+foreach ($f in (Get-ChildItem $root -Recurse -File -Filter *.ps1 |
+                Where-Object { $_.FullName -notlike '*\vendor\*' })) {
+    $n = 0
+    # ReadAllLines, not Get-Content: this repository has been burned by
+    # PowerShell decoding UTF-8 as Windows-1252 on the way in.
+    foreach ($l in [IO.File]::ReadAllLines($f.FullName)) {
+        $n++
+        if ($l -match '"[A-Za-z]:\\[^"]*\\Temp\\') {
+            $fossils += "{0}:{1}" -f $f.FullName.Replace($root, "").TrimStart("\"), $n
+        }
+    }
+}
+"{0} {1,-16} {2}" -f $(if ($fossils.Count -eq 0) { "PASS" } else { "FAIL" }), "no fossil paths",
+    $(if ($fossils.Count -eq 0) { "no script hardcodes a path into a Temp directory" } else { "" })
+if ($fossils.Count) { $fail++; $fossils | ForEach-Object { "       $_ hardcodes a temp path -- make it a parameter" } }
+Pop-Location
+
 # The package manifest promises a prebuilt binary per platform, and a
 # promise nobody checks is how `ringpm install` starts failing on a machine
 # nobody here owns. This asserts that every file the manifest lists exists,
