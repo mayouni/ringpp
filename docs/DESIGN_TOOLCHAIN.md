@@ -13,6 +13,18 @@
 > [`CLI.md`](CLI.md) for the shipped commands,
 > [`DESIGN_BUILD.md`](DESIGN_BUILD.md) for the build half,
 > [`PHASE_PLAN.md`](PHASE_PLAN.md) for what is actually scheduled.
+>
+> **Closed 2026-08-25, section by section, rather than rewritten** — the
+> prose below is 834 lines of genuine design reasoning and measurement,
+> and most of it is still worth reading *as research*; rewriting it would
+> lose exactly the residue CLAUDE.md asks every correction to keep. Each
+> section heading below now carries one of three markers:
+>
+> | marker | means |
+> |---|---|
+> | **SHIPPED** | describes something that is real; cross-check against `CLI.md` / `DESIGN_BUILD.md` if in doubt |
+> | **RESEARCH — kept** | the compiled half's reasoning or numbers; not built, not promised, still cited (e.g. the K2 headroom figures in `PHASE_PLAN.md`) |
+> | **SUPERSEDED** | a newer document says this more accurately; read that one instead, this section is history |
 
 *August 11, 2026. The second half of Ring++: a vendored VM, a type
 checker, compilation, a static analyser, a multiplatform build, and one
@@ -24,7 +36,7 @@ one project rather than two.
 
 ---
 
-## 0. What I think — the short answer
+## 0. What I think — the short answer *(RESEARCH — kept: the overall framing, not the outcome)*
 
 **Yes, with one reframing, one discovery, and two refusals.**
 
@@ -85,7 +97,7 @@ a fork with better manners.
 
 ---
 
-## 1. The measured case for compiling at all
+## 1. The measured case for compiling at all *(RESEARCH — kept)*
 
 Three kernels, identical algorithms, Ring 1.27 interpreted versus
 `zig cc -O2` native
@@ -128,7 +140,17 @@ fall out, and they are architectural, not stylistic:
 
 ---
 
-## 2. Ring already contains the compiler front end
+## 2. Ring already contains the compiler front end *(RESEARCH — kept, and NOT the route taken)*
+
+> The table below reasons from VM introspection —
+> `ring_state_stringtokens`, `ringvm_codelist`, bytecode round-tripping.
+> **The checker that actually shipped (T1–T2) does not use any of it** —
+> it parses source with a vendored `tree-sitter` grammar instead
+> (`src/ts.zig`, `vendor/tree-sitter-ring/`). Both routes are real and
+> both were measured; tree-sitter won because it gives exact source spans
+> and columns for diagnostics, which bytecode introspection does not.
+> Kept because the VM-introspection primitives below are still true Ring
+> behaviour and may matter for a future need this project hasn't had yet.
 
 The most surprising result of this session's reading is how little
 Ring++ has to build. Everything a front end needs is reachable **from
@@ -162,20 +184,23 @@ back end.**
 Three levels, and the level is a property of the *function*, not of the
 project.
 
-### Level 0 — hint (what Ring does today)
+### Level 0 — hint (what Ring does today) *(unchanged, always true)*
 
 `int func Sum(int x, int y)`. Parsed, discarded, no checking. Ring++
 changes nothing here; source at level 0 keeps working.
 
-### Level 1 — checked
+### Level 1 — checked *(SHIPPED — T2, `src/types.zig` + `src/project.zig`)*
 
 `ringpp check` reads the annotations from the token stream, infers
 within the function body, and reports mismatches — statically, with a
 file and line. **Runtime behaviour is unchanged.** This is the level
 almost all code should sit at, and it is where the value/effort ratio is
-best: it costs no toolchain, no compilation, and no risk.
+best: it costs no toolchain, no compilation, and no risk. What shipped
+goes further than described here: cross-file resolution through the
+load graph and in-class-body resolution, neither designed in this
+section (see `PHASE_PLAN.md`'s T2 write-up).
 
-### Level 2 — compilable
+### Level 2 — compilable *(NOT BUILT — unowned since the 2026-08-23 reframe, not merely unstarted; see the note on T4 in `PHASE_PLAN.md`)*
 
 A function is **Rpp-compilable** when everything it touches has a
 concrete machine type. This is Julia's "type-stable function" idea,
@@ -230,7 +255,7 @@ byte-exact oracle, applied to a different axis.
 
 ---
 
-## 4. Compilation: one pipeline, two triggers
+## 4. Compilation: one pipeline, two triggers *(RESEARCH — kept, T4, descoped)*
 
 ```
   annotated Ring source
@@ -314,7 +339,7 @@ What I explicitly reject, and why:
 
 ---
 
-## 5. Static analysis — the part I would build first
+## 5. Static analysis — the part I would build first *(SHIPPED — this call was right; see T1/T2 in `PHASE_PLAN.md` and `CLI.md`)*
 
 `ringpp check` is the highest value per unit of effort in this entire
 document. It needs no toolchain, no compilation, and no risk, and it
@@ -436,7 +461,17 @@ fails, and nothing is hidden.
 
 ---
 
-## 7 — The distribution: tiered, not shaved
+## 7 — The distribution: tiered, not shaved *(RESEARCH — kept; the tier system was descoped, but the mechanism underneath it was not)*
+
+> The four-tier vendor system below (system compiler → tiny C compiler →
+> vendored Zig → nothing) was never built. What survived from this
+> section is narrower and turned out to matter more: **`zig cc`
+> cross-compiling a C source tree with no project-specific setup** is
+> exactly how B2 produces a Ring runtime stub per platform, and how the
+> CLI's own five platform binaries are built (`bin/README.md`). The tier
+> *pricing* reasoning below no longer applies — Ring++ vendors nothing at
+> a user's install time — but the cross-compilation technique is load-
+> bearing in what shipped.
 
 The first instinct is to shrink Zig. I tried it properly — build a
 minimal tree, wipe the compiler cache, and check that all six shipped
@@ -634,7 +669,7 @@ RingScript.
 
 ---
 
-## 8. What Julia teaches, and where the analogy breaks
+## 8. What Julia teaches, and where the analogy breaks *(RESEARCH — kept, general reasoning)*
 
 **What transfers:**
 
@@ -672,7 +707,7 @@ Julia's, and it is one that can actually be kept.
 
 ---
 
-## 9. Risks specific to this half
+## 9. Risks specific to this half *(RESEARCH — kept; written for the compiled half, mostly moot for what shipped)*
 
 **T1 — Two semantics.** The moment a compiled function exists, there
 are two implementations of it, and they can drift. Mitigation is the
@@ -721,6 +756,10 @@ call site.* Same tone as the Google Group drafts.
 ---
 
 ## 10. Phases and gates — the toolchain half
+
+> **SUPERSEDED.** Read [`PHASE_PLAN.md`](PHASE_PLAN.md) instead — its
+> T1–T2 and B0–B4 tables are what actually happened. Kept below verbatim
+> as the record of what was planned before it did.
 
 **T1 and T2 need nothing installed and can start immediately, in
 parallel with the library half.** T3 onward follows P1–P2, because
@@ -803,7 +842,7 @@ a named workload.** Not before.
 
 ---
 
-## 11. My honest recommendation on sequencing
+## 11. My honest recommendation on sequencing *(SUPERSEDED — overtaken by the 2026-08-23 reframe; kept as the record of what was recommended before the strategic reframe changed the sequencing entirely)*
 
 If I could only build three things from this document, in order:
 
