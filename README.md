@@ -106,6 +106,12 @@ been run, because this machine cannot run them.
 *Status: the library, the CLI, and eight measured examples are **built
 and gated**. `powershell -File tests\run-all.ps1` runs everything.*
 
+A one-page site matching RingScript's and RingServ's shared style lives in
+[`site/`](site/index.html) — open `site/index.html` directly, or enable
+GitHub Pages on this repository (Settings → Pages → deploy from `site/`)
+to put it at `mayouni.github.io/ringpp`. Not deployed by this commit;
+deployment is a repository setting only the owner can flip.
+
 ---
 
 ## Start here
@@ -113,6 +119,7 @@ and gated**. `powershell -File tests\run-all.ps1` runs everything.*
 | | |
 |---|---|
 | **[docs/CASE-TYPE-SAFETY.md](docs/CASE-TYPE-SAFETY.md)** | **What the checker actually found** — two dead functions in Ring's own standard library, two live bugs in Softanza, and the three false positives it produced along the way. |
+| **[docs/SIBLINGS.md](docs/SIBLINGS.md)** | What running Ring++ against RingScript, RingServ and MicroRing actually found — real code, real gaps in Ring++'s own claims caught along the way, and where Ring++ honestly does not apply. |
 | **[docs/VM-CONTRACT.md](docs/VM-CONTRACT.md)** | The abstract interface: exactly what Ring++ needs from the VM, as observable behaviours, probe-checked on every load — and a proposed contract both parties could agree on. |
 | **[docs/FINDINGS.md](docs/FINDINGS.md)** | What the Ring VM actually does, measured. Read this first — two of its numbers killed the design I set out to write. |
 | **[docs/DESIGN.md](docs/DESIGN.md)** | The library half: what Ring++ is, the layer map, the surface, safety, upgrades, `myctiger`, Softanza, and the risks. |

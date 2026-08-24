@@ -83,7 +83,7 @@ first dishonest thing this project shipped.
 | **server / cloud / container** | **measured feasible** | same artefact; a 1.3 MB runtime is a very small image layer |
 | **desktop GUI (Qt)** | **OUT OF SCOPE, by principle — see §6** | not a size problem: bundling `ringqt.dll` alone produces a package that crashes with NO diagnostic, F-30 |
 | **Linux-class SBC** (Raspberry Pi, IoT gateway) | **plausible, unmeasured** | needs an arm64 Ring runtime and a bytecode-portability test |
-| **browser — WASM** | **unknown, needs research** | Ring's *only* documented WASM story is Qt-WASM samples, which is excluded by the same ruling; a bare-VM wasm32 target is genuinely unresearched, not merely unknown-via-Qt |
+| **browser — WASM** | **plausible — a working precedent exists, unused by Ring++ so far** | corrected 2026-08-25: this row previously said Ring's *only* WASM story was Qt-WASM samples. Wrong — RingScript compiles the bare Ring C VM to `wasm32-wasi` directly with `zig cc`, no Emscripten, no Qt (`ringscript/build.zig`, `.cpu_arch = .wasm32, .os_tag = .wasi`, `wasi_exec_model = .reactor` for persistent state across JS calls, plus its own `wasi_stubs.c` for what WASI lacks). B2 already builds Ring's VM with `zig cc` per target; RingScript is a real, checkable reference for extending that to `wasm32-wasi` — found while studying RingScript for [`docs/SIBLINGS.md`](SIBLINGS.md), not by Ring++'s own research |
 | **mobile** (Android/iOS) | **unknown** | packaging, signing and store rules dominate; the runtime is the easy part |
 | **bare-metal microcontroller** (ESP32, Arduino) | **NO — say so now** | see below |
 

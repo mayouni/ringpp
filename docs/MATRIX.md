@@ -30,8 +30,8 @@ step under a second `zig` to fill in that axis.
 
 ## Rows
 
-- **1.27.0 stock** — the reference: an unmodified release tree (built in 395 ms; reports `Ring version 1.27.0`)
-- **1.27.0 ringscript** — same version carrying RingScript's 8 vendor patches; needs its bridge to link (built in 600 ms; reports `Ring version 1.27.0`)
+- **1.27.0 stock** — the reference: an unmodified release tree (built in 380 ms; reports `Ring version 1.27.0`)
+- **1.27.0 ringscript** — same version carrying RingScript's vendor patches (5 active of 8 numbered slots); needs its bridge to link (built in 940 ms; reports `Ring version 1.27.0`)
 
 ## What this has caught
 

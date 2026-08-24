@@ -438,35 +438,69 @@ never cache that pointer, because it cannot know it is still the original.
 Found by the conformance matrix (P4) on its first two-row run, which is
 exactly what it was built for.
 
+> **RETRACTED 2026-08-25, the table below — the conclusions after it
+> stand and are strengthened.** Found while investigating how RingScript
+> could benefit from Ring++ ([`docs/SIBLINGS.md`](SIBLINGS.md)): the
+> vendor patch this table blames — auto-`genarray` on random access in
+> `ring_list_getitem_gc` — was **withdrawn from RingScript on 2026-08-14**,
+> eight days *before* this finding was written on 2026-08-22, and rejected
+> upstream by Mahmoud Fayed for the same reason F-10 documents (mixed
+> add/read workloads go 1.7–2.3× **slower**, not faster) — see
+> RingScript's own [`docs/VENDOR_PATCHES.md` §8](https://github.com/mayouni/ringscript/blob/main/docs/VENDOR_PATCHES.md).
+> This finding was stale from the moment it was written; nobody re-ran the
+> conformance matrix against RingScript's VM after the patch left.
+>
+> **Re-measured 2026-08-25, both VMs rebuilt fresh from source, minimum
+> of 3, the same benchmark, corrected to build the list by append**
+> (`bench/03_lists.ring`'s own method — a first attempt at this recheck
+> used pre-sized index assignment instead and got a misleadingly fast
+> result on *both* VMs, which is what caught that the reproducer, not
+> just the old finding, needed checking):
+>
+> | VM, both Ring 1.27.0, both `zig cc -O2` | baseline | with `RppIndexed` |
+> |---|---:|---:|
+> | stock `language/src` | 322–343 ms | 3–4 ms (~90×) |
+> | RingScript's vendored `ringvm/src`, current | 310–339 ms | 3–4 ms (~90×) |
+>
+> **No divergence at all.** RingScript's VM does not make `RppIndexed`
+> redundant; it never durably did. What RingScript did instead, after
+> withdrawing the C-level patch, is more interesting than the retracted
+> claim: it rebuilt the *same idea* by hand, in Ring, at the call site —
+> `playground/lib/table/table.ring:44-72` carries its own staleness flag,
+> its own break-even floor, and explicit `ringvm_genarray()` calls,
+> independently converging on `RppIndexed`'s own design rather than
+> making it obsolete. That is a validation the original table never
+> claimed.
+
 `RppIndexed` exists because of [F-19](#f-19): random access to a
-list walks the linked list, so a permuted pass is O(n²). Measured on the
-same program, 20,000 permuted reads over a 60,000-item list:
+list walks the linked list, so a permuted pass is O(n²). The table above
+was originally offered as a case where a patched VM made the idiom
+worthless, on the strength of a patch that was already gone.
 
-| VM, both Ring 1.27.0, both `zig cc -O2` | baseline | with `RppIndexed` |
-|---|---:|---:|
-| stock `language/src` | **467 ms** | 2 ms (233×) |
-| RingScript's vendored `ringvm/src` | **4 ms** | 3 ms (1.3×) |
+Two things still follow, kept because they do not depend on the retracted
+table — and the second is the general one:
 
-The difference is one vendor patch in `rlist.c`: when `ring_list_getitem_gc`
-falls through to a linear walk on a list above a size threshold, it calls
-`ring_list_genarray_gc` and answers from the items array. The VM does from C
-what `RppIndexed` does from Ring — so on that VM the idiom has nothing left
-to buy, and *its own gate reported the fixed VM as the failure.*
-
-Two things follow, and the second is the general one:
-
-1. **`RppIndexed` must stay a phase object that measures, not a wrapper that
-   assumes.** It already refuses small lists; it must also be free to
-   conclude "this VM does not need me". The layer above Ring cannot assume
-   the layer below stayed still.
-2. **Gate the outcome, not the mechanism.** `tests/idioms.ring` now asserts
+1. **`RppIndexed` must stay a phase object that measures, not a wrapper
+   that assumes.** No VM measured so far makes it redundant, but the
+   design should not need one to prove that in order to be right: it
+   already refuses small lists, and it must stay free to conclude "this
+   VM does not need me" the day some VM actually does. The layer above
+   Ring cannot assume the layer below stayed still.
+2. **Gate the outcome, not the mechanism.** `tests/idioms.ring` asserts
    *a permuted pass over 20,000 rows is not quadratic* and accepts either
-   route to it. A gate written as "≥ 20× from my library" is a gate that
-   fails when someone fixes the problem properly.
+   route to it, rather than a fixed multiple. That design decision is
+   independently correct and is kept even though the case that first
+   motivated it turned out to be a false alarm.
 
-This is the whole argument for the matrix in one cell. Nothing was wrong
-with the code; the assumption underneath it had expired, and only running
-the same gates against a second VM said so.
+**What the matrix actually caught, corrected:** not a VM that had made
+the idiom obsolete — a *finding* that was already stale when it was
+written, sitting uncaught for three days until a routine "how could a
+sibling benefit from Ring++" investigation re-ran the same numbers and
+they came back different. The lesson is not "the code adapted correctly
+to a changed VM" (it did not need to; the VM had not changed how this
+table claimed). The lesson is duller and more useful: **a measured
+number is only as current as the day someone last re-ran it**, and nothing
+here re-ran this one until a different task's evidence-gathering did.
 
 ### F-24. A Ring type annotation is two different mechanisms wearing one syntax
 

@@ -49,7 +49,13 @@ const vm_sources = [_]VmSource{
         // coupling a matrix should surface.
         .extra_src = &.{"D:/GitHub/ringscript/src/rs_oop.c"},
         .extra_inc = &.{"D:/GitHub/ringscript/src"},
-        .note = "same version carrying RingScript's 8 vendor patches; needs its bridge to link",
+        // "8 vendor patches" until 2026-08-25: RingScript numbers patch SLOTS
+        // 1-8 and keeps retired/withdrawn ones in place so old writing still
+        // resolves (ringscript/docs/VENDOR_PATCHES.md), so 8 counted slots,
+        // not 8 live patches -- two are RETIRED (merged upstream) and one is
+        // WITHDRAWN (rejected upstream, F-23's correction). 5 are active.
+        // Found while checking F-23 against RingScript's current source.
+        .note = "same version carrying RingScript's vendor patches (5 active of 8 numbered slots); needs its bridge to link",
     },
 };
 
