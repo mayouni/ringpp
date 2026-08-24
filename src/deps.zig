@@ -248,16 +248,12 @@ fn resolveLoad(a: std.mem.Allocator, target: []const u8, from_dir: []const u8, r
     return null;
 }
 
-pub fn run(gpa: std.mem.Allocator, w: anytype, entry: []const u8, ring_root: ?[]const u8) !u8 {
-    var arena_state = std.heap.ArenaAllocator.init(gpa);
-    defer arena_state.deinit();
-    const a = arena_state.allocator();
-
-    if (!exists(entry)) {
-        try w.print("ringpp deps: no such file: {s}\n", .{entry});
-        return 1;
-    }
-
+/// Everything `run` needs before it starts printing, factored out so B3's
+/// `ringpp build` can get the structured Report directly — copying files
+/// needs the parsed list, not a column of text to re-parse. `a` must
+/// outlive the returned Report (an arena the caller owns); this function
+/// allocates into it and does not free anything itself.
+pub fn collect(a: std.mem.Allocator, entry: []const u8, ring_root: ?[]const u8) !Report {
     const parser = ts.Parser.init();
     defer parser.deinit();
 
@@ -291,6 +287,20 @@ pub fn run(gpa: std.mem.Allocator, w: anytype, entry: []const u8, ring_root: ?[]
             }
         }
     }
+    return rep;
+}
+
+pub fn run(gpa: std.mem.Allocator, w: anytype, entry: []const u8, ring_root: ?[]const u8) !u8 {
+    var arena_state = std.heap.ArenaAllocator.init(gpa);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+
+    if (!exists(entry)) {
+        try w.print("ringpp deps: no such file: {s}\n", .{entry});
+        return 1;
+    }
+
+    const rep = try collect(a, entry, ring_root);
 
     // ----------------------------------------------------------- report
     try w.print("\n{s}\n", .{entry});

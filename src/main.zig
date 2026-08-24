@@ -8,6 +8,7 @@ const why = @import("why.zig");
 const types = @import("types.zig");
 const project = @import("project.zig");
 const deps = @import("deps.zig");
+const pack = @import("pack.zig");
 
 const version = "0.1.0";
 
@@ -28,7 +29,15 @@ fn usage(w: anytype) void {
         \\  (rpp/empty-catch), a finding (F-16), or the Ring error code you
         \\  actually saw (R4). `ringpp why` alone lists everything it knows.
         \\
-        \\Not built yet: probe, bench, run, build, emit, dist, doctor, vendor.
+        \\Package
+        \\
+        \\  ringpp deps <file.ring> [--ring <dir>]
+        \\                               Native libraries this program can reach; no compiler
+        \\  ringpp build <file.ring> [options]
+        \\                               Bytecode + a runtime stub + declared native libs, one
+        \\                               package. `ringpp build -h` for the full option list.
+        \\
+        \\Not built yet: probe, bench, run, emit, dist, doctor, vendor.
         \\
         \\
     , .{version}) catch {};
@@ -79,6 +88,9 @@ pub fn main() !u8 {
             }
         }
         return try deps.run(gpa, w, args[2], ring_root);
+    }
+    if (std.mem.eql(u8, cmd, "build") or std.mem.eql(u8, cmd, "b")) {
+        return try pack.run(gpa, w, args);
     }
     if (std.mem.eql(u8, cmd, "why") or std.mem.eql(u8, cmd, "w")) {
         return try why.run(w, if (args.len > 2) args[2] else null);

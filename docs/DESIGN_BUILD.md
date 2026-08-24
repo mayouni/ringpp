@@ -36,17 +36,33 @@ and appends bytecode Ring already knows how to emit.
 
 ## 2. What a build actually is, then
 
+> **Corrected 2026-08-24, phase B3.** This section originally claimed the
+> stub "looks for bytecode appended to its own image" and drew the result
+> as **one file**. Both were assumption, not measurement, and B3 measured
+> them false before writing any code around them: a same-named `.ringo`
+> beside `ring.exe` is **not** auto-loaded when run with no arguments, and
+> bytes appended to `ring.exe` do **nothing** — both confirmed by trying
+> them. Ring's binary needs an explicit filename argument; nothing here
+> changes that, and ground rule 1 (never fight the VM) says a source patch
+> to add that lookup is a *finding*, not something Ring++ does itself.
+>
+> The real shape, corrected:
+
 ```
     app.ring  --(ring -go)-->  app.ringo        the whole program, deps embedded
                                    |
-    runtime stub  ---------------- + --------->  app.exe / app / app.wasm
-    (per platform, ~1.3 MB)                      one file, no compiler
+    runtime stub  ---------------- + --------->  app[.exe] + app.ringo
+    (per platform, ~0.5-2.8 MB)                  a PAIR, no compiler,
+                                                  invoked as `app app.ringo`
 ```
 
-The stub is a prebuilt Ring runtime that looks for bytecode appended to
-its own image, and runs it. This is the pattern behind
-`deno compile` and `bun build --compile`; the novelty here is only that
-Ring already has every piece and never assembled them.
+**A pair not a single file is still the right outcome.** No C compiler,
+no linker step, two small files a user can `zip` or drop in a container
+layer. A true one-file artefact — a loader Ring++ compiles itself, which
+embeds the bytecode and execs (or statically links) the runtime — is not
+ruled out by ground rule 1, since it touches no VM source, but it is
+unbuilt and unscheduled; noted in [PHASE_PLAN.md](PHASE_PLAN.md) as future
+work, not promised here.
 
 **Ring++ already ships five prebuilt binaries for five platforms.** The
 distribution machinery, the `.gitattributes` byte-exactness guard, the
@@ -158,9 +174,9 @@ RingServer, RingScript and MicroRing are all checked out beside this
 repository, and each has a different relationship to this half:
 
 - **RingServer** — the clearest win. A server is exactly the
-  console-shaped, extension-light program that becomes one file plus a
-  1.3 MB runtime, which is a container image layer rather than a base
-  image.
+  console-shaped, extension-light program that becomes a stub-plus-
+  bytecode pair (§2) around a self-built runtime under 3 MB (B2), which is
+  a container image layer rather than a base image.
 - **RingScript** — already vendors and patches the VM
   ([F-23](FINDINGS.md) came from its `rlist.c`), so it is the one sibling
   that can say whether a *patched* runtime still loads stock bytecode.

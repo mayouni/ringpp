@@ -732,23 +732,57 @@ Whether these should ship the way `bin/` does is a B3 question, once
 
 ### B3 — `ringpp build`: assemble the artefact
 
-**The command B1 was building toward.** Given a `.ring` entry point and a
-target platform: compile to `.ringo`, run B1's `deps` against it, and
-produce one directory (or, for a console/server program with zero
-`loadlib` reach, one file) containing the bytecode, the matching runtime
-stub from B2, and every native library `deps` named for that platform —
-sourced from the target's own Ring install when cross-building, since
-B0 already established that a library's *name* is knowable statically
-but not its *bytes*.
+**The command B1 and B2 were both building toward.** Given a `.ring`
+entry point and a target platform: shell out to a working `ring` to
+compile `.ringo`, run B1's `deps` collector against the same entry, copy
+in the matching B2 runtime stub renamed to the entry's name, and — for
+every native library `deps` names — copy it from a supplied `--lib-dir`
+if one is found there.
 
-**Gate.** The assembled artefact, copied to a clean directory with
-nothing else present, produces output byte-identical to running the
-source directly — B0's isolation test, generalised into the actual
-product. Run for at least one console-shaped program with zero
-`loadlib` reach (the one-file case) and one that reaches stdlib (the
-bundle case), so both branches of B1's own verdict are exercised.
+**Measured before designing the output shape, and the assumption was
+wrong.** The proposal above (§2 of [DESIGN_BUILD.md](DESIGN_BUILD.md), as
+first written) called this "one file, no compiler". Tried directly:
+Ring's binary does not auto-load a same-named `.ringo` when run with no
+arguments, and bytes appended to the exe do nothing. **The artefact is a
+pair** — `<name>[.exe]` and `<name>.ringo`, invoked as `<name> <name>.ringo`
+— never rounded up to one file, corrected in DESIGN_BUILD.md with the
+date.
 
-*Status: not started — depends on B2.*
+**Gate.**
+
+```bash
+powershell -File tests\b3_build.ps1
+```
+
+Four cases, each copied to a clean directory with nothing else present —
+B0's isolation test, generalised into the actual product:
+
+1. **pure** — zero `loadlib` reach, the stub+bytecode pair alone runs and
+   produces the exact output;
+2. **bundle** — reaches `stdlib.ring`; with `--ring-root` and `--lib-dir`
+   pointing at a real Ring install, all six extensions `deps` names are
+   copied in and the packaged pair runs correctly;
+3. **refuses** — gated *harder* than the happy path, same discipline as
+   B1's own third check: with no `--ring-root` the load closure cannot be
+   followed, and the command must exit non-zero and the manifest must say
+   `INCOMPLETE PICTURE` rather than claim nothing is missing;
+4. **cross** — built *on Windows*, *for* `linux-x64`, copied into a clean
+   directory and run *under WSL* with nothing else present.
+
+Verified non-vacuous: pointing `--ring` at a binary that is not Ring
+makes all four fail cleanly (checked before the harness itself was
+trusted — its first version let a missing output directory throw an
+uncaught `Copy-Item` error instead of reporting `FAIL`, fixed).
+
+*Status: **done, 2026-08-24** — `PASS` on all four, suite at 22 gates,
+79 s.*
+
+**What ships beside a bundle, honestly.** A missing declared library is
+never silently dropped: `BUILD-MANIFEST.txt` names it `MISSING`, and the
+command still exits 0 if the *closure* was complete — the maintainer
+chose not to supply `--lib-dir`, which is different from not knowing what
+was needed. Cross-building for a target this machine cannot source real
+`.so`/`.dylib` files for is exactly this case; `deps` still names them.
 
 ### B4 *(conditional)* — GUI and database programs
 

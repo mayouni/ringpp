@@ -223,6 +223,17 @@ if ($b2line) { $b2line.TrimEnd() } else { "FAIL {0,-16} {1}" -f "b2 runtimes", "
 if ($b2line -match '^FAIL' -or -not $b2line) { $fail++ }
 Pop-Location
 
+# B3 -- `ringpp build`: assemble bytecode + a B2 runtime stub + B1's declared
+# native libs. Four sub-checks (pure, bundle, refuses, cross); each prints its
+# own line, folded into one gate here the way b0/b2's SKIP discipline is kept
+# by their own scripts.
+Push-Location $root
+$b3 = & powershell -File (Join-Path $root "tests\b3_build.ps1") -Quiet 2>&1 | Out-String
+$b3lines = ($b3 -split "`n" | Where-Object { $_ -match '^(PASS|FAIL|SKIP) b3' })
+if ($b3lines) { $b3lines | ForEach-Object { $_.TrimEnd() } } else { "FAIL {0,-16} {1}" -f "b3 build", "no verdict line" }
+if (($b3lines | Where-Object { $_ -match '^FAIL' }).Count -gt 0 -or -not $b3lines) { $fail++ }
+Pop-Location
+
 # The four cases from ysdragon/tree-sitter-ring#2. Ring accepts all four; the
 # grammar vendored at 65b185e rejected only case 4, and v1.1.1 fixed it. This
 # gate exists so a future grammar bump cannot quietly undo that -- and so the
