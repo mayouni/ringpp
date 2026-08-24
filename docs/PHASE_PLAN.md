@@ -784,16 +784,41 @@ chose not to supply `--lib-dir`, which is different from not knowing what
 was needed. Cross-building for a target this machine cannot source real
 `.so`/`.dylib` files for is exactly this case; `deps` still names them.
 
-### B4 *(conditional)* — GUI and database programs
+### B4 — database and network extension programs: closed by B3
 
-[DESIGN_BUILD.md §3](DESIGN_BUILD.md#3-targets--measured-plausible-and-not)
-already says these are not one file: `loadlib` extensions cannot be
-embedded, so `ring_*.dll`/`.so`/`.dylib` ship beside the executable
-rather than inside it. B3's bundle case is most of this already: what
-remains is Qt's own redistribution rules, which are a licensing question
-before they are a technical one. Scoped once B3 is real.
+**This phase does not need to exist.** It was framed as "GUI and database
+programs", grouped together because both looked like the same "not one
+file" problem. B3's own bundle case proved that grouping wrong: database
+and network extensions (`ring_odbc`, `ring_mysql`, `ring_sqlite`,
+`ring_internet`, `ring_openssl`, `ring_pgsql`) are each a single
+self-contained file with no hidden dependents, and B3's `b3 bundle` gate
+already packages and runs all six correctly, isolated. Nothing further to
+schedule here.
 
-*Status: not started, not designed.*
+*Status: **closed — subsumed by B3**, 2026-08-24.*
+
+### The Qt half: ruled OUT OF SCOPE, not deferred
+
+**Not "not yet" — not in the build half at all.** Ruled 2026-08-24
+([DESIGN_BUILD.md §6](DESIGN_BUILD.md#6-what-was-asked-and-how-it-was-answered--decided-2026-08-24),
+decision 4), on both a stated principle and an independent measurement
+landing on the same boundary: Softanza's Ring foundations aim to be
+dependency-free except for what they vendor and support themselves, and
+Qt's own weight and complexity put it outside that. Measured the same
+day, [F-30](FINDINGS.md): the one library `deps` can name for a
+`guilib`-reaching program (`ringqt.dll`) itself depends on ~75 further Qt
+libraries at the OS loader level, invisible to `loadlib` scanning by
+construction — bundling only what is named produces a package that
+crashes with **no diagnostic at all**, worse than F-29's printed `R38`.
+
+**Enforced, not just written down.** `ringpp deps` reports `OUT OF SCOPE
+(Qt)` and exits non-zero; `ringpp build` refuses before writing any
+output, naming the reason. Gated as `b3 no-qt` in
+[`tests/b3_build.ps1`](../tests/b3_build.ps1), verified non-vacuous by
+removing the exclusion and confirming the gate catches exactly the
+silent-crash artefact the finding describes.
+
+*Status: **ruled and enforced**, 2026-08-24 — not a future phase.*
 
 ---
 

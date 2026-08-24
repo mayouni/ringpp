@@ -1,5 +1,18 @@
 # `ringpp` — the one CLI
 
+> **STALE, flagged 2026-08-24, not rewritten.** This document describes
+> the CLI as planned *before* the 2026-08-23 strategic reframe that
+> descoped the compiled-kernel half (T3–T7) — the "three tiers" below,
+> `build`/`run --native`/`emit`/`dist`/`targets` needing a C compiler or a
+> vendored Zig, are that older design and were **never built**. What
+> shipped instead: `ringpp build` **needs no compiler at all** — it
+> assembles a `.ringo` plus a prebuilt runtime stub, phase B3,
+> [PHASE_PLAN.md](PHASE_PLAN.md#b3--ringpp-build-assemble-the-artefact).
+> The real command list is `ringpp help`, the real design is
+> [DESIGN_BUILD.md](DESIGN_BUILD.md). Flagged rather than silently trusted
+> or rewritten in the same pass as an unrelated task — a full rewrite is
+> its own piece of work.
+
 *House style: `zin`. Banner box, scope line, grouped commands,
 availability markers, shortcuts table, `doctor` / `info` /
 `completions` / `grammar dump`. Written in Zig

@@ -81,9 +81,9 @@ first dishonest thing this project shipped.
 |---|---|---|
 | **desktop** (Win/mac/Linux, console) | **measured feasible** | F-28, on Windows x64 |
 | **server / cloud / container** | **measured feasible** | same artefact; a 1.3 MB runtime is a very small image layer |
-| **desktop GUI** | **feasible, not one file** | `loadlib` extensions cannot be embedded — the `ring_*.dll` ship beside it |
+| **desktop GUI (Qt)** | **OUT OF SCOPE, by principle — see §6** | not a size problem: bundling `ringqt.dll` alone produces a package that crashes with NO diagnostic, F-30 |
 | **Linux-class SBC** (Raspberry Pi, IoT gateway) | **plausible, unmeasured** | needs an arm64 Ring runtime and a bytecode-portability test |
-| **browser — WASM** | **unknown, needs research** | Ring's WASM story today is Qt-WASM samples; whether a bare VM targets wasm32 is not established here |
+| **browser — WASM** | **unknown, needs research** | Ring's *only* documented WASM story is Qt-WASM samples, which is excluded by the same ruling; a bare-VM wasm32 target is genuinely unresearched, not merely unknown-via-Qt |
 | **mobile** (Android/iOS) | **unknown** | packaging, signing and store rules dominate; the runtime is the easy part |
 | **bare-metal microcontroller** (ESP32, Arduino) | **NO — say so now** | see below |
 
@@ -100,6 +100,27 @@ Those run a normal Linux and a 1.3 MB runtime is nothing to them. If
 "microcontroller/IoT" means those, it is in scope and it is the same work
 as Linux arm64. If it means an ESP32, the honest answer is that Ring is
 the wrong runtime and MicroRing is the conversation, not Ring++.
+
+### The other one that does not work — and this one is not a size problem
+
+**Ring's Qt bridge (`ringqt`, `ringqt_light`, `ringqt_core`) is excluded,
+and it was not a close call.** Unlike the microcontroller case this is
+not a resource limit — it is that B1's static analysis has no way to see
+what `ringqt.dll` itself depends on. `loadlib` scanning names exactly one
+file; that file links ~75 further Qt libraries (171 MB) at the OS loader
+level, and nothing in a `.ring` file ever mentions them. Measured
+directly, not assumed: bundling only what `deps` names produces a
+manifest with no `MISSING` line and a package that crashes with **no
+diagnostic at all** ([F-30](FINDINGS.md)) — a worse failure than simply
+missing a library, because it looks complete right up until it isn't.
+
+This also matches a principle stated independently of the measurement:
+Softanza's Ring foundations aim to depend on nothing beyond what they
+vendor and support themselves, and Qt's own weight and complexity put it
+outside that on purpose. Both readings land in the same place. Ring++
+does not package Qt-reaching programs — `ringpp deps` and `ringpp build`
+both refuse on sight, naming the reason, rather than half-supporting a
+result nobody should trust. Ruled in full in §6.
 
 ## 4. The blocking unknown — measured, and the answer is split
 
@@ -191,8 +212,8 @@ artefact and a measurement.
 
 ## 6. What was asked, and how it was answered — decided 2026-08-24
 
-Three decisions were the author's and not derivable from any
-measurement. All three are now ruled:
+Four decisions were the author's and not derivable from any measurement
+alone. All four are now ruled:
 
 1. **Bare-metal microcontroller support is DROPPED from the brief.** §3's
    measurement stands: a 1.2 MB VM with a GC does not fit an ESP32, and no
@@ -210,6 +231,24 @@ measurement. All three are now ruled:
    version of the finding this project would eventually owe Mahmoud —
    *"Ring can already build without a compiler"* lands better as a
    working tool than as a paragraph.
+4. **Qt is excluded from the build half entirely — stated as a standing
+   principle, and independently confirmed by measurement.** *"All
+   Softanza projects, including the Ring projects made to be a foundation
+   for them, are aimed to be dependency-free, except from the libs we
+   vendor and support inside the solution. This excludes Qt and its
+   heavyweight and complex structure from the picture."* Ring++ does not
+   package a program that reaches Ring's Qt bridge (`ringqt`,
+   `ringqt_light`, `ringqt_core`), full stop — not "not yet", not "ask for
+   `--allow-qt`". The measurement in [F-30](FINDINGS.md), taken the same
+   day, landed on the identical boundary independently: bundling only
+   what `loadlib` scanning can name for a Qt program produces a package
+   that crashes with **no diagnostic at all**, because `ringqt.dll` itself
+   depends on ~75 further Qt libraries at the OS loader level that no
+   `.ring` source ever names. Principle and measurement agreeing from two
+   different directions is the strongest form of "ruled" this project can
+   produce. Enforced, not just documented: `ringpp deps` and `ringpp
+   build` both refuse on sight (§3, and the code in `src/deps.zig` /
+   `src/pack.zig`).
 
 **What this changes about §3 and §4.** Nothing in the measurements moves;
 only the *appetite* was undecided, and it is decided now. Cross-platform

@@ -200,6 +200,21 @@ pub fn run(gpa: std.mem.Allocator, w: anytype, args: []const []const u8) !u8 {
     const rep = try deps.collect(a, entry, ring_root);
     const closure_complete = rep.loads_unfound.items.len == 0;
 
+    // Refuse before writing anything. Bundling ringqt.dll alone (the only
+    // thing loadlib scanning can name) produces a package that reports
+    // "nothing missing" and then crashes with no diagnostic at all --
+    // measured, not assumed: exit 0xC0000409 in an isolated directory,
+    // caused by the ~75 further Qt libraries ringqt.dll itself needs at
+    // the OS loader level, invisible to this tool by construction. Per the
+    // project's dependency-free principle Ring++ does not package Qt
+    // programs at all, rather than half-support one into a false success.
+    if (rep.excluded.items.len > 0) {
+        try w.print("ringpp build: this program reaches Ring's Qt bridge ({s}), which\n", .{rep.excluded.items[0].base});
+        try w.print("  Ring++ does not package — see DESIGN_BUILD.md sections 3 and 6.\n", .{});
+        try w.print("  `ringpp deps` explains why bundling it would be unsafe.\n", .{});
+        return 1;
+    }
+
     // ---------------------------------------------------------- 3. runtime
     const exe_self_dir = std.fs.selfExeDirPathAlloc(a) catch null;
     var found_runtime: ?[]const u8 = runtime_path;

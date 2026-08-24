@@ -1096,6 +1096,65 @@ claim is *"portable between x64 platforms"*, and nothing wider.
 
 ---
 
+### F-30. A "complete" bundle can still crash with no diagnostic — Ring's Qt bridge
+
+*Measured 2026-08-24, phase B3, while packaging a `guilib`-reaching
+program to test `ringpp build` against a shape wider than F-29's database
+extensions.*
+
+`ringpp deps` names exactly one library for a program that
+`load "guilib.ring"`s: `ringqt.dll` (or `ringqt_light`, `ringqt_core` —
+the same family, reached the same way). `ringpp build`, given that name
+under `--lib-dir`, copied it in and wrote a manifest with **no `MISSING`
+line** — by every static measure this tool has, the package was
+complete.
+
+**It is not.** Copied to an isolated directory — the exe, the bytecode,
+and `ringqt.dll`, nothing else — the packaged program does not print
+`Error (R38)` the way F-29's database extensions do. It **crashes with no
+diagnostic at all**: Windows exit code `0xC0000409`, zero bytes of
+output.
+
+**The cause is a layer B1's static analysis cannot see.** `ringqt.dll`
+itself links against roughly 75 further Qt libraries (171 MB, measured in
+F-28) at the **OS loader level** — a dependency the operating system's
+loader resolves, not something Ring's `loadlib()` call ever names. B1
+correctly reports everything Ring's *source* declares; it has no way to
+see what the *resulting binary* itself requires, because that information
+exists nowhere in a `.ring` file. A silent crash is a **worse** failure
+mode than F-29's R38: at least R38 prints something before the program
+stops.
+
+**Not treated as a gap to close — treated as a boundary.** Per the
+project's own dependency-free principle (Softanza's Ring foundations
+depend on nothing but what they vendor and support themselves; Qt's
+weight and complexity put it outside that), Ring++ does not attempt to
+package Qt-reaching programs at all, rather than half-support one into a
+manifest that lies by omission. `ringqt`, `ringqt_light` and
+`ringqt_core` are named exclusions — not a heuristic, not a size
+threshold, exactly the three entry points in
+`libraries/guilib/{guilib,lightguilib,qtcore}.ring` — and both `ringpp
+deps` and `ringpp build` refuse on sight:
+
+```
+ringpp build: this program reaches Ring's Qt bridge (ringqt), which
+  Ring++ does not package — see DESIGN_BUILD.md sections 3 and 6.
+```
+
+Verified non-vacuous by removing the exclusion and re-running the gate:
+without it, `ringpp build` exits 0 and writes a package — the exact
+silent-crash artefact this finding is about.
+
+**What this does not decide.** Every other native extension measured so
+far (`ring_odbc`, `ring_mysql`, `ring_sqlite`, `ring_internet`,
+`ring_openssl`, `ring_pgsql`) is a single self-contained file with no
+sibling family — B3's bundle case packages all six correctly. The Qt
+bridge is not excluded for being a native extension; it is excluded for
+being one whose own transitive dependency surface Ring's source cannot
+name and Ring++ will not guess at.
+
+---
+
 ## Part 5 — Safety, measured
 
 Four programs, four separate processes

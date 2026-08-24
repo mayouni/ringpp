@@ -4,9 +4,9 @@
 #
 # The command B1 (what must ship) and B2 (a runtime per platform) were both
 # building toward. Exercises both shapes `deps` can report — PURE RING and
-# BUNDLE — and, harder than the happy path, the refusal a program with an
-# unresolved load closure must produce rather than silently claiming nothing
-# is missing.
+# BUNDLE — and, harder than the happy path, two refusals: an unresolved load
+# closure (nothing may be silently declared complete), and Ring's Qt bridge
+# (nothing may be silently declared safe to bundle — see case E).
 #
 # Every case is checked in ISOLATION: the built output is copied to a clean
 # directory with nothing else present, and run from there. That is B0's own
@@ -112,6 +112,32 @@ $okC = $refusedC -and $saysIncompleteC
 "{0} {1,-16} {2}" -f $(if ($okC) { "PASS" } else { "FAIL" }), "b3 refuses", `
     $(if ($okC) { "no --ring-root -> non-zero exit, manifest says INCOMPLETE" } else { "exit=$LASTEXITCODE incomplete-text=$saysIncompleteC" })
 if (-not $okC) { $fail++ }
+
+# --------------------------------------------- case E: refuses Qt, honestly
+# `ringqt.dll` is the only thing loadlib scanning can name for a guilib
+# program, but it itself links ~75 further Qt DLLs at the OS loader level --
+# invisible to this tool by construction. Measured directly (not assumed):
+# bundling just ringqt.dll produced a manifest saying nothing was missing,
+# and the isolated package then crashed with NO diagnostic at all (Windows
+# exit 0xC0000409). Per the project's dependency-free principle, Ring++
+# does not package Qt programs -- this asserts the refusal is real, not
+# just documented.
+@'
+load "guilib.ring"
+
+func Main
+	? "would need a Qt window here"
+'@ | Set-Content -Path (Join-Path $work "qt.ring") -Encoding ascii
+
+$outE = Join-Path $work "qt-win64"
+& $ringpp build (Join-Path $work "qt.ring") --ring $Ring --ring-root $RingRoot `
+    --lib-dir (Join-Path $RingRoot "bin") --out $outE 2>&1 | Out-Null
+$refusedE = ($LASTEXITCODE -ne 0)
+$noOutputE = -not (Test-Path $outE)
+$okE = $refusedE -and $noOutputE
+"{0} {1,-16} {2}" -f $(if ($okE) { "PASS" } else { "FAIL" }), "b3 no-qt", `
+    $(if ($okE) { "reaches ringqt -> refused, no partial package written" } else { "exit=$LASTEXITCODE outputWritten=$(-not $noOutputE)" })
+if (-not $okE) { $fail++ }
 
 Remove-Item $work -Recurse -Force -EA SilentlyContinue
 

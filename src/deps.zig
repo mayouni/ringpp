@@ -51,13 +51,60 @@ const Unresolved = struct {
     text: []const u8,
 };
 
+/// Named, not guessed at — exactly Ring's own Qt bridge family
+/// (libraries/guilib/{guilib,lightguilib,qtcore}.ring, all reached through
+/// loadlibfile). Measured, not assumed: bundling `ringqt.dll` alone next to
+/// a packaged program, with nothing else missing by this tool's own count,
+/// still crashes with NO diagnostic (Windows exit 0xC0000409) in an
+/// isolated directory — because ringqt.dll itself links against ~75 Qt
+/// DLLs (171 MB) at the OS loader level, a dependency `loadlib` scanning
+/// cannot see because Ring's own source never names them. A silent crash
+/// is worse than F-29's R38: at least that prints something. Per the
+/// project's own dependency-free principle, Qt is excluded from the
+/// picture entirely rather than half-supported into a false "complete"
+/// manifest — see DESIGN_BUILD.md §3 and §6.
+const qt_bridge = [_][]const u8{ "ringqt", "ringqt_light", "ringqt_core" };
+fn isQtBridge(base: []const u8) bool {
+    for (qt_bridge) |q| if (std.mem.eql(u8, base, q)) return true;
+    return false;
+}
+
 pub const Report = struct {
     libs: std.ArrayList(Lib) = .{},
+    /// Declared, real, and deliberately never bundled — see `isQtBridge`.
+    excluded: std.ArrayList(Lib) = .{},
     unresolved: std.ArrayList(Unresolved) = .{},
     files_scanned: u32 = 0,
     loads_unfound: std.ArrayList([]const u8) = .{},
 
+    fn upsertExcluded(self: *Report, a: std.mem.Allocator, base: []const u8, which: u8, name: []const u8, from: []const u8, row: u32) !void {
+        for (self.excluded.items) |*l| {
+            if (std.mem.eql(u8, l.base, base)) {
+                switch (which) {
+                    'w' => if (l.win == null) {
+                        l.win = name;
+                    },
+                    'm' => if (l.mac == null) {
+                        l.mac = name;
+                    },
+                    else => if (l.lin == null) {
+                        l.lin = name;
+                    },
+                }
+                return;
+            }
+        }
+        var l = Lib{ .base = base, .from = from, .row = row };
+        switch (which) {
+            'w' => l.win = name,
+            'm' => l.mac = name,
+            else => l.lin = name,
+        }
+        try self.excluded.append(a, l);
+    }
+
     fn upsert(self: *Report, a: std.mem.Allocator, base: []const u8, which: u8, name: []const u8, from: []const u8, row: u32) !void {
+        if (isQtBridge(base)) return self.upsertExcluded(a, base, which, name, from, row);
         for (self.libs.items) |*l| {
             if (std.mem.eql(u8, l.base, base)) {
                 switch (which) {
@@ -310,7 +357,28 @@ pub fn run(gpa: std.mem.Allocator, w: anytype, entry: []const u8, ring_root: ?[]
         try w.print("                 cannot be followed. Pass --ring <dir> for the whole picture.\n", .{});
     }
 
-    if (rep.libs.items.len == 0 and rep.unresolved.items.len == 0) {
+    if (rep.excluded.items.len > 0) {
+        try w.print("\n  OUT OF SCOPE (Qt). This program reaches Ring's Qt bridge, which\n", .{});
+        try w.print("  Ring++ does not package — see DESIGN_BUILD.md sections 3 and 6.\n\n", .{});
+        try w.print("    {s: <18} {s: <22} {s: <24} {s}\n", .{ "windows", "macos", "linux", "declared in" });
+        for (rep.excluded.items) |l| {
+            try w.print("    {s: <18} {s: <22} {s: <24} {s}:{d}\n", .{
+                l.win orelse "-",
+                l.mac orelse "-",
+                l.lin orelse "-",
+                std.fs.path.basename(l.from),
+                l.row,
+            });
+        }
+        try w.print("\n  Not a partial finding: the library above ITSELF links against ~75\n", .{});
+        try w.print("  further Qt libraries at the OS loader level, which no amount of\n", .{});
+        try w.print("  loadlib scanning can see, because Ring's own source never names\n", .{});
+        try w.print("  them. Bundling just this one produces a package that looks\n", .{});
+        try w.print("  complete and crashes with no diagnostic at all.\n\n", .{});
+        if (rep.libs.items.len == 0 and rep.unresolved.items.len == 0) return 1;
+    }
+
+    if (rep.libs.items.len == 0 and rep.unresolved.items.len == 0 and rep.excluded.items.len == 0) {
         // A clean result is only worth printing if the search was complete.
         // Saying "pure Ring" after failing to follow `load "stdlib.ring"` is
         // the exact failure that made tests/fidelity.ps1 report a clean
