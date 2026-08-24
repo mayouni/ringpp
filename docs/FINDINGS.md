@@ -1003,6 +1003,17 @@ with nothing else — no `libraries/`, no source — and running both object
 files there. Both printed correct output and exited 0. The 477 MB Ring
 install is not the runtime; 171 MB of it is Qt.
 
+> **Refined 2026-08-24, phase B2.** Two files is what the *official*
+> distribution ships. Compiling Ring's own VM source (`language/src/*.c`)
+> directly with `zig cc` — no target flag, so the host is Windows —
+> produces **one 512,000-byte `.exe` that needs no `ring.dll` at all**:
+> verified by deleting `ring.dll` from the directory and re-running the
+> same fixture, output unchanged. The official build links the VM as a
+> separate DLL for its own reasons (likely a shared-load path across its
+> own tool family); nothing requires it. **A self-built runtime is a
+> smaller and stricter single-file claim than the vendored one**, and it
+> is what phase B2 ships.
+
 **What this does *not* cover, and the limits are the point:**
 
 - **Native extensions cannot be embedded.** Anything reached by

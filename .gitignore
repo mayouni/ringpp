@@ -3,6 +3,13 @@
 .zig-cache/
 zig-out/
 
+# B2's runtime stubs (tests/b2_runtimes.ps1) -- build output, not vendored
+# source: 5 platforms, ~6 s to regenerate. Whether these ship the way bin/
+# does is a B3 question, once `ringpp build` is the thing consuming them.
+# Matches only the platform subdirectories -- runtime/README.md, sitting
+# directly in runtime/, is untouched by this pattern and stays tracked.
+runtime/*/
+
 # Scratch data written by examples. Example 05 builds a data file and
 # removes it, but a run killed mid-way leaves one behind.
 _example*.bin
@@ -19,7 +26,7 @@ _probe*.bin
 Thumbs.db
 *~
 
-# Ring++ is an independent project. `.central/` is coordination state from
+# Ring++ is dependency-free. `.central/` is coordination state from
 # the Softanza estate's harness -- an inbox, an outbox and a status page --
 # which was tracked here and does not belong in a public Ring package.
 # Ignored rather than merely deleted: the harness may write it again, and a

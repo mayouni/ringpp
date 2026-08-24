@@ -689,29 +689,46 @@ cross-compiling Ring's own VM sources) for exactly one.
 
 ### B2 — one runtime stub per platform Ring++ already ships a CLI for
 
-**Reuses B0's mechanism, generalised.** `zig cc -target <triple> -O2 -I
-<ring include> *.c -o ring_<platform>` against Ring's VM source tree,
-once per target already listed in [`bin/README.md`](../bin/README.md):
+**Reuses B0's mechanism, generalised — and asks a narrower question than
+B0 did.** B0 asked whether bytecode travels; B2 asks whether **a runtime
+compiled here from Ring's own source behaves like the one Mahmoud
+ships.** `zig cc -target <triple> -O2 -I <ring include> *.c -o
+<platform>/ring` against `D:\ring127\language\src`, once per target
+already listed in [`bin/README.md`](../bin/README.md) — **including
+Windows**, which the original draft of this phase assumed would just be
+the vendored official binary. It is not: it is compiled here too.
 
+**Gate.**
+
+```bash
+powershell -File tests\b2_runtimes.ps1
 ```
-x86_64-windows       (native; already the reference build)
-x86_64-linux-musl    (proved in B0: 43 files, 24 s, 2.78 MB, byte-identical)
-aarch64-linux-musl
-x86_64-macos
-aarch64-macos
-```
 
-**Gate.** For every target: the runtime builds, and — for the two this
-machine can execute (x64 Windows, x64 Linux under WSL) — B0's fixture
-pair (`pure.ring`, `lib.ring`) is re-run against it and compared
-byte-for-byte to the Windows reference, exactly as B0 did. For the three
-that cannot be executed here (arm64 Linux, both macOS), the gate is
-**format-only** — `file(1)` confirms architecture — and is reported as
-such, the same honest split `bin/README.md` already keeps for the CLI
-binaries. **No target may be claimed "portable" on format-checking
-alone**; B0 already showed why that distinction matters.
+Every target gets a magic-byte format check (PE / ELF / Mach-O, no
+external `file(1)` dependency). The two this machine can execute — x64
+Windows natively, x64 Linux under WSL — additionally compile-and-run a
+fixture and diff the output against `D:\ring127\bin\ring.exe`, byte for
+byte. Verified non-vacuous by pointing the reference at a binary that is
+not Ring: both executable targets correctly report *"output differs"*.
 
-*Status: not started.*
+*Status: **done, 2026-08-24** — `PASS b2 runtimes`, all five build in
+~6 s, two executed and match Ring's own build exactly.*
+
+**A stricter single-file claim than F-28's.** The self-built
+`win64/ring.exe` is **500 KB and needs no `ring.dll`** — confirmed by
+deleting the DLL and re-running the fixture, output unchanged. The whole
+VM links into one binary when compiled directly from
+`language/src/*.c`; the official distribution's two-file shape is not a
+VM requirement. Every platform here ships as one file. Recorded as a
+dated refinement on [F-28](FINDINGS.md) rather than a new number, since
+it does not change the mechanism — only how small the claim can be
+stated.
+
+**Output is build product, not vendored state.** `runtime/` is
+gitignored (`runtime/README.md` excepted) — five targets rebuild in 6 s,
+so nothing here can go silently stale the way a committed binary could.
+Whether these should ship the way `bin/` does is a B3 question, once
+`ringpp build` is the thing that actually consumes them.
 
 ### B3 — `ringpp build`: assemble the artefact
 

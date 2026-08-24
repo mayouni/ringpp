@@ -211,6 +211,18 @@ if ($b0line) { $b0line.TrimEnd() } else { "FAIL {0,-16} {1}" -f "b0 bytecode", "
 if ($b0line -match '^FAIL' -or -not $b0line) { $fail++ }
 Pop-Location
 
+# B2 — one runtime stub per platform, generalising B0's mechanism. Same SKIP
+# discipline: no zig, no VM source, no gate failure, just a named reason.
+# Rebuilds all five from source every run (~6 s) rather than trusting a
+# committed binary, which is the point -- runtime/ is gitignored output, not
+# vendored state, so there is nothing here that CAN go silently stale.
+Push-Location $root
+$b2 = & powershell -File (Join-Path $root "tests\b2_runtimes.ps1") -Quiet 2>&1 | Out-String
+$b2line = ($b2 -split "`n" | Where-Object { $_ -match '^(PASS|FAIL|SKIP) b2' } | Select-Object -First 1)
+if ($b2line) { $b2line.TrimEnd() } else { "FAIL {0,-16} {1}" -f "b2 runtimes", "no verdict line" }
+if ($b2line -match '^FAIL' -or -not $b2line) { $fail++ }
+Pop-Location
+
 # The four cases from ysdragon/tree-sitter-ring#2. Ring accepts all four; the
 # grammar vendored at 65b185e rejected only case 4, and v1.1.1 fixed it. This
 # gate exists so a future grammar bump cannot quietly undo that -- and so the
