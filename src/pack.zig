@@ -178,15 +178,28 @@ pub fn run(gpa: std.mem.Allocator, w: anytype, args: []const []const u8) !u8 {
     };
     const ring = std.fs.cwd().realpathAlloc(a, ring_found) catch ring_found;
 
+    // Only `findOnPath`'s own search validates existence; a user-supplied
+    // `--ring <path>` was handed straight to Child.run, which turns a typo
+    // into a raw Zig stack trace (windowsCreateProcessPathExt ->
+    // error.FileNotFound) instead of a message. Found by mistyping one
+    // while capturing this command's own output for documentation.
+    if (!exists(ring)) {
+        try w.print("ringpp build: --ring '{s}' does not exist.\n", .{ring});
+        return 1;
+    }
+
     const entry_dir = std.fs.path.dirname(entry) orelse ".";
     const entry_base = std.fs.path.stem(std.fs.path.basename(entry));
     const ringo_path = try std.fs.path.join(a, &.{ entry_dir, try std.fmt.allocPrint(a, "{s}.ringo", .{entry_base}) });
 
-    const compiled = try std.process.Child.run(.{
+    const compiled = std.process.Child.run(.{
         .allocator = gpa,
         .argv = &.{ ring, entry, "-go" },
         .max_output_bytes = 4 * 1024 * 1024,
-    });
+    }) catch |err| {
+        try w.print("ringpp build: could not run `{s} {s} -go`: {s}\n", .{ ring, entry, @errorName(err) });
+        return 1;
+    };
     defer gpa.free(compiled.stdout);
     defer gpa.free(compiled.stderr);
     if (!exists(ringo_path)) {
