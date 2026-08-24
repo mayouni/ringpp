@@ -173,26 +173,33 @@ repository, and each has a different relationship to this half:
 does not reach into sibling repositories; what it can offer them is an
 artefact and a measurement.
 
-## 6. What is being asked, honestly
+## 6. What was asked, and how it was answered — decided 2026-08-24
 
-This document establishes that the mechanism exists and measures it. It
-does **not** yet justify a phase plan, because three decisions are the
-author's and not derivable from any measurement:
+Three decisions were the author's and not derivable from any
+measurement. All three are now ruled:
 
-1. **Is bare-metal microcontroller support dropped from the brief?**
-   §3 says it cannot be delivered. If it stays, this half starts with a
-   promise it will not keep.
-2. **Cross-platform, or own-platform?** The answer depends on the
-   portability measurement in §4 — but the *appetite* does not. Shipping
-   runtimes for five platforms means Ring++ distributing Ring itself,
-   which is a real commitment and arguably a governance question for
-   Mahmoud, not only a technical one.
-3. **Does this belong in Ring++ at all, or upstream?** Ring already owns
-   `ring2exe`. A compiler-free build path is arguably a *finding* for
-   Mahmoud — the project's standing rule is that a finding travels better
-   than a patch. Building it here is defensible; building it here
-   *without offering it* is the thing to be deliberate about.
+1. **Bare-metal microcontroller support is DROPPED from the brief.** §3's
+   measurement stands: a 1.2 MB VM with a GC does not fit an ESP32, and no
+   packaging tool changes that. **Linux-class embedded stays in** — a
+   Raspberry Pi or a gateway is the same work as Linux arm64. True bare
+   metal is MicroRing's conversation, not this one.
+2. **Cross-platform, not own-platform.** Ring++ will build and ship
+   runtimes for other platforms, the same way it already ships five CLI
+   binaries. This is the larger commitment named in the question — Ring++
+   becomes a redistributor of Ring's own runtime, not only a tool that
+   runs on it — taken deliberately rather than by default.
+3. **Built in Ring++, not proposed upstream first.** The same posture as
+   the type checker and the CLI: shipped here, working, rather than
+   proposed and waited on. A working build half is also the strongest
+   version of the finding this project would eventually owe Mahmoud —
+   *"Ring can already build without a compiler"* lands better as a
+   working tool than as a paragraph.
 
-Until those are answered, the phase entry in
-[PHASE_PLAN.md](PHASE_PLAN.md) is **B0 only** — the measurement — and
-nothing after it is scheduled.
+**What this changes about §3 and §4.** Nothing in the measurements moves;
+only the *appetite* was undecided, and it is decided now. Cross-platform
+packaging depends on having a runtime for each target — B0 already proved
+the mechanism (`zig cc` cross-compiling Ring's own VM sources, 43 files,
+24 s, one Linux x64 runtime produced) for exactly one target. Producing
+the others is now scheduled work, not a philosophical question.
+
+See [PHASE_PLAN.md](PHASE_PLAN.md) for the phases this unblocks.

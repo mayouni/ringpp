@@ -535,7 +535,7 @@ anything computed is genuinely unknown in a dynamic language.
 
 ---
 
-## The build half *(proposed 2026-08-23 — B0 only is scheduled)*
+## The build half *(proposed 2026-08-23, unblocked 2026-08-24)*
 
 > **Shipping a Ring program on any platform, with no compiler.** Design
 > and measured feasibility in [DESIGN_BUILD.md](DESIGN_BUILD.md);
@@ -669,24 +669,80 @@ library whose real name begins with `lib` lands in two rows instead of
 one (`src/deps.zig`, the test named `KNOWN GAP`). Neither bites on Ring
 today; both are stated rather than discovered later.
 
-### B2–Bn — not scheduled, and deliberately so
+### The three decisions — ruled 2026-08-24
 
-Three decisions are the author's and are not derivable from any
-measurement ([DESIGN_BUILD.md §6](DESIGN_BUILD.md)):
+Recorded in full in [DESIGN_BUILD.md §6](DESIGN_BUILD.md#6-what-was-asked-and-how-it-was-answered--decided-2026-08-24);
+the outcomes only, here:
 
-1. **Bare-metal microcontrollers are out.** A 1.2 MB VM with a GC and
-   dynamic `loadlib` does not fit an ESP32. *Linux-class* embedded — a
-   Raspberry Pi, a gateway — is in, and is the same work as Linux arm64.
-   If the brief keeps bare metal, this half begins with a promise it
-   cannot keep; MicroRing is that conversation.
-2. **Cross-platform means Ring++ distributes Ring runtimes**, which is a
-   commitment and arguably a governance question for Mahmoud rather than
-   only a technical one.
-3. **This may belong upstream.** Ring owns `ring2exe`. A compiler-free
-   build path is arguably a *finding* — and the standing rule here is
-   that a finding travels better than a patch.
+1. **Bare-metal microcontrollers stay out.** The B0-era measurement
+   stands — a 1.2 MB VM with a GC does not fit an ESP32. *Linux-class*
+   embedded (Raspberry Pi, a gateway) stays **in**, as the same work as
+   Linux arm64. MicroRing is the bare-metal conversation, not this one.
+2. **Cross-platform, ruled in.** Ring++ will build and ship runtimes for
+   other platforms — the larger commitment, taken deliberately.
+3. **Built here, not proposed upstream first** — same posture as the
+   type checker and the CLI.
 
-Nothing below B0 is designed until those are answered.
+B2 follows directly from ruling #2: cross-platform packaging needs a
+runtime for each target, and B0 proved the *mechanism* (`zig cc`
+cross-compiling Ring's own VM sources) for exactly one.
+
+### B2 — one runtime stub per platform Ring++ already ships a CLI for
+
+**Reuses B0's mechanism, generalised.** `zig cc -target <triple> -O2 -I
+<ring include> *.c -o ring_<platform>` against Ring's VM source tree,
+once per target already listed in [`bin/README.md`](../bin/README.md):
+
+```
+x86_64-windows       (native; already the reference build)
+x86_64-linux-musl    (proved in B0: 43 files, 24 s, 2.78 MB, byte-identical)
+aarch64-linux-musl
+x86_64-macos
+aarch64-macos
+```
+
+**Gate.** For every target: the runtime builds, and — for the two this
+machine can execute (x64 Windows, x64 Linux under WSL) — B0's fixture
+pair (`pure.ring`, `lib.ring`) is re-run against it and compared
+byte-for-byte to the Windows reference, exactly as B0 did. For the three
+that cannot be executed here (arm64 Linux, both macOS), the gate is
+**format-only** — `file(1)` confirms architecture — and is reported as
+such, the same honest split `bin/README.md` already keeps for the CLI
+binaries. **No target may be claimed "portable" on format-checking
+alone**; B0 already showed why that distinction matters.
+
+*Status: not started.*
+
+### B3 — `ringpp build`: assemble the artefact
+
+**The command B1 was building toward.** Given a `.ring` entry point and a
+target platform: compile to `.ringo`, run B1's `deps` against it, and
+produce one directory (or, for a console/server program with zero
+`loadlib` reach, one file) containing the bytecode, the matching runtime
+stub from B2, and every native library `deps` named for that platform —
+sourced from the target's own Ring install when cross-building, since
+B0 already established that a library's *name* is knowable statically
+but not its *bytes*.
+
+**Gate.** The assembled artefact, copied to a clean directory with
+nothing else present, produces output byte-identical to running the
+source directly — B0's isolation test, generalised into the actual
+product. Run for at least one console-shaped program with zero
+`loadlib` reach (the one-file case) and one that reaches stdlib (the
+bundle case), so both branches of B1's own verdict are exercised.
+
+*Status: not started — depends on B2.*
+
+### B4 *(conditional)* — GUI and database programs
+
+[DESIGN_BUILD.md §3](DESIGN_BUILD.md#3-targets--measured-plausible-and-not)
+already says these are not one file: `loadlib` extensions cannot be
+embedded, so `ring_*.dll`/`.so`/`.dylib` ship beside the executable
+rather than inside it. B3's bundle case is most of this already: what
+remains is Qt's own redistribution rules, which are a licensing question
+before they are a technical one. Scoped once B3 is real.
+
+*Status: not started, not designed.*
 
 ---
 
