@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ring++ — more performant, more governable Ring, in Ring itself</title>
+<meta name="description" content="Ring++ is a dependency-free pair: a pure-Ring library for the data-heavy work Ring's own design already allows, and a one-binary CLI that finds real bugs before they run and ships a program with no compiler. Measured, not claimed.">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="style.css?v=0.1.0">
+</head>
+<body>
+
+<nav>
+  <div class="wrap">
+    <a class="brand" href="index.html"><img src="favicon.svg" alt="">Ring<span>++</span></a>
+    <a href="https://github.com/mayouni/ringpp#install">Start here</a>
+    <a href="https://github.com/mayouni/ringpp/blob/main/docs/CASE-TYPE-SAFETY.md">What it found</a>
+    <a href="https://github.com/mayouni/ringpp/blob/main/docs/FINDINGS.md">Findings</a>
+    <a href="https://github.com/mayouni/ringpp/tree/main/docs">Docs</a>
+    <a class="repo" href="https://github.com/mayouni/ringpp" target="_blank" rel="noopener" aria-label="Ring++ on GitHub"><svg viewBox="0 0 16 16" width="22" height="22" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg></a>
+    <a class="cta" href="https://github.com/mayouni/ringpp" target="_blank" rel="noopener">Get it <span class="newtab" aria-hidden="true">&#8599;</span></a>
+  </div>
+</nav>
+
+<header class="hero wrap">
+  <img class="logo" src="ringpp-logo.jpg" alt="Ring++">
+  <h1>More performant, more governable<br><em>Ring</em> — in Ring itself.</h1>
+  <p class="sub">A pure-Ring library for the data-heavy work Ring's own design already
+  allows, and a one-binary CLI that finds real bugs before they run and ships a
+  program with no compiler. Every number on this page is measured, not claimed —
+  and where Ring++ is the wrong tool, that is on the page too.</p>
+  <div class="badges">
+    <span class="badge">version 0.1.0</span>
+    <span class="badge">dependency-free</span>
+    <span class="badge">no compiler, ever</span>
+    <span class="badge">MIT</span>
+  </div>
+  <div class="actions">
+    <a class="btn primary" href="https://github.com/mayouni/ringpp#install">Start here &mdash; one <code>load</code>, one binary</a>
+    <a class="btn ghost" href="https://github.com/mayouni/ringpp/blob/main/docs/CASE-TYPE-SAFETY.md">See what it found in Ring's own stdlib</a>
+  </div>
+</header>
+
+<section class="wrap">
+  <h2>Two halves, one install</h2>
+  <p class="lead">Both are free of anything but Ring itself. Neither is required to use
+  the other.</p>
+  <div class="grid">
+    <div class="card">
+      <span class="icon">&#9673;</span>
+      <h3>The library — <code>load "ringpp.ring"</code></h3>
+      <p>Pointer-backed buffers, zero-copy views, a list index phase, a sub-state
+      sandbox. Pure Ring, works wherever stock <code>ring.exe</code> works. Every
+      idiom exists because a measurement found a cost worth not paying, and every
+      one refuses when it would make things worse.</p>
+    </div>
+    <div class="card">
+      <span class="icon">&#9672;</span>
+      <h3>The CLI — one binary, no compiler</h3>
+      <p><code>ringpp check</code> finds dormant bugs before you run them.
+      <code>ringpp build</code> packages a program into bytecode plus a runtime
+      stub — no C compiler asked of you, ever, on any of five platforms.</p>
+    </div>
+  </div>
+</section>
+
+<section class="wrap">
+  <h2>The bug it found in Ring's own standard library</h2>
+  <p class="lead">Not a synthetic example — this is <code>libraries/stdlib/stdsecurity.ring</code>,
+  shipped in Ring 1.27, found by running <code>ringpp check</code> against Ring's own
+  source tree and confirmed by actually calling the function.</p>
+
+  <div class="preamble">
+    <p><code>encrypt_ex</code> calls the three-parameter <code>std_encrypt</code> with four
+    arguments. It has never worked — nothing in Ring's own codebase ever called it, and
+    nothing static was looking until now.</p>
+  </div>
+
+  <div class="compare">
+    <div>
+      <span class="label"><b>What ships in Ring 1.27</b> <span class="tag">stdsecurity.ring</span></span>
+<pre class="code"><span class="k">Func</span> encrypt_ex cString,cKey,cIV,cCipher
+    <span class="k">return</span> <span class="f">std_encrypt</span>(cString,cKey,cIV,cCipher)  <span class="c"># 4 args --</span>
+<span class="c"># std_encrypt takes 3. std_encrypt_ex, right next to it, takes 4.</span></pre>
+    </div>
+    <div>
+      <span class="label"><b><code>ringpp check</code> catches it before it runs</b></span>
+<pre class="code">stdsecurity.ring
+  52:10  <span class="err">error</span>  rpp/type-arity
+         std_encrypt() takes 3 argument(s), called with 4
+         Error (R20) at run time (defined in stdfunctions.ring)
+
+<span class="c"># running it instead:</span>
+<span class="f">x</span>.encrypt_ex(<span class="s">"secret"</span>, <span class="s">"key"</span>, <span class="s">"iv"</span>, <span class="s">"AES-256-CBC"</span>)
+<span class="c"># Error (R20) : Calling function with extra number of parameters</span></pre>
+    </div>
+  </div>
+
+  <p class="lead" style="margin-top:1.6rem">Zero false positives across Ring's own 1,959
+  files, on the run this table is from. <a
+  href="https://github.com/mayouni/ringpp/blob/main/docs/CASE-TYPE-SAFETY.md">The full case
+  study</a> also records the three false positives an earlier version of the checker
+  produced, and what they cost — a page that lists only finds is marketing.</p>
+</section>
+
+<section class="wrap">
+  <h2>What you get</h2>
+  <div class="grid">
+    <div class="card">
+      <span class="icon">&#9673;</span>
+      <h3>Never wrong about correct code</h3>
+      <p>Where certainty is not available — an unknown parent class, a file that did
+      not parse, a name defined twice — the checker refuses rather than guesses. A
+      checker's only asset is that it is never wrong about correct code.</p>
+    </div>
+    <div class="card">
+      <span class="icon">&#9672;</span>
+      <h3>Every rule ships with a number</h3>
+      <p>16 rules, each traced to a measured finding in <code>FINDINGS.md</code>. Not
+      "this might be slow" — a specific microsecond figure, on a specific Ring build,
+      with the pattern the fix makes <em>worse</em> stated beside it.</p>
+    </div>
+    <div class="card">
+      <span class="icon">&#8646;</span>
+      <h3>Ship without a compiler</h3>
+      <p><code>ringpp build</code> assembles bytecode plus a prebuilt runtime stub —
+      no C compiler on the user's machine, ever. Win64, Linux x64/arm64, macOS
+      x64/arm64, from one command.</p>
+    </div>
+    <div class="card">
+      <span class="icon">&#10064;</span>
+      <h3>What must ship beside it, named</h3>
+      <p><code>ringpp deps</code> reports every native library a program can reach —
+      statically, before running it. A missing one is named <code>MISSING</code>, never
+      silently dropped.</p>
+    </div>
+    <div class="card">
+      <span class="icon">&#10697;</span>
+      <h3>A refusal where it matters</h3>
+      <p>A program reaching Ring's Qt bridge is refused, not half-packaged — bundling
+      only what static analysis can see there once produced a package that crashed with
+      no diagnostic at all.</p>
+    </div>
+    <div class="card">
+      <span class="icon">&#10022;</span>
+      <h3>Learn Ring's own design</h3>
+      <p>Eight worked examples, each holding the plain-Ring path and the Ring++ path
+      side by side, asserting byte-identical output before printing a single speed
+      number. Three of the eight conclude plain Ring wins.</p>
+    </div>
+  </div>
+</section>
+
+<section class="wrap narrow">
+  <h2>The thesis, in one line</h2>
+  <p class="lead">Ring passes <b>lists by reference</b> and <b>strings by copy</b>.
+  That one asymmetry is behind almost everything slow about large-data work in Ring —
+  and Ring++ does not exist because pointers are fast. On most work they lose,
+  measurably, 3&ndash;28&times;, because every crossing from Ring into a native function
+  costs real time. It exists because a Ring string is copied every time it crosses a
+  call boundary, and a list is not — and everything Ring++ honestly offers is a way of
+  not paying that cost where it is real, and staying out of the way where it is not.</p>
+</section>
+
+<section class="wrap">
+  <h2>Trust, measured</h2>
+  <p class="lead">Every figure below is a real gate result or a real corpus run, not a
+  round number picked to look good. <a
+  href="https://github.com/mayouni/ringpp/blob/main/docs/FINDINGS.md">The programs that
+  produced them</a> are in the repository.</p>
+  <div class="stats">
+    <div><div class="num">16</div><div class="what">checker rules, each traced to a measured finding</div></div>
+    <div><div class="num">22</div><div class="what">gates, one command, ~35 seconds on this machine</div></div>
+    <div><div class="num">0</div><div class="what">false positives across Ring's own 1,959-file corpus</div></div>
+    <div><div class="num">5</div><div class="what">platforms packaged with no C compiler</div></div>
+  </div>
+</section>
+
+<section class="wrap narrow">
+  <h2>Honest limits</h2>
+  <p class="lead">A packaged program is a stub-plus-bytecode <b>pair</b>, not a single
+  self-modifying file — Ring's own runtime does not look for a same-named bytecode file,
+  and that was measured before it was assumed. Bare-metal microcontrollers are out of
+  scope entirely: a Ring VM does not fit an ESP32-class device, and no packaging tool
+  changes that. Ring's Qt bridge is out of scope by the same standing rule that keeps
+  every Softanza Ring foundation dependency-free except what it vendors and supports
+  itself. Where Ring++'s own library loses to plain Ring, the examples say so before
+  they say anything else.</p>
+</section>
+
+<section class="wrap narrow">
+  <h2>Standing on named shoulders</h2>
+  <p class="lead">Ring++ vendors nothing at a user's install time, but two dependencies
+  are compiled into the CLI itself and their authors deserve their names here:
+  <b>Mahmoud Fayed</b> and the Ring team's
+  <a href="https://ring-lang.github.io/" target="_blank" rel="noopener">Ring language</a> —
+  the design this whole project is built <em>on</em>, not around; and
+  <b>Youssef Saeed</b>'s
+  <a href="https://github.com/ysdragon/tree-sitter-ring" target="_blank" rel="noopener">tree-sitter-ring</a>
+  grammar, which every <code>ringpp check</code> is running. Adopted because it
+  independently reached the same reading of Ring's type annotations that Ring++'s own
+  measurements did. Grammar findings go back to him as issues, never patches around
+  him — and when this project reported one defect, his fix turned out to close two.
+  Built with <b>Andrew Kelley</b> and the Zig team's
+  <a href="https://ziglang.org" target="_blank" rel="noopener">Zig</a>, which compiles
+  the whole CLI into one binary per platform.</p>
+</section>
+
+<section class="wrap">
+  <h2>One thesis, three siblings</h2>
+  <p class="lead">Ring++ is one of several Ring foundations from the same author, each
+  standing alone and each dependency-free except for what it names and vendors itself.</p>
+  <div class="actions" style="justify-content:flex-start">
+    <a class="btn ghost" href="https://mayouni.github.io/ringscript/" target="_blank" rel="noopener">RingScript — Ring in the browser <span class="newtab" aria-hidden="true">&#8599;</span></a>
+    <a class="btn ghost" href="https://mayouni.github.io/ringserv/" target="_blank" rel="noopener">RingServ — Ring on the server <span class="newtab" aria-hidden="true">&#8599;</span></a>
+    <a class="btn ghost" href="https://github.com/mayouni/microring" target="_blank" rel="noopener">MicroRing — Ring on the device <span class="newtab" aria-hidden="true">&#8599;</span></a>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <span>Ring++ 0.1.0 — MIT</span>
+    <a href="https://github.com/mayouni/ringpp/tree/main/docs" target="_blank" rel="noopener">Documentation <span class="newtab" aria-hidden="true">&#8599;</span></a>
+    <a href="https://ring-lang.github.io/" target="_blank" rel="noopener">Ring language <span class="newtab" aria-hidden="true">&#8599;</span></a>
+    <a href="https://github.com/mayouni/stzlib" target="_blank" rel="noopener">Softanza <span class="newtab" aria-hidden="true">&#8599;</span></a>
+    <span class="sp">a Softanza project by Mansour Ayouni</span>
+  </div>
+</footer>
+
+</body>
+</html>

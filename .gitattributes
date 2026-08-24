@@ -25,3 +25,11 @@ bin/**/ringpp.exe binary
 # claimed to be. Git had stored the file correctly; only the checkout was
 # wrong, which is the version anyone would actually compare.
 vendor/** -text
+
+# Image assets: same reasoning as the CLI binaries above, extended before
+# it was needed rather than after a corrupted checkout was found. JPEGs
+# and PNGs are binary-heavy enough that git's heuristic almost always
+# gets this right on its own -- "almost always" is exactly the standard
+# this file exists to not rely on.
+*.jpg binary
+*.png binary
