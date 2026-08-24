@@ -150,6 +150,18 @@ zig cc -O2 -I <ts>/include -I <ts>/src -I <grammar>/src `
 powershell -File sweep.ps1 -Root D:\ring127\language\tests -Label "Ring 1.27 tests"
 ```
 
+`sweep.ps1` looks for `tsprobe.exe` beside itself, which is where the
+command above puts it; `-Probe <path>` points it at one built elsewhere.
+It prints that build line and exits 2 rather than sweeping zero files if
+it finds neither. The path used to be hardcoded to a session scratchpad,
+which is a default that expires.
+
+**It counts exit codes and does not adjudicate**, so its output is a
+parse-failure count, never a disagreement rate. The corpus rates in
+[`upstream/tree-sitter-ring-notes.md`](../../upstream/tree-sitter-ring-notes.md)
+come from `tests/fidelity.ps1`, which asks `ring <file> -norun` about every
+file this one would merely have counted.
+
 [`tsprobe.c`](tsprobe.c) also takes `--sexp` to dump the tree and
 `--quiet` to report only the summary line.
 
