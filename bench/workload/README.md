@@ -1,7 +1,13 @@
 # P3 workload: Softanza's `stkBuffer`
 
-**Status: step (a) done — the module is reachable. The `RppBuffer` swap,
-step (c), has not been started.**
+**Status: (a), (b) and (c) all done — see "Where it stands" below.
+Re-verified 2026-08-25: `stkbuffer_reachable.ring` 12/12,
+`run_stkbuffertest.sh` PASS, `stkbuffer_ab.ring` flat ~4.4 µs/write from
+1 KB to 1 MB. This line contradicted the rest of the file from the first
+commit — the header was written before the work, and never updated after
+it landed in the same commit. See [WORKLOADS.md](../../docs/WORKLOADS.md)
+for the P3 gate write-up, including the one real caveat: this is not a
+literal `RppBuffer` swap, and the file explains why below.**
 
 The plan was to reimplement `stkBuffer.Write` on `RppBuffer` and gate it on
 "Softanza's own memory tests pass unchanged". Neither half was available:

@@ -95,7 +95,12 @@ unstated one cannot.
 That is the whole of P0. **P1 and T1 may start immediately, in
 parallel** — neither depends on it.
 
-*Status: not started.*
+*Status (closed 2026-08-25): **done** — [`docs/BASELINES.md`](BASELINES.md).
+Sat untouched for the project's entire life because its gate blocks
+nothing — it surfaced only because P3's own gate names "workload #1 from
+P0" and there was nothing to point at. All three sizes are stated
+estimates, marked as such, not sourced production figures — the gate's
+own escape hatch, used honestly rather than left unused.*
 
 ---
 
@@ -269,15 +274,36 @@ gate not run:
   as a warning naming the size change. The `sort()`/`reverse()` caveat
   the plan demands *is* asserted by name.
 
-**What is left is part 3, and it is the honest gap.** No hot path in a
-real application has been rewritten in Ring++ and measured at production
-size. [`bench/workload/`](../bench/workload/README.md) records the
-attempt: it got as far as finding that the target module could not be
-driven through its own API — three defects, listed there — and step (c)
-says plainly that it has not been started. Until part 3 lands, every
-performance claim this project makes is a **benchmark** claim, not a
-production one. That distinction is the reason this status was worth
-correcting rather than rounding up.
+**Part 3, closed 2026-08-25 — with a deviation stated rather than
+rounded away.** This section previously said the workload had not been
+started; it had — `bench/workload/README.md`'s own header contradicted
+its own body from the first commit, claiming step (c) unstarted while
+the file's last section said "(c) done". Re-verified 2026-08-25: all
+three gates green (`stkbuffer_reachable.ring` 12/12,
+`run_stkbuffertest.sh` PASS, `stkbuffer_ab.ring` flat ~4.4 µs/write
+1 KB → 1 MB, a measured 1.4×–150× depending on size). Full write-up,
+including the numbers this summary omits, in
+[`docs/WORKLOADS.md`](WORKLOADS.md).
+
+**The one real gap: it is not a literal `RppBuffer` swap.** The rewrite
+applies `RppBuffer.Poke`'s own underlying mechanism — a `varptr` write
+straight into existing bytes — directly inside `stkBuffer.Write`, not
+through Ring++'s type. `RppBuffer`'s invariant is fixed capacity created
+once; `stkBuffer` is resized by `Prepend`/`Insert`/`Delete`/`Resize`.
+Forcing the fixed-capacity type onto a resizable buffer would have been
+misusing it outside the invariant P2's own break-even refusal exists to
+protect — the wrong fix wearing the right library's name. So this closes
+P3's **intent** (a real hot path, in a real module, measured at a stated
+size, byte-identical, using Ring++'s central technique) without closing
+its **letter** (calling `RppBuffer` itself). A genuine
+`RppBuffer`/`RppView`/`RppIndexed` swap in a workload whose shape
+actually fits — fixed-capacity or random-access, not resizable — remains
+undone, named in `WORKLOADS.md`'s own closing section.
+
+Until then, every performance claim this project makes about a *packaged
+program at scale* is still one step short of a production claim — this
+closes the "measured on a real, repaired module" gap, not the
+"measured inside a shipped Ring++ type" one.
 
 ---
 
