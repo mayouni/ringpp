@@ -1,5 +1,19 @@
 # Ring++ II — the toolchain half
 
+> **Read this as research, not as the current design — flagged
+> 2026-08-25, not rewritten.** The compiled-kernel half this document
+> designs (T3–T7: a vendored VM, compilation, `run`/`emit`/`dist`, the
+> `doctor`/`vendor` CLI tiers) was **descoped 2026-08-23**. What actually
+> shipped is level-1 and cross-file type checking (T1–T2) and a
+> compiler-free build half (B0–B3) that this document does not describe
+> at all, because it postdates it. The headroom measurements below are
+> kept and still cited (`PHASE_PLAN.md`), because they answer a real
+> question — *how much is there to gain if a compiled half ever
+> returns* — independent of whether it does. Current reality:
+> [`CLI.md`](CLI.md) for the shipped commands,
+> [`DESIGN_BUILD.md`](DESIGN_BUILD.md) for the build half,
+> [`PHASE_PLAN.md`](PHASE_PLAN.md) for what is actually scheduled.
+
 *August 11, 2026. The second half of Ring++: a vendored VM, a type
 checker, compilation, a static analyser, a multiplatform build, and one
 CLI. Written after measuring the headroom rather than assuming it.*
@@ -405,11 +419,13 @@ existed.*
 
 ---
 
-## 6. The CLI
+## 6. The CLI *(as designed here — not what shipped; see the banner at the top)*
 
 One tool, in the house style of `zin` (banner box, scope line, grouped
 commands, availability markers, shortcuts, `doctor` / `info` /
-`completions` / `grammar dump`). Full mock-up in [CLI.md](CLI.md).
+`completions` / `grammar dump`). This section's mock-up described the
+CLI *before* the reframe; [CLI.md](CLI.md) is now the real one, with
+five real commands and none of the tier machinery below.
 
 The one design decision worth stating here: **availability markers carry
 the two altitudes.** A user with only `ringpp.ring` and stock

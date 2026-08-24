@@ -1,169 +1,97 @@
-# `ringpp` — the one CLI
+# `ringpp` — the CLI, as it actually exists
 
-> **STALE, flagged 2026-08-24, not rewritten.** This document describes
-> the CLI as planned *before* the 2026-08-23 strategic reframe that
-> descoped the compiled-kernel half (T3–T7) — the "three tiers" below,
-> `build`/`run --native`/`emit`/`dist`/`targets` needing a C compiler or a
-> vendored Zig, are that older design and were **never built**. What
-> shipped instead: `ringpp build` **needs no compiler at all** — it
-> assembles a `.ringo` plus a prebuilt runtime stub, phase B3,
-> [PHASE_PLAN.md](PHASE_PLAN.md#b3--ringpp-build-assemble-the-artefact).
-> The real command list is `ringpp help`, the real design is
-> [DESIGN_BUILD.md](DESIGN_BUILD.md). Flagged rather than silently trusted
-> or rewritten in the same pass as an unrelated task — a full rewrite is
-> its own piece of work.
-
-*House style: `zin`. Banner box, scope line, grouped commands,
-availability markers, shortcuts table, `doctor` / `info` /
-`completions` / `grammar dump`. Written in Zig
-(`src/main.zig` → `src/cli.zig` → dispatch), one command per file,
-uniform handler shape `pub fn run(args, allocator) !u8`.*
+*Rewritten 2026-08-25, replacing a document that described the CLI as
+planned before the 2026-08-23 strategic reframe. Every example below is
+a **real captured run** against the binary in this repository, not
+invented output — the previous version's failure was describing commands
+(`build` needing a C compiler, `doctor`, `vendor`) that were never built.
+Verify anything here yourself: every command shown works exactly as
+printed.*
 
 ---
 
-## The design decision that makes this CLI different
+## What ships today
 
-Ring++ has **two altitudes of installation**, and the CLI must make that
-visible instead of failing mysteriously:
-
-| you have | you get |
-|---|---|
-| `ringpp.ring` + stock `ring.exe` | `check`, `why`, `fmt`, `info`, `bench`, `probe` |
-| \+ any C compiler (tier 1/2/3) | `build`, `run --native`, `emit` |
-| \+ vendored Zig (tier 3, 63 MB download) | `dist`, `targets` — cross-compilation |
-
-So every command carries an availability marker, exactly as `zin` marks
-`(needs project)`. Nothing is hidden; nothing silently degrades.
-
----
-
-## `ringpp` with no arguments
+Five commands: `check`, `why`, `deps`, `build`, and the undocumented
+`ast`. All compiler-free — the CLI needs nothing beyond itself and,
+for `build`, a working `ring` to shell out to for compilation.
 
 ```
+$ ringpp help
+
 +-------------------------------------+
 |  Ring++ v0.1.0 -- Ring, two levels  |
 +-------------------------------------+
-Ring:   1.27.0 (stock, D:\ring127\bin\ring.exe)
-Scope:  ledger  (D:\apps\ledger)          Toolchain: not installed
 
 Analyse
 
   ringpp check [path]         Type-check and lint; no run, no build     (always available)
-  ringpp why <rule|F-n|code>  Explain a diagnostic, or the Ring error   (always available)
-  ringpp why <function>       Why a function is (not) compiled          (needs the toolchain)
-  ringpp probe                Verify this Ring still satisfies Ring++   (always available)
-  ringpp bench [path]         Run the measurement corpus on this build  (always available)
+  ringpp why <thing>          Explain a rule, a finding, or a Ring error code
+  ringpp version              Show version
+  ringpp help                 This screen
 
-Build & Run
+  `why` takes what you have in hand: a rule `check` printed
+  (rpp/empty-catch), a finding (F-16), or the Ring error code you
+  actually saw (R4). `ringpp why` alone lists everything it knows.
 
-  ringpp run <file>           Run, compiling hot typed functions        (needs toolchain)
-  ringpp build [target]       Compile ahead of time; native artifacts   (needs toolchain)
-  ringpp emit <function>      Show the generated C for one function     (needs toolchain)
-  ringpp dist                 Cross-compile for every shipped platform  (needs toolchain)
-  ringpp targets              List available build targets              (needs toolchain)
-  ringpp clean                Remove .ringpp/ artifacts and the cache   (needs project)
+Package
 
-Project
+  ringpp deps <file.ring> [--ring <dir>]
+                               Native libraries this program can reach; no compiler
+  ringpp build <file.ring> [options]
+                               Bytecode + a runtime stub + declared native libs, one
+                               package. `ringpp build -h` for the full option list.
 
-  ringpp new <name>           Create a new Ring++ project               (always available)
-  ringpp info                 Context-appropriate information           (always available)
-  ringpp fmt [path]           Format Ring source                        (always available)
-  ringpp test                 Run the project test suite                (needs project)
-
-Toolchain
-
-  ringpp vendor <sub>         install, status, remove, versions         (always available)
-  ringpp doctor               Check environment, VM, toolchain, project (always available)
-
-Meta
-
-  ringpp version              Show version and the Ring it is bound to
-  ringpp help <command>       Help with examples for one command
-  ringpp completions <shell>  bash, zsh, fish, powershell
-  ringpp grammar dump         Export the CLI grammar as JSON
-
-Shortcuts:
-  c=check        b=build        r=run          w=why
-  doc=doctor     i=info         t=test         v=version      h=help
-
-  Toolchain not installed -- 6 commands unavailable.
-  Run 'ringpp vendor install' (downloads ~332 MB: Zig + the Ring VM source).
+Not built yet: probe, bench, run, emit, dist, doctor, vendor.
 ```
 
-That last paragraph is the important one. It is the difference between a
-tool that feels broken and a tool that tells you where you are.
+**That last line is load-bearing.** It is printed by the binary itself
+(`src/main.zig`), not a claim in this document — so it cannot go stale
+the way the previous CLI.md did. If it ever disagrees with this file,
+believe the binary.
 
 ---
 
-## The commands that carry the design
-
-### `ringpp check`
-
-The highest-value command, and the one that needs nothing installed.
+## `ringpp check` — type checking and lint, no run, no build
 
 ```
-$ ringpp check base/system/
+$ ringpp check tests/fixtures/lint_bad.ring
 
-base/system/stkPointer.ring
-  720:21  error   rpp/varptr-unknown-name
-          varptr(:cBufferData) -- no variable 'cBufferData' in this scope
-          (the local is '_cBufferData_'). This raises Error (R6), and the
-          surrounding try/catch sets @pLowLevelPtr = NULL, so every
-          low-level path below is dead.
-  720:21  warn    rpp/varptr-to-local
-          the target is a method-local; its buffer is freed on return.
+tests/fixtures/lint_bad.ring
+  24:23  error  rpp/varptr-unknown-name
+          varptr(:cBufferData) — no variable 'cBufferData' is assigned anywhere in this file
+          varptr resolves the name in the current scope, then globals. An unknown
+          name raises Error (R6), which a surrounding try/catch will swallow
+          silently — leaving a NULL pointer and a dead code path. See FINDINGS
+          F-2.
+  37:9  warn   rpp/empty-catch
+          empty catch — this leaks a VM stack slot per caught error
+          ...
+  45:21  perf   rpp/substr-in-loop
+          substr() inside a loop
+          ...
 
-base/system/stkBuffer.ring
-  106:9   perf    rpp/string-rebuild-in-write
-          left(@buffer,n) + data + right(...) rebuilds the whole string
-          per write -- O(n). Measured 803 ms vs 1 ms for 2,000 patches
-          of a 500 KB buffer (FINDINGS F-7). Consider RppBuffer.Poke.
-
-  2 errors, 1 warning, 1 perf note in 27 files (0.4s)
+  1 error, 1 warn, 1 perf, 0 note   in 1 files (1.6 KB, 6 ms)
+  ringpp why rpp/varptr-unknown-name   for any rule above
 ```
 
-Rule ids are namespaced `rpp/…` and every one traces to a finding with a
-measurement. **No rule ships without a number behind it.**
+**16 rules today**, spanning three layers, each traceable to a measured
+finding — *no rule ships without a number behind it*:
 
-#### Level 1 type checking
-
-`check` also reads the type annotations Ring already accepts and reports
-where they and the code disagree. **Runtime behaviour is unchanged** —
-Ring parses parameter types and discards them, and Ring++ does not touch
-that. What changes is that the annotation stops being a comment.
-
-| rule | severity | |
+| layer | rules | what it needs |
 |---|---|---|
-| `rpp/type-hints-missing` | error | `int func F` is a *variable read*, not a declaration — `Error (R24)` unless `typehints.ring` is loaded |
-| `rpp/type-arity` | error | Ring enforces arity exactly: R19 too few, R20 too many |
-| `rpp/type-arg-mismatch` | warn | a literal argument contradicting the annotation |
-| `rpp/type-return-mismatch` | warn | a returned literal contradicting the return type |
-| `rpp/type-not-a-hint` | note | `bool` → `boolean`, and a short list like it |
+| lint (`src/check.zig`) | 9 — `varptr-*`, `memcpy-*`, `substr-in-loop`, `genarray-in-loop`, `empty-catch`, `method-shadows-builtin`, `unparsed` | tree-sitter parse only |
+| level-1 types (`src/types.zig`) | 5 — `type-hints-missing`, `type-arity`, `type-arg-mismatch`, `type-return-mismatch`, `type-not-a-hint` | Ring's own annotation channel |
+| cross-file (`src/project.zig`) | 2 — `type-duplicate-func`, `type-declared-conflict` | the load graph, `--ring <dir>` to follow into Ring's own libraries |
 
-The two error rules predict a specific Ring error code on a specific
-line, so they were checked the only way that means anything: by running
-the code. On its first real pass this found **99 latent R19/R20 crashes
-in 46 functions** across Softanza, and one in Ring's own applications —
-all dormant, mostly aliases that forgot to forward a parameter.
+Zero false positives across Ring's own 1,959-file corpus and Softanza's
+6,012 — the full case study, including the three false positives caught
+and fixed along the way, is
+[CASE-TYPE-SAFETY.md](CASE-TYPE-SAFETY.md).
 
-**Certainty is the design constraint.** Only *literals* are judged for
-type, because anything computed is genuinely unknown in a dynamic
-language; calls inside class bodies are not checked at all, because an
-unqualified call there finds a method first (F-17); and functions after
-the first class are not registered, because they are methods (F-21).
-Each of those gives up real coverage to keep the checker from ever being
-wrong about correct code — the same rule that governs `rpp/unparsed`.
-`tests/fixtures/types_good.ring` exists to enforce exactly that, and
-both fixtures are verified against Ring 1.27 rather than asserted.
+---
 
-### `ringpp why`
-
-`why` answers two questions that turn out to be the same question at two
-altitudes: *why did this happen*, and *why will this not compile*.
-
-**Diagnostics — built, tier 0.** `check` has room for one line and one
-paragraph; that is enough to obey and not enough to understand. `why`
-takes whichever handle you have:
+## `ringpp why` — explain a rule, a finding, or a Ring error code
 
 ```
 $ ringpp why R4
@@ -171,170 +99,224 @@ $ ringpp why R4
 rpp/empty-catch
 An empty catch block leaks one VM stack slot per caught error
 
-  Symptom  Error (R4) : Stack Overflow, from code containing no recursion
-           at all. It arrives after roughly 1,003 caught errors, so it
-           survives every small test and fails in the loop that runs all day.
+  Symptom  Error (R4) : Stack Overflow, from code containing no recursion at
+           all. It arrives after roughly 1,003 caught errors, so it survives
+           every small test and fails in the loop that runs all day.
 
   Cause    Ring pops the raised value only when something in the handler
-           consumes it. An empty handler leaves it on the VM stack, which
-           is RING_VM_STACK_SIZE (1004) deep.
+           consumes it. An empty handler leaves it on the VM stack, which is
+           RING_VM_STACK_SIZE (1004) deep.
 
-  Fix      Put any statement in the handler. One assignment is enough.
+  Fix      Put any statement in the handler. One assignment is enough. If the
+           intent really is to ignore the error, ignore it explicitly: catch
+           bIgnored = TRUE done.
 
-  Evidence bench/16_empty_catch_leak.ring — five arms, showing exactly
-           which shape leaks
+  Evidence bench/16_empty_catch_leak.ring — five arms, showing exactly which
+           shape leaks
 
-  Upstream ring-lang/ring#1644 — open.
+  Upstream ring-lang/ring#1644 — open. Reported as a behaviour, not a patch:
+           ring_vm_catch() does restore nSP via ring_vm_restorestate(), and
+           what puts the slot back was not isolated. Reporting beats guessing
+           at a line.
 
   See      docs/FINDINGS.md F-16
 ```
 
-Three ways in, because a user arrives with whatever they have: a rule
-(`rpp/empty-catch`, or bare `empty-catch`), a finding (`F-16`), or **the
-Ring error code they actually saw** (`R4`). The third is the one that
-earns the command — `R4`, `R6` and `R20` name no cause, and each cost a
-day here before it was understood. `ringpp why` alone lists everything.
-
-Every entry carries an `Evidence` line naming the program that produces
-its numbers, and a `Cost` line naming the pattern the fix makes worse.
-A fix with no stated cost has not been measured, it has been believed.
-
-Two tests keep this honest, and they are the reason the catalog can be
-trusted: **no rule `check` can emit may be missing** from it (the rule
-ids are scanned out of `check.zig` at compile time), and **no citation
-may point at a `FINDINGS.md` heading that does not exist**. Both were
-verified by breaking them on purpose.
-
-**The compiler half — T4.** Once there is a compiler to report on, the
-same command takes a function name. Asking today says so rather than
-reporting a typo:
+**Three ways in**, because a user arrives with whatever they have in
+hand: a rule (`rpp/empty-catch`), a finding (`F-16`), or **the Ring error
+code they actually saw** (`R4`). The third is the one that earns the
+command — a bare error code names no cause. `ringpp why` with no
+argument lists the whole catalog:
 
 ```
-$ ringpp why SumColumn
+$ ringpp why
 
-SumColumn  (ledger.ring:214)          NOT COMPILED
+Rules that `ringpp check` can print:
 
-  x  parameter 'aRows' has no annotation        inferred: list
-  x  calls FormatMoney (ledger.ring:88)         not compilable
-  ok nCol : int
-  ok return : double
-  ok loop induction 'i' : int
+  rpp/memcpy-string-dest      F-1, F-5
+  rpp/varptr-unknown-name     R6, F-2, F-3
+  ... (16 rules total)
 
-  Fix the two 'x' above and this function compiles.
-  Its inner loop matches the K2 shape (bench/headroom): 96x measured,
-  minus ~43 ns of call boundary per invocation.
+Also explained — traps with no rule, because a linter cannot see them:
 
-  Runtime guard failures observed: 0
+  F-22      Ring copies objects on assignment — a cached address inside
+  F-21      Every func after the first class becomes a method of that
+  F-18      N and n are the same variable
+  F-20      get and put cannot be method names
+  F-23      A gate that asserts a mechanism fails when someone fixes the
 ```
 
-That last line matters (T4 in [DESIGN_TOOLCHAIN.md](DESIGN_TOOLCHAIN.md)):
-a function can be compiled and still fall back every call because the
-annotations lie. `why` must report what actually happened, not only what
-the analyser believes.
-
-### `ringpp doctor`
-
-```
-$ ringpp doctor
-
-Environment
-  ok  ring          1.27.0   D:\ring127\bin\ring.exe
-  --  zig           not found                    (needed for: build, run --native)
-  ok  ringpp.ring   0.1.0    D:\apps\ledger\lib\ringpp.ring
-
-Conformance (probe.ring, 31 rows)
-  ok  31/31 on Ring 1.27.0                                        0.6s
-      varptr write-through .......... ok
-      varptr address stability ...... ok
-      genarray speedup + invalidation ok
-      type annotation channel ....... ok   (stmt.c Support Type Identifier)
-      bytecode listing shape ........ ok
-      sub-state isolation ........... ok
-
-Project  (ledger)
-  ok  47 Ring files, 12 annotated functions
-  --  3 functions annotated but not compilable   (ringpp why)
-  ok  no rpp/ errors
-
-  Toolchain not installed. Analysis is fully available; compilation is not.
-```
-
-### `ringpp vendor`
-
-The command that prices the second altitude honestly.
-
-```
-$ ringpp vendor install
-
-Current tier: 0 (library only). Kernels are interpreted.
-
-  Tier 1  system compiler                       download 0 MB
-          Not found. Looked for: cc, clang, gcc, cl.exe
-          Would give: 30-3000x on this host, no cross-compilation.
-
-  Tier 2  tiny C compiler (vendored)            download ~2 MB
-          Would give: 22-72x on this host, fast compiles, no
-          cross-compilation, no vectorisation.
-
-  Tier 3  Zig 0.15.2, this host's targets       download 63 MB
-          Unpacks to 210 MB in .ringpp/vendor/
-          Would give: 25-3000x, and cross-compilation to Windows,
-          Linux x64/arm64 and macOS x64/arm64 from this machine.
-          Includes a one-time ~45 s cache warm-up per target.
-
-  Ring VM source 1.27.0 (all tiers)             download 1.0 MB
-
-Multiples are measured on bench/toolchain; your kernels will differ.
-Every tier produces byte-identical results -- only the speed changes.
-
-  ringpp vendor install --tier 2
-  ringpp vendor install --tier 3
-
-Proceed with which? [1/2/3/N]
-```
-
-The warm-up line is not politeness. A cold Zig cache makes the *first*
-kernel compile cost **41–55 seconds** while it builds `compiler_rt` and
-the target libc; warm, the same compile is 220 ms. `ringpp vendor
-install` must absorb that by compiling a throwaway kernel per configured
-target, so a user's first `ringpp run` never sits through it. No
-compile-and-cache design survives a 45-second first call.
-
-Three properties of that screen matter more than its wording: it names
-the tier you are **on**, it prices each step in **download** rather than
-on-disk bytes, and it quantifies the gain in measured multiples instead
-of adjectives. A user in a bank deciding whether to pull 63 MB through a
-change-controlled network deserves all three.
+**21 entries total**, kept honest by two compile-time tests: every rule
+`check.zig` can emit must have a catalog entry (scanned out of the
+source), and every `F-n` cited must exist as a heading in
+`docs/FINDINGS.md`. Both were verified by breaking them on purpose.
 
 ---
 
-## House rules carried over from `zin`
+## `ringpp deps` — what a program needs beside the bytecode
 
-- **One command per file**, uniform `pub fn run(args, allocator) !u8`,
-  one `switch` in the dispatcher.
-- **Shared modules over local duplication** — one `eql`, one `wp`, one
-  colour module. `zin`'s `cli_utils.zig` exists because 28 copies of
-  `eql` did.
+Exists because a `.ringo` is portable between x64 platforms but a native
+extension it reaches is not, and the failure lands at run time on the
+user's machine rather than at build time
+([F-29](FINDINGS.md)).
+
+```
+$ ringpp deps tests/fixtures/lint_bad.ring
+
+tests/fixtures/lint_bad.ring
+  load closure : 5 file(s) reached
+  ring root    : NOT SUPPLIED — `load "stdlib.ring"` and friends
+                 cannot be followed. Pass --ring <dir> for the whole picture.
+
+  No native library is reachable from here.
+  This program is PURE RING: one .ringo plus a Ring runtime is all it needs,
+  and that is portable between x64 platforms (FINDINGS F-29).
+```
+
+A program that reaches `load "stdlib.ring"` names every extension it can
+touch — six, just to offer `upper()` — with the platform-specific file
+name for each and the line that declares it. A program reaching Ring's
+Qt bridge (`ringqt`) is flagged `OUT OF SCOPE (Qt)` and exits non-zero
+rather than being listed as an ordinary dependency — see the section
+below.
+
+**Refuses rather than guesses.** With no `--ring <dir>`, `load
+"stdlib.ring"` cannot be followed, so a program that reaches it reports
+`NO VERDICT`, not `PURE RING` — an answer that looks clean and is
+actually a measure of what the tool could not see is exactly the defect
+this project has caught and fixed twice already
+([`tests/fidelity.ps1`](../tests/fidelity.ps1)'s own history).
+
+---
+
+## `ringpp build` — assemble a runnable package, no compiler
+
+```
+$ ringpp build -h
+
+usage: ringpp build <entry.ring> [options]
+
+  --target <platform>   win64 | linux-x64 | linux-arm64 | macos-x64 | macos-arm64
+                        (default: the platform ringpp itself is running on)
+  --ring <path>         a working `ring` executable, used to compile the
+                        entry point ( -go ). Default: search PATH.
+  --ring-root <dir>     a Ring install, so `load "stdlib.ring"` and friends
+                        can be followed (same meaning as `ringpp deps --ring`)
+  --runtime <path>      an explicit B2 runtime stub for --target
+  --runtime-dir <dir>   search <dir>/<target>/ring[.exe] for the stub
+                        (default: alongside the ringpp executable, then ./runtime)
+  --lib-dir <dir>       a directory holding the TARGET's actual native
+                        library files, to bundle what `deps` names
+  --out <dir>           output directory (default: <entry-basename>-<target>)
+```
+
+**Two shapes, neither rounded up to the other.** A program with no
+native reach:
+
+```
+$ ringpp build hello.ring --ring D:\ring127\bin\ring.exe --out out
+
+built  C:\Temp\cli_demo\out
+  hello.exe
+  hello.ringo
+
+run with:  hello.exe hello.ringo
+```
+
+Verified in this repository's own gate by copying exactly those two
+files to a clean directory with nothing else present and running them —
+correct output, no Ring install, no `ring.dll`.
+
+A program reaching `stdlib.ring`, with `--ring-root` and `--lib-dir`
+pointing at a real Ring install:
+
+```
+$ ringpp build lib.ring --ring-root D:\ring127 --lib-dir D:\ring127\bin --out out-lib
+
+built  C:\Temp\cli_demo\out-lib
+  lib.exe
+  lib.ringo
+  ring_odbc.dll
+  ring_mysql.dll
+  ring_sqlite.dll
+  ring_internet.dll
+  ring_openssl.dll
+  ring_pgsql.dll
+
+run with:  lib.exe lib.ringo
+```
+
+**Not one file.** Ring's own binary does not auto-load a same-named
+`.ringo`, and appending bytecode to the exe does nothing — both measured
+directly before this command was designed around a wrong assumption
+([`docs/DESIGN_BUILD.md` §2](DESIGN_BUILD.md#2-what-a-build-actually-is-then)).
+The artefact is always this pair, invoked together.
+
+**Refuses, harder than the happy path, in two places:**
+
+- no `--ring-root` when the program reaches `load`s that cannot be
+  followed → non-zero exit, `BUILD-MANIFEST.txt` says `INCOMPLETE
+  PICTURE`, never a package that silently claims nothing is missing;
+- a program reaching Ring's Qt bridge (`ringqt`, `ringqt_light`,
+  `ringqt_core`) → refused **before any output is written at all**.
+  Bundling only what static analysis can name for a Qt program produces
+  a package that *looks* complete and then crashes with **no diagnostic
+  whatsoever** — measured directly, Windows exit `0xC0000409`, zero
+  bytes of output ([F-30](FINDINGS.md)). Per the project's own
+  dependency-free principle, Ring++ does not package Qt programs at all.
+
+A missing declared library that the closure *did* resolve is different
+from either: `BUILD-MANIFEST.txt` names it `MISSING` and the command
+still exits 0 — the maintainer's choice not to supply `--lib-dir` is not
+the same defect as not knowing what was needed.
+
+---
+
+## `ringpp ast` — undocumented, real, and worth knowing about
+
+Not on the help screen on purpose — it prints the grammar's raw view of
+a file, which is a tool for developing `check`'s own rules, not for a
+typical user:
+
+```
+$ ringpp ast somefile.ring
+```
+
+Every rule in `check.zig` is written against a specific node shape, and
+guessing at that shape is how a false positive gets born. This is the
+fastest way to settle a disagreement between what a rule expects and
+what the grammar actually produced.
+
+---
+
+## What is genuinely not built, and where it went
+
+- **`probe`, `bench`, `run`, `emit`, `dist`, `doctor`, `vendor`** — the
+  binary's own `help` screen names these as not built; believe it over
+  this document.
+- **The compiled-kernel half (T3–T7)** — the tier system, `run`
+  compiling hot functions, cross-compilation via a vendored Zig — was
+  the design this document previously described in full. Descoped
+  2026-08-23; the reasoning is in `docs/PHASE_PLAN.md`, the surviving
+  research in `docs/DESIGN_TOOLCHAIN.md`. If it ever returns, it returns
+  as its own proposal with its own gates, not by this file quietly
+  growing the commands back.
+- **A literal one-file build artefact** — `ringpp build` produces a pair,
+  not a single self-modifying executable; a loader that embeds the
+  bytecode and execs the runtime touches no VM source and is not ruled
+  out, but is unbuilt and unscheduled
+  ([`docs/PHASE_PLAN.md`](PHASE_PLAN.md), the build half).
+
+---
+
+## House rules that still hold
+
 - **ASCII only in console output.** No emoji, no box-drawing beyond
-  `+-|`.
-- **Colour is semantic**, not decorative: dim for command names, yellow
-  for "unavailable here", green for "always available", red only for
-  errors.
-- **Never swallow errors on file writes**; console output is
-  fire-and-forget.
-- **`grammar dump`** so the CLI's own surface is machine-readable and
-  can be diffed between releases — the CLI gets the same treatment as
-  the compatibility surface.
-
----
-
-## What `ringpp` deliberately does not do
-
-- **It is not required to run Ring++ code.** Annotated source runs under
-  stock `ring.exe`. If `ringpp` ever becomes mandatory, the loyalty-to-
-  Ring property is gone (DESIGN_TOOLCHAIN §0).
-- **It does not replace `ring2exe`** or Softanza's delivery plane. It
-  contributes artifacts to them.
-- **It does not manage packages.** `ringpm` exists.
-- **It does not format opinionatedly.** `ringpp fmt` wraps Ring's own
-  `ringfmt` where possible rather than inventing a second style.
+  `+-|` — visible in every example above.
+- **Rule ids are namespaced `rpp/…`** and every one traces to a
+  `FINDINGS.md` heading, machine-checked at compile time.
+- **`why`, `deps` and `build` are each their own module**
+  (`src/why.zig`, `src/deps.zig`, `src/pack.zig`) with a uniform `pub fn
+  run(...)` entry point that `src/main.zig` dispatches to directly.
+  `check` and `ast` are driven from handlers inside `main.zig` itself,
+  since neither has grown large enough yet to earn its own file.

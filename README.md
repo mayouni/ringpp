@@ -117,7 +117,7 @@ and gated**. `powershell -File tests\run-all.ps1` runs everything.*
 | **[docs/FINDINGS.md](docs/FINDINGS.md)** | What the Ring VM actually does, measured. Read this first — two of its numbers killed the design I set out to write. |
 | **[docs/DESIGN.md](docs/DESIGN.md)** | The library half: what Ring++ is, the layer map, the surface, safety, upgrades, `myctiger`, Softanza, and the risks. |
 | **[docs/DESIGN_TOOLCHAIN.md](docs/DESIGN_TOOLCHAIN.md)** | The toolchain half: types, compilation, static analysis, the vendored VM, what Julia teaches and where the analogy breaks. |
-| **[docs/CLI.md](docs/CLI.md)** | `ringpp` — one CLI, in the `zin` house style, with the two altitudes visible in every help screen. |
+| **[docs/CLI.md](docs/CLI.md)** | `ringpp` — every command, real captured output, no compiler needed for any of it. |
 | **[docs/PHASE_PLAN.md](docs/PHASE_PLAN.md)** | Phases with gates. A plan is not done until its gate runs. |
 | **[docs/UPSTREAM_NOTES.md](docs/UPSTREAM_NOTES.md)** | Draft text for the Ring Google Group. Not sent. |
 | **[bench/](bench)** | The programs that produced every number. |

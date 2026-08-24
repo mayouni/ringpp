@@ -549,11 +549,14 @@ anything computed is genuinely unknown in a dynamic language.
 
 > **Two items are currently unowned, and that is a decision, not an
 > oversight to fix silently.** Level 2 type checking (*compilable*) and
-> the `ringpp why <function>` form in [CLI.md](CLI.md) were both routed
-> to **T4**, which was descoped on 2026-08-23. They therefore have no
-> phase. Level 2 arguably belongs with the compiled half if it ever
-> returns; `ringpp why <function>` does not depend on a compiler at all
-> and could be a small T2 follow-up. **Which is which is the author's
+> the `ringpp why <function>` form sketched in
+> [DESIGN_TOOLCHAIN.md §6](DESIGN_TOOLCHAIN.md#6-the-cli-as-designed-here--not-what-shipped-see-the-banner-at-the-top)
+> were both routed to **T4**, which was descoped on 2026-08-23 — the
+> current [CLI.md](CLI.md) does not describe either, correctly, since
+> neither was built. They therefore have no phase. Level 2 arguably
+> belongs with the compiled half if it ever returns; `ringpp why
+> <function>` does not depend on a compiler at all and could be a small
+> T2 follow-up. **Which is which is the author's
 > call** — this file names them rather than reassigning them, because
 > the last time it went stale it was by quietly keeping a phase that no
 > longer existed. Asking for either today prints that it is not built,
