@@ -170,10 +170,47 @@ class RppSandbox
 		v = ring_state_findvar(pState, lower(cName))
 		return not isnumber(v)
 
+	### F-33: `ring_state_setvar` ASSIGNS to a variable the sub-state already
+	### has. Handed a name it has never seen it raises Ring's own
+	### "R6: Variable is required" from inside the C function -- naming
+	### neither the variable nor the reason, and from a place the caller
+	### cannot see. `ring_state_newvar` does not help; it raises the same
+	### thing. Measured 2026-08-25.
+	###
+	### But the documented use of SetVar is "set a variable BEFORE running
+	### code that reads it", so absence is the normal case, not an error.
+	### Declare it first, then assign. The VALUE never travels through
+	### runcode -- only the name does, and only after it is checked to be a
+	### plain identifier, so a name can never smuggle a statement in.
 	func SetVar cName, vValue
 		This.Alive("SetVar")
+		if not This.Has(cName)
+			if not This.IsPlainName(cName)
+				raise("Rpp: SetVar cannot declare '" + cName +
+				      "' — a name to be created must be letters, digits " +
+				      "and _ only, not starting with a digit")
+			ok
+			ring_state_runcode(pState, lower(cName) + " = 0")
+		ok
 		ring_state_setvar(pState, lower(cName), vValue)
 		return This
+
+	### Deliberately not a regex: the library depends on nothing but the VM
+	### surface it declares, and ascii() is already on that list.
+	func IsPlainName cName
+		if not isstring(cName) return FALSE ok
+		if len(cName) = 0 return FALSE ok
+		for i = 1 to len(cName)
+			n = ascii(cName[i])
+			if (n >= 65 and n <= 90) or (n >= 97 and n <= 122) or n = 95
+				loop
+			ok
+			if (n >= 48 and n <= 57) and i > 1
+				loop
+			ok
+			return FALSE
+		next
+		return TRUE
 
 	func Free
 		if lOpen

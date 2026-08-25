@@ -118,6 +118,307 @@ func RegressionShapes
 
 	return nBad
 
+### ---- RppView, against the same plain-Ring model ----
+###
+### A view is the only other thing in the library holding a pointer into a
+### buffer, and until now the only thing any gate asked of it was Str().
+### Sub() -- a view of a view -- was tested nowhere at all, and a view held
+### across Grow() is the exact shape F-22 describes: the owner reallocates
+### underneath a window that is still alive.
+func DifferentialViews
+	nBad = 0
+
+	cM = ""
+	for i = 1 to 256
+		cM += char((i * 7) % 251 + 1)      # no zero bytes, so left/right stay honest
+	next
+	oB = RppBufferFromString(cM)
+	if oB.Str() != cM
+		nBad++ ? "  FAIL: RppBufferFromString did not round-trip"
+		return nBad
+	ok
+
+	### 1. every view of every span must equal the model's slice
+	nSpans = 0
+	for nOff = 0 to 250 step 5
+		for nLen = 0 to 6
+			if nOff + nLen > 256 loop ok
+			oV = oB.View(nOff, nLen)
+			cWant = ""
+			if nLen > 0 cWant = left(right(cM, 256 - nOff), nLen) ok
+			if oV.Str() != cWant
+				nBad++ ? "  FAIL: View(" + nOff + "," + nLen + ").Str()"
+				return nBad
+			ok
+			if oV.Size() != nLen   nBad++ ? "  FAIL: View.Size " + nOff ok
+			if oV.Offset() != nOff nBad++ ? "  FAIL: View.Offset " + nOff ok
+			nSpans++
+		next
+	next
+
+	### 2. Sub() -- a view of a view. Offsets must COMPOSE, not restart.
+	oOuter = oB.View(100, 60)
+	for nSo = 0 to 50 step 7
+		for nSl = 0 to 8
+			if nSo + nSl > 60 loop ok
+			oIn = oOuter.Sub(nSo, nSl)
+			cWant = ""
+			if nSl > 0 cWant = left(right(cM, 256 - (100 + nSo)), nSl) ok
+			if oIn.Str() != cWant
+				nBad++ ? "  FAIL: Sub(" + nSo + "," + nSl + ") did not compose"
+				return nBad
+			ok
+			if oIn.Offset() != 100 + nSo
+				nBad++ ? "  FAIL: Sub offset " + oIn.Offset() + " want " + (100 + nSo)
+				return nBad
+			ok
+		next
+	next
+
+	### 3. a Sub of a Sub of a Sub still lands on the right byte
+	oD = oB.View(0, 256).Sub(64, 128).Sub(16, 64).Sub(8, 8)
+	if oD.Str() != left(right(cM, 256 - 88), 8)
+		nBad++ ? "  FAIL: three-deep Sub chain"
+	ok
+	if oD.Offset() != 88 nBad++ ? "  FAIL: three-deep Sub offset = " + oD.Offset() ok
+
+	### 4. the view is a WINDOW: a write through the buffer must show through it
+	oW = oB.View(10, 4)
+	oB.Poke(10, "WXYZ")
+	if oW.Str() != "WXYZ"
+		nBad++ ? "  FAIL: view did not see a write made through the buffer"
+	ok
+	# and through the sub-view of that window
+	if oW.Sub(1, 2).Str() != "XY"
+		nBad++ ? "  FAIL: sub-view did not see the write"
+	ok
+
+	### 5. Buffer() gets back to the owner, and it is the SAME bytes
+	if oW.Buffer().Peek(10, 4) != "WXYZ"
+		nBad++ ? "  FAIL: View.Buffer() is not the owning buffer"
+	ok
+
+	### 6. out-of-range Sub and Peek must RAISE, not return adjacent heap
+	nRaised = 0
+	try  oW.Sub(3, 5)   catch nRaised++ done      # 3+5 > 4
+	try  oW.Sub(-1, 2)  catch nRaised++ done
+	try  oW.Peek(0, 99) catch nRaised++ done
+	try  oW.Peek(-1, 1) catch nRaised++ done
+	if nRaised != 4
+		nBad++ ? "  FAIL: only " + nRaised + " of 4 illegal view accesses raised"
+	ok
+
+	### 7. a view held ACROSS Grow -- the owner reallocates under a live window
+	oG = RppBufferFromString("0123456789")
+	oLive = oG.View(2, 4)
+	cBefore = oLive.Str()
+	oG.Grow(64)
+	cAfter = oLive.Str()
+	if cAfter != cBefore
+		nBad++ ? "  FAIL: view across Grow read [" + cAfter + "] want [" + cBefore + "]"
+	ok
+	# and it must still be a window afterwards, not a snapshot
+	oG.Poke(2, "abcd")
+	if oLive.Str() != "abcd"
+		nBad++ ? "  FAIL: view stopped tracking after Grow"
+	ok
+
+	? "  RppView differential                : " + nSpans +
+	  " spans, Sub chains, window and Grow checks"
+	return nBad
+
+### ---- RppSandbox: the two traps F-3 names, and the ones nothing tested ----
+###
+### `ring_state_findvar` folds identifiers to lower case and reports ABSENCE
+### as the NUMBER 0 -- indistinguishable from a variable that holds 0. Both
+### traps are closed inside RppSandbox; nothing until now checked that they
+### stayed closed, and SetVar had no coverage at all.
+func DifferentialSandbox
+	nBad = 0
+	nChecks = 0
+
+	oS = RppSandbox()
+
+	### 1. a variable that genuinely HOLDS 0 must read back as 0, not as absent.
+	### This is the exact F-3 confusion, and it is the one worth a gate.
+	oS.Run("nZero = 0")
+	bRaised = FALSE
+	nGot = -1
+	try
+		nGot = oS.Var("nZero")
+	catch
+		bRaised = TRUE
+	done
+	if bRaised
+		nBad++ ? "  FAIL: a variable holding 0 was reported as absent (F-3)"
+	but nGot != 0
+		nBad++ ? "  FAIL: nZero read back as " + nGot
+	ok
+	nChecks++
+
+	### 2. an absent name must RAISE, not quietly return 0
+	bRaised = FALSE
+	try
+		oS.Var("nNeverSet")
+	catch
+		bRaised = TRUE
+	done
+	if not bRaised nBad++ ? "  FAIL: an absent variable did not raise" ok
+	nChecks++
+
+	### 3. Has() must agree with Var() on both of those
+	if not oS.Has("nZero")     nBad++ ? "  FAIL: Has() missed a live 0" ok
+	if oS.Has("nNeverSet")     nBad++ ? "  FAIL: Has() invented a variable" ok
+	nChecks++
+
+	### 4. the case fold: Ring stores identifiers lower, the caller writes camel
+	oS.Run("nTotalCount = 42")
+	if oS.Var("nTotalCount") != 42 nBad++ ? "  FAIL: camelCase name not found" ok
+	if oS.Var("ntotalcount") != 42 nBad++ ? "  FAIL: lower name not found" ok
+	if oS.Var("NTOTALCOUNT") != 42 nBad++ ? "  FAIL: upper name not found" ok
+	nChecks++
+
+	### 5. SetVar -- never exercised by any gate before this one
+	oS.SetVar("cGreeting", "hello")
+	oS.Run("cEcho = cGreeting + ' world'")
+	if oS.Var("cEcho") != "hello world"
+		nBad++ ? "  FAIL: SetVar value did not reach the sandbox: [" + oS.Var("cEcho") + "]"
+	ok
+	oS.SetVar("nNum", 7)
+	oS.Run("nDouble = nNum * 2")
+	if oS.Var("nDouble") != 14 nBad++ ? "  FAIL: numeric SetVar round-trip" ok
+	nChecks++
+
+	### 6. containment: an error inside must NOT kill this process (F-13).
+	### A RUNTIME error on purpose -- Quiet() suppresses those. Scanner errors
+	### print regardless, which F-13 measured and example 07 records, so using
+	### one here would make a passing gate look like a failing one.
+	oS.Quiet()
+	oS.Run("callSomethingThatDoesNotExist()")
+	oS.Run("nAfterError = 99")
+	if oS.Var("nAfterError") != 99
+		nBad++ ? "  FAIL: sandbox unusable after an error inside it"
+	ok
+	nChecks++
+
+	### 7. two sandboxes are isolated from each other, and from the host
+	nHostOnly = 12345
+	oT = RppSandbox()
+	oT.Run("nIsolated = 1")
+	if oS.Has("nIsolated")   nBad++ ? "  FAIL: state leaked between sandboxes" ok
+	if oT.Has("nZero")       nBad++ ? "  FAIL: state leaked the other way" ok
+	if oT.Has("nHostOnly")   nBad++ ? "  FAIL: the host's own variable was visible" ok
+	nChecks++
+
+	### 8. Free() twice is safe, and using a freed sandbox raises rather than crashes
+	oT.Free()
+	if oT.IsOpen() nBad++ ? "  FAIL: IsOpen() true after Free()" ok
+	oT.Free()                                   # must not crash
+	bRaised = FALSE
+	try
+		oT.Run("x = 1")
+	catch
+		bRaised = TRUE
+	done
+	if not bRaised nBad++ ? "  FAIL: Run() on a freed sandbox did not raise" ok
+	nChecks++
+
+	oS.Free()
+	? "  RppSandbox differential             : " + nChecks +
+	  " checks incl. the F-3 zero-versus-absent trap and SetVar"
+	return nBad
+
+### ---- RppIndexed: the phase must change the SPEED and nothing else ----
+###
+### `ringvm_genarray` is an accelerator, so the only correctness question is
+### whether an indexed read ever differs from a plain one. Nothing compared
+### them before. The other half is honesty: Release() reports whether the
+### index survived, and Caveat() admits the one case it CANNOT see -- sort()
+### and reverse() free the items array without changing len(). That admission
+### is only worth having if it is true, so it is asserted here.
+func DifferentialIndexed
+	nBad = 0
+
+	### 1. read equivalence: same list, same order of reads, indexed or not
+	nN = 2000
+	aPlain = list(nN)
+	for i = 1 to nN aPlain[i] = "row-" + i next
+	aSame = list(nN)
+	for i = 1 to nN aSame[i] = "row-" + i next
+
+	oIdx = RppIndexed(aSame)
+	nDiff = 0
+	nRead = 0
+	for k = 1 to 4000
+		nAt = ((k * 7919) % nN) + 1
+		if aSame[nAt] != aPlain[nAt] nDiff++ ok
+		nRead++
+	next
+	if nDiff > 0
+		nBad++ ? "  FAIL: " + nDiff + " indexed reads differed from plain reads"
+	ok
+	if not oIdx.Applied()
+		nBad++ ? "  FAIL: a 2000-item list declined the index: " + oIdx.Why()
+	ok
+	if not oIdx.Release(aSame)
+		nBad++ ? "  FAIL: Release() reported the index invalid after reads only"
+	ok
+
+	### 2. below the floor it must DECLINE, and say so rather than pretend
+	aTiny = list(8)
+	for i = 1 to 8 aTiny[i] = i next
+	oT = RppIndexed(aTiny)
+	if oT.Applied()
+		nBad++ ? "  FAIL: an 8-item list took the index (floor is " +
+		         RPP_INDEX_MIN_SIZE + ")"
+	ok
+	if len(oT.Why()) = 0 nBad++ ? "  FAIL: Why() was empty on a declined phase" ok
+	if oT.Release(aTiny)
+		nBad++ ? "  FAIL: Release() claimed validity for a phase never applied"
+	ok
+
+	### 3. one append during the phase must be REPORTED, not hidden (F-9)
+	aGrow = list(200)
+	for i = 1 to 200 aGrow[i] = i next
+	RppAdviceClear()
+	oG = RppIndexed(aGrow)
+	aGrow + 999                                  # the single add that frees the array
+	if oG.Release(aGrow)
+		nBad++ ? "  FAIL: Release() said valid after an append"
+	ok
+	if len(RPP_ADVICE) = 0
+		nBad++ ? "  FAIL: an append during the phase produced no advice"
+	ok
+
+	### 4. the admission in Caveat() must be TRUE: sort() changes the items
+	### array without changing len(), so Release() cannot detect it and must
+	### not claim it can. This asserts the LIMIT, not a capability.
+	aSort = list(300)
+	for i = 1 to 300 aSort[i] = 301 - i next
+	oS2 = RppIndexed(aSort)
+	aSort = sort(aSort)
+	bClaimed = oS2.Release(aSort)
+	if not bClaimed
+		nBad++ ? "  FAIL: Release() detected a sort -- Caveat() now overstates the limit"
+	ok
+	if len(oS2.Caveat()) = 0 nBad++ ? "  FAIL: Caveat() is empty" ok
+	# and the sorted data must still be correct, whatever the index thinks
+	if aSort[1] != 1 or aSort[300] != 300
+		nBad++ ? "  FAIL: sort() produced wrong data under an open phase"
+	ok
+
+	### 5. RppRows -- the 2D idiom, and its refusal on bad dimensions
+	aR = RppRows(4, 5)
+	if len(aR) != 4 or len(aR[1]) != 5 nBad++ ? "  FAIL: RppRows dimensions" ok
+	nRaised = 0
+	try RppRows(0, 5)  catch nRaised++ done
+	try RppRows(3, -1) catch nRaised++ done
+	if nRaised != 2 nBad++ ? "  FAIL: RppRows accepted a bad dimension" ok
+
+	? "  RppIndexed differential            : " + nRead +
+	  " indexed-vs-plain reads, floor, append and the sort caveat"
+	return nBad
+
 func main
 	? "Ring++ differential gate — Ring++ against a plain-Ring model"
 	? ""
@@ -131,6 +432,9 @@ func main
 
 	### Named shapes first: a crash here is a regression, not a discovery.
 	nShapeBad = RegressionShapes()
+	nShapeBad += DifferentialViews()
+	nShapeBad += DifferentialSandbox()
+	nShapeBad += DifferentialIndexed()
 	if nShapeBad = 0
 		? "  named regression shapes            : all pass"
 	else

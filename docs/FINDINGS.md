@@ -1236,6 +1236,31 @@ combination the fuzz reached by luck after ~13,000 operations. Luck is
 not a regression test, so the shape is now a named case that runs before
 any random one.
 
+### F-33. `ring_state_setvar` **assigns**; it cannot create, and neither can `ring_state_newvar`
+
+Measured 2026-08-25 while extending the differential gate to `RppSandbox`:
+
+| call | result |
+|---|---|
+| `ring_state_setvar(st, "cNew", "hello")` — name never seen | **`Error (R6) : Variable is required`** |
+| the same after `ring_state_runcode(st, "cNew = ''")` | works |
+| `ring_state_newvar(st, "cFresh")` | **the same R6** |
+
+So the sub-state API can *assign to* a variable and cannot *introduce* one,
+and the failure arrives as Ring's own R6 raised from inside the C function —
+naming neither the variable nor the reason, from a place the caller cannot
+see.
+
+That collided with what `RppSandbox.SetVar` is **for**: the documented use is
+"set a variable before running code that reads it", where absence is the
+normal case, not an error. `SetVar` now declares the name first and then
+assigns. Only the **name** travels through `runcode`, never the value, and
+only after it is checked to be a plain identifier — so a crafted name cannot
+smuggle in a statement, and a value never has to be escaped or quoted.
+
+The reference page had promised this behaviour before the code could do it.
+Nothing had caught that because no gate had ever called `SetVar`.
+
 ### F-32. Ring's `and` / `or` **do** short-circuit — and that protects an index
 
 Not documented anywhere this project could find, and load-bearing for
