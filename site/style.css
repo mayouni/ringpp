@@ -172,6 +172,16 @@ pre.code .err { color: var(--error); font-weight: 600; }
     white-space: nowrap;
 }
 
+/* An article is ONE long column, unlike the rest of the site where every
+   heading sits in its own <section> and inherits 4.5rem of padding above it.
+   Nothing supplies that here, so h2 kept margin-top:0 and headings landed
+   flush against whatever came before -- measured at 0px above a table and a
+   card grid, 32px elsewhere, which is only the paragraph's own bottom margin.
+   The space above a heading is what tells a reader a new part has started. */
+article h2 { margin-top: 3.4rem; margin-bottom: .9rem; }
+article h2:first-child { margin-top: 0; }
+article > p + h2 { margin-top: 3rem; }
+
 article pre {
     width: max-content;
     min-width: 100%;
