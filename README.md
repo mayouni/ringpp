@@ -27,17 +27,16 @@ the library's idioms are what the checker recommends.
 
 ## Why this exists
 
-Ring++ came out of real projects, not a lab. Teams who liked Ring and wanted
-to keep using it — for a server talking to a browser, for work that has to
-survive a dropped connection, for datasets too large to shrug off — kept
-hitting the same three walls: some operations on big data were slower than
-they should be, nothing checked a large codebase before it ran, and shipping
-usually meant asking someone to install a compiler, or a GUI toolkit whose
-licence terms were their own kind of risk. Separately, the engineering team
-of a bank running Ring in production tested it against their larger projects
-and came back with the same second concern: **type safety at scale**. Ring++
-answers each one directly, without leaving Ring and without adding a
-dependency to it.
+Ring++ exists to get three things in my own real-world Ring projects,
+without ever leaving Ring: **performant code, static safety, and deployment
+flexibility**. The goal became concrete, not academic, from two directions
+at once. A customer bank in Niger, running Ring in production, liked the
+language — but asked for exactly those three things before trusting it with
+critical projects. And [Softanza](https://github.com/mayouni/stzlib), the
+base library I've been building in Ring alongside Ring++, has grown past
+**300,000 lines** — a size where performance, safety and deployment stop
+being nice-to-haves and start being how a codebase survives. Ring++ answers
+all three, without leaving Ring and without adding a dependency to it.
 
 ## Install
 
@@ -96,7 +95,6 @@ deployment is a repository setting only the owner can flip.
 | **[site/reference.html](site/reference.html)** | The library, one page — every `RppBuffer`, `RppView`, `RppIndexed` and `RppSandbox` method, with a real example for each. |
 | **[docs/CLI.md](docs/CLI.md)** | `ringpp` — every command, real captured output, no compiler needed for any of it. |
 | **[docs/CASE-TYPE-SAFETY.md](docs/CASE-TYPE-SAFETY.md)** | **What the checker actually found** — two dead functions in Ring's own standard library, two live bugs in Softanza, and the three false positives it produced along the way. |
-| **[docs/SIBLINGS.md](docs/SIBLINGS.md)** | What running Ring++ against RingScript, RingServ and MicroRing actually found — real code, real gaps in Ring++'s own claims caught along the way, and where Ring++ honestly does not apply. |
 | **[docs/VM-CONTRACT.md](docs/VM-CONTRACT.md)** | The abstract interface: exactly what Ring++ needs from the VM, as observable behaviours, probe-checked on every load — and a proposed contract both parties could agree on. |
 | **[docs/FINDINGS.md](docs/FINDINGS.md)** | What the Ring VM actually does, measured. Read this first — two of its numbers killed the design I set out to write. |
 | **[docs/DESIGN.md](docs/DESIGN.md)** | The library half: what Ring++ is, the layer map, the surface, safety, upgrades, `myctiger`, Softanza, and the risks. |
@@ -254,3 +252,10 @@ credited to both.
 **The tree-sitter authors** — for the runtime, also vendored under MIT
 (`vendor/tree-sitter/`). Full third-party licence list in
 [`LICENSE`](LICENSE).
+
+**Andrew Kelley and the [Zig](https://ziglang.org) team** — for the
+toolchain the CLI is built with. Zig compiles `ringpp` into one binary per
+platform and is what makes `ringpp build`'s five-platform cross-compilation
+possible from a single machine. The Zig *source* of the CLI ships in this
+repository; the Zig *compiler* is asked of no user — only of someone who
+wants to adapt the CLI itself.

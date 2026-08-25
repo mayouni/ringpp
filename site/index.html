@@ -17,8 +17,6 @@
     <a href="performance.html">Performant code</a>
     <a href="checker.html">Static analysis</a>
     <a href="build.html">Native build</a>
-    <a href="reference.html">Reference</a>
-    <a href="blog.html">Blog</a>
     <a href="faq.html">Q&amp;A</a>
     <a class="repo" href="https://github.com/mayouni/ringpp" target="_blank" rel="noopener" aria-label="Ring++ on GitHub"><svg viewBox="0 0 16 16" width="22" height="22" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg></a>
     <a class="cta" href="https://github.com/mayouni/ringpp" target="_blank" rel="noopener">Get it <span class="newtab" aria-hidden="true">&#8599;</span></a>
@@ -28,10 +26,11 @@
 <header class="hero wrap">
   <img class="logo" src="ringpp-logo.jpg" alt="Ring++">
   <h1>Ring, faster and safer —<br>without ever leaving <em>Ring</em>.</h1>
-  <p class="sub">You don't need to know what a pointer is to get the value of one.
-  Ring++ is a small library and a CLI, both free of anything but Ring itself, and
-  each one is also a window onto how Ring's own creator, Mahmoud Fayed, built a
-  small, friendly language over a large and unforgiving one underneath.</p>
+  <p class="sub">Ring++ is a dependency-free library and CLI for Ring — nothing
+  else to install, nothing else to learn. <b>Performant code</b> that skips a
+  real, measured copying cost. <b>Static analysis</b> that reads what Ring's
+  own parser already accepts and quietly discards. <b>Native builds</b> with
+  no C compiler, ever.</p>
   <div class="badges">
     <span class="badge">version 0.1.0</span>
     <span class="badge">dependency-free</span>
@@ -46,14 +45,18 @@
 
 <section class="wrap narrow">
   <h2>Why this exists</h2>
-  <p class="lead">Ring++ came out of real projects, not a lab. Teams who liked Ring
-  and wanted to keep using it — for a server talking to a browser, for work that has
-  to survive a dropped connection, for datasets too large to shrug off — kept
-  hitting the same three walls: some operations on big data were slower than they
-  should be, nothing checked a large codebase before it ran, and shipping usually
-  meant asking someone to install a compiler, or a GUI toolkit whose licence terms
-  were their own kind of risk. Ring++ answers each one directly, without leaving
-  Ring and without adding a dependency to it.</p>
+  <p class="lead">Ring++ exists to get three things in my own real-world Ring
+  projects, without ever leaving Ring: <b>performant code, static safety, and
+  deployment flexibility</b>. The goal became concrete, not academic, from two
+  directions at once. A customer bank in Niger, running Ring in production,
+  liked the language — but asked for exactly those three things before
+  trusting it with critical projects. And <a
+  href="https://github.com/mayouni/stzlib" target="_blank"
+  rel="noopener">Softanza</a>, the base library I've been building in Ring
+  alongside Ring++, has grown past <b>300,000 lines</b> — a size where
+  performance, safety and deployment stop being nice-to-haves and start being
+  how a codebase survives. Ring++ answers all three, without leaving Ring and
+  without adding a dependency to it.</p>
 </section>
 
 <section class="wrap">
@@ -96,7 +99,8 @@
   <a href="checker.html">that's pillar two</a>. And Ring can already turn a
   program into bytecode with no compiler in sight — <a href="build.html">that's
   pillar three</a>. None of this required changing Ring. It required noticing
-  what was already there.</p>
+  what was already there — <a href="design.html">the full design story, and
+  the contract that keeps it working as Ring evolves</a>.</p>
 </section>
 
 <section class="wrap">
@@ -142,22 +146,24 @@
 </section>
 
 <section class="wrap">
-  <h2>One thesis, three siblings</h2>
+  <h2>One thesis, sibling projects</h2>
   <p class="lead">Ring++ is one of several Ring foundations from the same author, each
   standing alone and each dependency-free except for what it names and vendors itself.
-  <a href="https://github.com/mayouni/ringpp/blob/main/docs/SIBLINGS.md">What running
-  Ring++ against all three actually found</a> — real code, and two mistakes in Ring++'s
-  own published claims, caught along the way.</p>
+  What running Ring++ against them actually found — real code, and two mistakes in
+  Ring++'s own published claims, caught along the way.</p>
   <div class="actions" style="justify-content:flex-start">
     <a class="btn ghost" href="https://mayouni.github.io/ringscript/" target="_blank" rel="noopener">RingScript — Ring in the browser <span class="newtab" aria-hidden="true">&#8599;</span></a>
     <a class="btn ghost" href="https://mayouni.github.io/ringserv/" target="_blank" rel="noopener">RingServ — Ring on the server <span class="newtab" aria-hidden="true">&#8599;</span></a>
-    <a class="btn ghost" href="https://github.com/mayouni/microring" target="_blank" rel="noopener">MicroRing — Ring on the device <span class="newtab" aria-hidden="true">&#8599;</span></a>
+    <span class="badge">MicroRing — Ring on the device (upcoming)</span>
   </div>
 </section>
 
 <footer>
   <div class="wrap">
     <span>Ring++ 0.1.0 — MIT</span>
+    <a href="reference.html">Reference</a>
+    <a href="design.html">Design</a>
+    <a href="blog.html">Blog</a>
     <a href="https://github.com/mayouni/ringpp/tree/main/docs" target="_blank" rel="noopener">Documentation <span class="newtab" aria-hidden="true">&#8599;</span></a>
     <a href="https://ring-lang.github.io/" target="_blank" rel="noopener">Ring language <span class="newtab" aria-hidden="true">&#8599;</span></a>
     <a href="https://github.com/mayouni/stzlib" target="_blank" rel="noopener">Softanza <span class="newtab" aria-hidden="true">&#8599;</span></a>

@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Inside Ring's design — Ring++</title>
+<meta name="description" content="Three doors already open in Ring's own design, and the contract that keeps Ring++ working as Ring evolves — the VM-CONTRACT, checked in full on every load.">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="style.css?v=0.3.0">
+</head>
+<body>
+
+<nav>
+  <div class="wrap">
+    <a class="brand" href="index.html"><img src="favicon.svg" alt="">Ring<span>++</span></a>
+    <a href="start.html">Start here</a>
+    <a href="performance.html">Performant code</a>
+    <a href="checker.html">Static analysis</a>
+    <a href="build.html">Native build</a>
+    <a href="faq.html">Q&amp;A</a>
+    <a class="repo" href="https://github.com/mayouni/ringpp" target="_blank" rel="noopener" aria-label="Ring++ on GitHub"><svg viewBox="0 0 16 16" width="22" height="22" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg></a>
+    <a class="cta" href="https://github.com/mayouni/ringpp" target="_blank" rel="noopener">Get it <span class="newtab" aria-hidden="true">&#8599;</span></a>
+  </div>
+</nav>
+
+<header class="hero wrap" style="padding-top:2.6rem">
+  <h1>The design underneath<br>the three pillars.</h1>
+  <p class="sub">None of what Ring++ does is a new idea. It's three deliberate
+  choices already built into Ring, read closely enough to use on purpose — and
+  a promise about how Ring++ keeps working when Ring changes.</p>
+</header>
+
+<section class="wrap narrow">
+  <h2>A small, opinionated surface over something vast</h2>
+  <p class="lead">Ring is a small, friendly language sitting on top of a
+  large, unforgiving one. Its own C source is not simple — hundreds of
+  thousands of lines, memory managed by hand, every mistake a segfault with
+  no message. Almost none of that reaches a Ring programmer. That gap — a
+  small surface hiding something vast — is Ring's central design decision,
+  made once, deliberately, years before Ring++ existed. Ring++ doesn't add
+  anything new to that shape. It walks through three doors that were already
+  left open in it.</p>
+</section>
+
+<section class="wrap">
+  <h2>Door one — a copy is the safe default, until it doesn't need to be</h2>
+  <p class="lead">Somewhere in Ring's C source, one macro decides whether a
+  value crossing into a function is handed over by address or copied whole:
+  <code>RING_VM_STACK_PUSHCVAR</code>, <code>vm.h:230</code>. An object
+  crosses by reference. A string is copied, in full, every time.</p>
+  <p class="lead">That split is not an oversight — it's the conservative
+  choice, made correctly. Ring's objects are reference-counted: the runtime
+  always knows how many places hold one, and can safely hand out its address
+  because it knows exactly when the last reference goes away. A plain string
+  carries none of that bookkeeping, so copying it is the one answer that can
+  never surprise anyone, at the cost of a copy nobody asked for once that
+  string gets large.</p>
+  <p class="lead">Ring++'s <code>RppBuffer</code> doesn't fight that rule —
+  it moves the declaration <em>"this needs to be held, not copied"</em> into
+  the machinery Ring already trusts for exactly that: an object. No VM
+  change, no new syntax, one class. <a href="performance.html">The measured
+  difference is 75&times;</a>, and where it loses is stated just as
+  plainly.</p>
+</section>
+
+<section class="wrap">
+  <h2>Door two — a channel built to be extended, then left waiting</h2>
+  <p class="lead">Deep in Ring's parser (<code>stmt.c</code>) sits a comment
+  that just says <code>Support Type Identifier</code> — the exact line where
+  the parser reads a type in front of a parameter, like
+  <code>int func Sum(int x, int y)</code>, and keeps parsing rather than
+  rejecting it as a syntax error. Nothing was ever wired to it. It costs
+  nothing and does nothing, and it has been true for years.</p>
+  <p class="lead">Read as a design choice, that's a language leaving a hook
+  for a future it doesn't have to build yet — syntax an ecosystem can grow
+  into, without the language itself needing to change first.
+  <code>ringpp check</code> is what finally walks through that specific,
+  dated hook: it reads the same channel Ring's own scanner already validates,
+  and treats what was silently accepted as meaning something. <a
+  href="checker.html">What it found</a> by doing that: two functions in
+  Ring's own shipped standard library that have never worked.</p>
+</section>
+
+<section class="wrap">
+  <h2>Door three — two ways out, and one was already built</h2>
+  <p class="lead">Run <code>ring yourfile.ring -go</code> on stock Ring today
+  and it writes <code>yourfile.ringo</code> — bytecode, no C compiler
+  involved, ever. Run <code>ring yourfile.ringo</code> and it just runs. This
+  is how Ring itself starts up fast; it has always been true. Ring's own
+  packaging tool, <code>ring2exe</code>, took the <em>other</em> fork from
+  there — writing a C file and handing it to a real compiler.</p>
+  <p class="lead"><code>ringpp build</code> takes the fork that was already
+  open: it keeps the bytecode Ring already knows how to write, and attaches a
+  small prebuilt copy of Ring itself that knows how to run it. <a
+  href="build.html">Nothing new was invented</a> — one command, wrapped
+  around a door that was standing open the whole time.</p>
+</section>
+
+<section class="wrap narrow">
+  <h2>What ties the three together</h2>
+  <p class="lead">Same pattern, three times: a capability Ring's own design
+  already has, sitting unused because nothing pointed at it yet. That's the
+  actual curriculum here — not Ring++'s implementation, but the habit of
+  reading a language's internals closely enough to notice what it already
+  lets you do, and building the smallest possible thing that makes doing it
+  ordinary.</p>
+</section>
+
+<section class="wrap">
+  <h2>The contract — staying stable as Ring evolves</h2>
+  <p class="lead">Ring++ depends on Ring's internals, and internals change —
+  that's normal for any language under active development. The standing rule
+  here is <b>never fight the VM</b>: no fork, no C patch, no shadow allocator.
+  Instead, Ring++ writes down, in one document, the <em>complete</em> list of
+  what it actually relies on — not implementation details, not struct
+  layouts, not the pool manager. Everything outside that list stays entirely
+  free to change without asking anyone, because Ring++ never touches it.</p>
+  <div class="stats">
+    <div><div class="num">~20</div><div class="what">registered functions named — the whole dependency, nothing implicit</div></div>
+    <div><div class="num">9</div><div class="what">observable behaviours, checked, not assumed</div></div>
+    <div><div class="num">&lt;1s</div><div class="what">to verify all of them, every time <code>ringpp.ring</code> loads</div></div>
+  </div>
+  <p class="lead" style="margin-top:1.6rem"><a
+  href="https://github.com/mayouni/ringpp/blob/main/docs/VM-CONTRACT.md">The
+  contract itself</a> is machine-checked by <code>rpp/probe.ring</code> on
+  every load — not "does this function exist" but "does it still behave the
+  way Ring++ assumes." A few rows are <b>HARD</b>: the pointer arithmetic the
+  fast path is entirely built on. If one of those ever changes, using it
+  raises immediately, by name, rather than silently corrupting memory. A few
+  are <b>soft</b> — <code>ringvm_genarray</code>, sub-states — and degrade to
+  a slower, pure-Ring path when they don't hold, saying so. The rest are
+  informational.</p>
+  <p class="lead">The point isn't paranoia, it's honesty: if a future Ring
+  changes one of these specific, named behaviours, the probe says exactly
+  which claim broke, in words, the moment the library loads — instead of
+  someone finding out through corrupted data three weeks later.</p>
+</section>
+
+<section class="wrap narrow">
+  <h2>A contract both parties could sign</h2>
+  <p class="lead">The long-term intent, drafted but deliberately not sent —
+  findings about Ring go to the Ring Google Group, posted by the maintainer
+  himself, after review, never as a pull request: propose this exact list as
+  a two-way agreement. A small, named surface treated as
+  observable-and-stable — or at least flagged in release notes before it
+  changes — in exchange for Ring++ promising to depend on nothing outside
+  it. No forking, no patching, no reaching past the documented API into C
+  internals, ever.</p>
+  <p class="lead">It's the same shape as Ring's own relationship to C: a
+  small, opinionated surface over something vast, kept honest by checking it
+  rather than assuming it holds.</p>
+</section>
+
+<section class="wrap narrow">
+  <h2>Next</h2>
+  <div class="actions" style="justify-content:flex-start">
+    <a class="btn primary" href="https://github.com/mayouni/ringpp/blob/main/docs/VM-CONTRACT.md" target="_blank" rel="noopener">Read the full contract <span class="newtab" aria-hidden="true">&#8599;</span></a>
+    <a class="btn ghost" href="reference.html">Library reference</a>
+    <a class="btn ghost" href="blog.html">Blog</a>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <span>Ring++ 0.1.0 — MIT</span>
+    <a href="reference.html">Reference</a>
+    <a href="design.html">Design</a>
+    <a href="blog.html">Blog</a>
+    <a href="https://github.com/mayouni/ringpp/tree/main/docs" target="_blank" rel="noopener">Documentation <span class="newtab" aria-hidden="true">&#8599;</span></a>
+    <a href="https://ring-lang.github.io/" target="_blank" rel="noopener">Ring language <span class="newtab" aria-hidden="true">&#8599;</span></a>
+    <a href="https://github.com/mayouni/stzlib" target="_blank" rel="noopener">Softanza <span class="newtab" aria-hidden="true">&#8599;</span></a>
+    <span class="sp">a Softanza project by Mansour Ayouni</span>
+  </div>
+</footer>
+
+</body>
+</html>
