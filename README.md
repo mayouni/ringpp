@@ -2,7 +2,7 @@
 
 # Ring++
 
-**Ring, faster and safer — without ever leaving Ring.** A dependency-free
+**Ring, faster, safer and more portable — without ever leaving Ring.** A dependency-free
 library and a one-binary CLI, each one also a window onto how Mahmoud Fayed
 built a small, friendly language over a large and unforgiving one underneath.
 
