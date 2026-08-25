@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Why Ring++ exists — Ring++ Blog</title>
+<meta name="description" content="Not a rewrite, not a wrapper around a faster language — three walls that kept showing up in real projects, and three doors already open in Ring's own design.">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="style.css?v=0.3.0">
+</head>
+<body>
+
+<nav>
+  <div class="wrap">
+    <a class="brand" href="index.html"><img src="favicon.svg" alt="">Ring<span>++</span></a>
+    <a href="start.html">Start here</a>
+    <a href="performance.html">Performant code</a>
+    <a href="checker.html">Static analysis</a>
+    <a href="build.html">Native build</a>
+    <a href="reference.html">Reference</a>
+    <a href="blog.html" class="active">Blog</a>
+    <a href="faq.html">Q&amp;A</a>
+    <a class="repo" href="https://github.com/mayouni/ringpp" target="_blank" rel="noopener" aria-label="Ring++ on GitHub"><svg viewBox="0 0 16 16" width="22" height="22" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg></a>
+    <a class="cta" href="https://github.com/mayouni/ringpp" target="_blank" rel="noopener">Get it <span class="newtab" aria-hidden="true">&#8599;</span></a>
+  </div>
+</nav>
+
+<header class="wrap narrow" style="padding-top:2.6rem">
+  <p style="margin:0 0 .5rem"><a href="blog.html" style="color:var(--accent); text-decoration:none">&larr; Blog</a></p>
+  <h1 style="font-size:clamp(1.9rem, 5vw, 2.5rem)">Why Ring++ exists</h1>
+  <p style="color:var(--muted); font-size:var(--floor); margin:.4rem 0 0">25 August 2026 &middot; Mansour Ayouni</p>
+</header>
+
+<article class="wrap narrow">
+  <p class="lead">I didn't set out to build a new language, or a fork, or an
+  extension. I set out to keep using Ring.</p>
+
+  <p class="lead">Over the last couple of years, working with Ring in real,
+  customer-facing projects, the same three walls kept showing up. Some
+  operations on big data were slower than they had any reason to be — not
+  because Ring is slow, but because of one specific thing it does on every
+  function call, which I only found by measuring, not guessing. Nothing
+  checked a large codebase before it ran, so a mistake in a rarely-hit branch
+  surfaced in production instead of in a five-second check. And shipping
+  usually meant asking whoever ran the software to install a compiler — or,
+  worse, a GUI toolkit whose licence terms were a business risk in their own
+  right, decided against before Ring++ existed.</p>
+
+  <p class="lead">None of that is a complaint about Ring. It's closer to the
+  opposite: every one of the three walls turned out to be a place where
+  Ring's own design already had the answer, sitting unused. Objects already
+  cross function calls by reference — <a href="performance.html">Ring++'s
+  <code>RppBuffer</code></a> just extends that same behaviour to bytes.
+  Ring's parser already reads and accepts type annotations like
+  <code>int func Sum(int x, int y)</code> — it just throws the answer away,
+  and <a href="checker.html"><code>ringpp check</code></a> reads the same
+  channel and remembers it. And <code>ring yourfile.ring -go</code> already
+  writes bytecode with no C compiler in sight —
+  <a href="build.html"><code>ringpp build</code></a> is a runtime stub
+  attached to bytecode Ring already knew how to write.</p>
+
+  <p class="lead">There was a fourth, separate signal, from a different
+  direction: the engineering team of a bank evaluating Ring for production
+  use came back impressed by the language, with one concern left standing —
+  type safety at scale. That's the same static-analysis wall, reached from an
+  entirely different project.</p>
+
+  <p class="lead">So Ring++ isn't a rewrite, and it isn't a wrapper around
+  some other, faster language. It's closer to noticing three doors in Ring's
+  own design that nobody had walked through yet, and building the CLI and
+  the library needed to make walking through them ordinary. Every rule ships
+  with a number, and every number ships with the pattern it doesn't help —
+  because the honest version of "faster" always has a shape it doesn't
+  fit.</p>
+
+  <p class="lead">If you're curious what any of this looks like in practice,
+  performance, static analysis and native build each have their own page,
+  each with real code and a real measurement. And if you just want the whole
+  library's surface in one place, <a href="reference.html">the reference
+  page</a> has it.</p>
+</article>
+
+<section class="wrap narrow">
+  <h2>Next</h2>
+  <div class="actions" style="justify-content:flex-start">
+    <a class="btn primary" href="performance.html">Performant code</a>
+    <a class="btn ghost" href="checker.html">Static analysis</a>
+    <a class="btn ghost" href="build.html">Native build</a>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <span>Ring++ 0.1.0 — MIT</span>
+    <a href="https://github.com/mayouni/ringpp/tree/main/docs" target="_blank" rel="noopener">Documentation <span class="newtab" aria-hidden="true">&#8599;</span></a>
+    <a href="https://ring-lang.github.io/" target="_blank" rel="noopener">Ring language <span class="newtab" aria-hidden="true">&#8599;</span></a>
+    <a href="https://github.com/mayouni/stzlib" target="_blank" rel="noopener">Softanza <span class="newtab" aria-hidden="true">&#8599;</span></a>
+    <span class="sp">a Softanza project by Mansour Ayouni</span>
+  </div>
+</footer>
+
+</body>
+</html>

@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Performant code — Ring++</title>
+<meta name="description" content="The same loop, 75x faster, by changing what you hold rather than how you write the loop. One asymmetry in Ring's own design, made visible and usable.">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="style.css?v=0.3.0">
+</head>
+<body>
+
+<nav>
+  <div class="wrap">
+    <a class="brand" href="index.html"><img src="favicon.svg" alt="">Ring<span>++</span></a>
+    <a href="start.html">Start here</a>
+    <a href="performance.html" class="active">Performant code</a>
+    <a href="checker.html">Static analysis</a>
+    <a href="build.html">Native build</a>
+    <a href="reference.html">Reference</a>
+    <a href="blog.html">Blog</a>
+    <a href="faq.html">Q&amp;A</a>
+    <a class="repo" href="https://github.com/mayouni/ringpp" target="_blank" rel="noopener" aria-label="Ring++ on GitHub"><svg viewBox="0 0 16 16" width="22" height="22" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg></a>
+    <a class="cta" href="https://github.com/mayouni/ringpp" target="_blank" rel="noopener">Get it <span class="newtab" aria-hidden="true">&#8599;</span></a>
+  </div>
+</nav>
+
+<header class="hero wrap" style="padding-top:2.6rem">
+  <h1>Same loop. Same result.<br><em>75&times;</em> faster.</h1>
+  <p class="sub">Nothing about the loop changes. What changes is what you hand it —
+  and that one choice is the whole of pillar one.</p>
+</header>
+
+<section class="wrap narrow">
+  <h2>A question you've probably never had to ask</h2>
+  <p class="lead">In Ring, when you pass a list into a function, Ring hands over
+  its address — instant, no matter how big the list is. When you pass a
+  <b>string</b>, Ring copies the whole thing, every time, before the function's
+  first line even runs. You've never had to think about this, because most
+  strings are short enough that the copy is free. The moment a "string" is
+  really a buffer — a document, a file you're building, a big block of bytes you
+  read once and touch a thousand times — that copy stops being free, and nothing
+  in the code you'd naturally write tells you so.</p>
+</section>
+
+<section class="wrap">
+  <h2>Watch it happen</h2>
+  <p class="lead">A helper function that reads one byte out of a 1&nbsp;MB
+  buffer, called 1,500 times — a parser, a validator, anything with a loop and
+  a helper. The helper looks cheap: it reads one byte. The two versions below
+  are otherwise identical.</p>
+
+  <div class="compare">
+    <div>
+      <span class="label"><b>What most Ring code does</b> <span class="tag">copies every call</span></span>
+<pre class="code"><span class="k">func</span> RawWay cData, nCalls, nSize
+    <span class="c"># cData is a plain string. Ring copies the</span>
+    <span class="c"># whole megabyte onto the stack, on every call.</span>
+    nSum = <span class="n">0</span>
+    <span class="k">for</span> i = <span class="n">1</span> <span class="k">to</span> nCalls
+        nSum += ByteAtRaw(cData, (i * <span class="n">7919</span>) % (nSize - <span class="n">1</span>))
+    <span class="k">next</span>
+    <span class="k">return</span> nSum</pre>
+    </div>
+    <div>
+      <span class="label"><b>With Ring++</b> <span class="tag">nothing is copied</span></span>
+<pre class="code"><span class="k">func</span> RppWay oBuf, nCalls, nSize
+    <span class="c"># oBuf is an OBJECT. Objects are lists under the</span>
+    <span class="c"># hood, and lists cross by address, not by copy.</span>
+    nSum = <span class="n">0</span>
+    <span class="k">for</span> i = <span class="n">1</span> <span class="k">to</span> nCalls
+        nSum += ByteAtRpp(oBuf, (i * <span class="n">7919</span>) % (nSize - <span class="n">1</span>))
+    <span class="k">next</span>
+    <span class="k">return</span> nSum</pre>
+    </div>
+  </div>
+
+  <div class="stats" style="margin-top:1.6rem">
+    <div><div class="num">75&times;</div><div class="what">faster, 302 ms &rarr; 4 ms</div></div>
+    <div><div class="num">1,430&nbsp;MB</div><div class="what">copied the plain-Ring way — for 1,500 one-byte reads</div></div>
+    <div><div class="num">0</div><div class="what">bytes copied with Ring++, identical result</div></div>
+  </div>
+
+  <p class="lead" style="margin-top:1.6rem">Not asserted, checked: both versions must
+  produce the exact same answer before the timing is even printed — <a
+  href="https://github.com/mayouni/ringpp/blob/main/examples/02-pass-a-large-value/example.ring">the
+  whole file</a> is one of eight that hold both paths side by side. Try it:
+  <code>ring examples/02-pass-a-large-value/example.ring</code>.</p>
+</section>
+
+<section class="wrap">
+  <h2>What Ring already gave you, and what Ring++ adds</h2>
+  <div class="grid">
+    <div class="card">
+      <h3>Ring already has this</h3>
+      <p>An object crossing a function call is a reference, not a copy — that's
+      not new, and it's not a Ring++ invention. It's how every class instance in
+      Ring already behaves.</p>
+    </div>
+    <div class="card">
+      <h3>What was missing</h3>
+      <p>A way to hold a <em>block of bytes</em> — the kind of thing you'd
+      normally reach for a string to hold — as an object instead, so it gets
+      that same reference behaviour, plus safe, bounds-checked reads and writes
+      into it.</p>
+    </div>
+    <div class="card">
+      <h3>What Ring++ is</h3>
+      <p><code>RppBuffer</code> and <code>RppView</code> are exactly that: a
+      buffer that crosses calls by reference and writes in place, and a
+      zero-copy window into part of one. No new syntax, no new runtime — a
+      class, like any other Ring class.</p>
+    </div>
+  </div>
+</section>
+
+<section class="wrap narrow">
+  <h2>The trip inside Ring, if you want it</h2>
+  <p class="lead">You don't need any of this to use <code>RppBuffer</code> — the
+  example above is the whole interface. But if you're curious why Ring behaves
+  this way at all: the answer is one line deep in Ring's C source,
+  <code>RING_VM_STACK_PUSHCVAR</code> — the exact spot where a string gets
+  copied onto Ring's internal stack before a function call. It is not a bug and
+  it is not an oversight; a copy is the simplest, safest thing to do with a
+  value whose lifetime you can't otherwise reason about, and Mahmoud Fayed built
+  Ring's whole object system on the <em>other</em> side of that choice — objects
+  are reference-counted, precisely so they don't need to be copied. Ring++
+  doesn't change that design. It just gives you a second way to say "this one, I
+  promise, wants to be held, not copied" — using the reference behaviour that
+  was already there for objects, on bytes instead of business logic.</p>
+</section>
+
+<section class="wrap narrow">
+  <h2>Where this loses — said before anything else is claimed</h2>
+  <p class="lead">Below roughly 512 bytes, the machinery that makes
+  <code>RppBuffer</code> fast costs more than the copy it's avoiding — at that
+  size, plain Ring wins, measured. <code>RppBuffer</code> is for something you
+  hold and hit repeatedly, not for building one short string once. Three of
+  Ring++'s eight worked examples reach the same conclusion for their own shape:
+  plain Ring is the right answer. Saying so is part of the product, not a
+  footnote to it.</p>
+</section>
+
+<section class="wrap narrow">
+  <h2>Next</h2>
+  <div class="actions" style="justify-content:flex-start">
+    <a class="btn primary" href="checker.html">Static analysis &mdash; what it found in Ring's own stdlib</a>
+    <a class="btn ghost" href="build.html">Native build</a>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <span>Ring++ 0.1.0 — MIT</span>
+    <a href="https://github.com/mayouni/ringpp/tree/main/docs" target="_blank" rel="noopener">Documentation <span class="newtab" aria-hidden="true">&#8599;</span></a>
+    <a href="https://ring-lang.github.io/" target="_blank" rel="noopener">Ring language <span class="newtab" aria-hidden="true">&#8599;</span></a>
+    <a href="https://github.com/mayouni/stzlib" target="_blank" rel="noopener">Softanza <span class="newtab" aria-hidden="true">&#8599;</span></a>
+    <span class="sp">a Softanza project by Mansour Ayouni</span>
+  </div>
+</footer>
+
+</body>
+</html>

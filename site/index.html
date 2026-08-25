@@ -3,10 +3,10 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Ring++ — more performant, more governable Ring, in Ring itself</title>
-<meta name="description" content="Ring++ is a dependency-free pair: a pure-Ring library for the data-heavy work Ring's own design already allows, and a one-binary CLI that finds real bugs before they run and ships a program with no compiler. Measured, not claimed.">
+<title>Ring++ — Ring, faster and safer, without leaving Ring</title>
+<meta name="description" content="Ring++ is a dependency-free pair for Ring: a library that removes a real performance cost, and a CLI that finds real bugs and ships your program with no compiler. Learn how Ring itself was built, through three practical examples.">
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
-<link rel="stylesheet" href="style.css?v=0.2.0">
+<link rel="stylesheet" href="style.css?v=0.3.0">
 </head>
 <body>
 
@@ -14,8 +14,11 @@
   <div class="wrap">
     <a class="brand" href="index.html"><img src="favicon.svg" alt="">Ring<span>++</span></a>
     <a href="start.html">Start here</a>
+    <a href="performance.html">Performant code</a>
     <a href="checker.html">Static analysis</a>
     <a href="build.html">Native build</a>
+    <a href="reference.html">Reference</a>
+    <a href="blog.html">Blog</a>
     <a href="faq.html">Q&amp;A</a>
     <a class="repo" href="https://github.com/mayouni/ringpp" target="_blank" rel="noopener" aria-label="Ring++ on GitHub"><svg viewBox="0 0 16 16" width="22" height="22" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg></a>
     <a class="cta" href="https://github.com/mayouni/ringpp" target="_blank" rel="noopener">Get it <span class="newtab" aria-hidden="true">&#8599;</span></a>
@@ -24,11 +27,11 @@
 
 <header class="hero wrap">
   <img class="logo" src="ringpp-logo.jpg" alt="Ring++">
-  <h1>More performant, more governable<br><em>Ring</em> — in Ring itself.</h1>
-  <p class="sub">A pure-Ring library for the data-heavy work Ring's own design already
-  allows, and a one-binary CLI that finds real bugs before they run and ships a
-  program with no compiler. Every number on this page is measured, not claimed —
-  and where Ring++ is the wrong tool, that is on the page too.</p>
+  <h1>Ring, faster and safer —<br>without ever leaving <em>Ring</em>.</h1>
+  <p class="sub">You don't need to know what a pointer is to get the value of one.
+  Ring++ is a small library and a CLI, both free of anything but Ring itself, and
+  each one is also a window onto how Ring's own creator, Mahmoud Fayed, built a
+  small, friendly language over a large and unforgiving one underneath.</p>
   <div class="badges">
     <span class="badge">version 0.1.0</span>
     <span class="badge">dependency-free</span>
@@ -41,128 +44,59 @@
   </div>
 </header>
 
-<section class="wrap">
-  <h2>Two halves, one install</h2>
-  <p class="lead">Both are free of anything but Ring itself. Neither is required to use
-  the other.</p>
-  <div class="grid">
-    <div class="card">
-      <span class="icon">&#9673;</span>
-      <h3>The library — <code>load "ringpp.ring"</code></h3>
-      <p>Pointer-backed buffers, zero-copy views, a list index phase, a sub-state
-      sandbox. Pure Ring, works wherever stock <code>ring.exe</code> works. Every
-      idiom exists because a measurement found a cost worth not paying, and every
-      one refuses when it would make things worse.</p>
-    </div>
-    <div class="card">
-      <span class="icon">&#9672;</span>
-      <h3>The CLI — one binary, no compiler</h3>
-      <p><a href="checker.html"><code>ringpp check</code></a> finds dormant bugs before
-      you run them. <a href="build.html"><code>ringpp build</code></a> packages a program
-      into bytecode plus a runtime stub — no C compiler asked of you, ever, on any of
-      five platforms.</p>
-    </div>
-  </div>
+<section class="wrap narrow">
+  <h2>Why this exists</h2>
+  <p class="lead">Ring++ came out of real projects, not a lab. Teams who liked Ring
+  and wanted to keep using it — for a server talking to a browser, for work that has
+  to survive a dropped connection, for datasets too large to shrug off — kept
+  hitting the same three walls: some operations on big data were slower than they
+  should be, nothing checked a large codebase before it ran, and shipping usually
+  meant asking someone to install a compiler, or a GUI toolkit whose licence terms
+  were their own kind of risk. Ring++ answers each one directly, without leaving
+  Ring and without adding a dependency to it.</p>
 </section>
 
 <section class="wrap">
-  <h2>The thesis, made concrete</h2>
-  <p class="lead">Ring passes <b>lists by reference</b> and <b>strings by copy</b>.
-  A helper that takes a large buffer as a plain string copies the whole thing onto the
-  VM stack — <i>on every call</i> — before its first line runs. Same task, same loop,
-  the only thing that changes is what you hold.</p>
-
-  <div class="preamble">
-    <p>1,500 calls to a helper that reads one byte out of a 1&nbsp;MB buffer. The helper
-    looks cheap — it reads one byte. The cost is not in the function; it is in the act
-    of calling it.</p>
-  </div>
-
-  <div class="compare">
-    <div>
-      <span class="label"><b>Raw Ring</b> <span class="tag">copies on every call</span></span>
-<pre class="code"><span class="k">func</span> RawWay cData, nCalls, nSize
-    <span class="c"># cData is a STRING parameter -- the whole</span>
-    <span class="c"># megabyte is copied onto the VM stack, every call.</span>
-    nSum = <span class="n">0</span>
-    <span class="k">for</span> i = <span class="n">1</span> <span class="k">to</span> nCalls
-        nSum += ByteAtRaw(cData, (i * <span class="n">7919</span>) % (nSize - <span class="n">1</span>))
-    <span class="k">next</span>
-    <span class="k">return</span> nSum</pre>
-    </div>
-    <div>
-      <span class="label"><b>Ring++</b> <span class="tag">nothing is copied</span></span>
-<pre class="code"><span class="k">func</span> RppWay oBuf, nCalls, nSize
-    <span class="c"># oBuf is an OBJECT, and an object is a list --</span>
-    <span class="c"># it crosses the call boundary by REFERENCE.</span>
-    nSum = <span class="n">0</span>
-    <span class="k">for</span> i = <span class="n">1</span> <span class="k">to</span> nCalls
-        nSum += ByteAtRpp(oBuf, (i * <span class="n">7919</span>) % (nSize - <span class="n">1</span>))
-    <span class="k">next</span>
-    <span class="k">return</span> nSum</pre>
-    </div>
-  </div>
-
-  <div class="stats" style="margin-top:1.6rem">
-    <div><div class="num">75&times;</div><div class="what">faster, 302 ms &rarr; 4 ms</div></div>
-    <div><div class="num">1,430&nbsp;MB</div><div class="what">copied by raw Ring — for 1,500 one-byte reads</div></div>
-    <div><div class="num">0</div><div class="what">bytes copied by Ring++, same result</div></div>
-  </div>
-
-  <p class="lead" style="margin-top:1.6rem">Output asserted byte-identical before either
-  number is printed — <a
-  href="https://github.com/mayouni/ringpp/blob/main/examples/02-pass-a-large-value/example.ring">the
-  whole runnable file</a> is one of eight examples that hold both paths side by side, so
-  the difference in the code <em>is</em> the lesson. Re-run it yourself:
-  <code>ring examples/02-pass-a-large-value/example.ring</code>.</p>
-</section>
-
-<section class="wrap">
-  <h2>What you get</h2>
+  <h2>Three things, each shown by example</h2>
+  <p class="lead">Not three separate tools — three angles on the same idea: Ring
+  already has the machinery for this, mostly unused. Each page below shows the
+  Ring you already know, the small change, and the measured difference.</p>
   <div class="grid">
     <div class="card">
       <span class="icon">&#9673;</span>
-      <h3>Never wrong about correct code</h3>
-      <p>Where certainty is not available — an unknown parent class, a file that did
-      not parse, a name defined twice — the checker refuses rather than guesses. A
-      checker's only asset is that it is never wrong about correct code.</p>
+      <h3><a href="performance.html">Performant code</a></h3>
+      <p>The exact same loop, 75&times; faster, by changing what you hold — not
+      how you write the loop. One asymmetry in Ring's own design, made visible.</p>
     </div>
     <div class="card">
       <span class="icon">&#9672;</span>
-      <h3>Every rule ships with a number</h3>
-      <p>16 rules, each traced to a measured finding in <code>FINDINGS.md</code>. Not
-      "this might be slow" — a specific microsecond figure, on a specific Ring build,
-      with the pattern the fix makes <em>worse</em> stated beside it.</p>
+      <h3><a href="checker.html">Static analysis</a></h3>
+      <p>A checker that reads annotations Ring's own parser already accepts and
+      quietly discards. Found two functions in Ring's shipped standard library
+      that have never worked.</p>
     </div>
     <div class="card">
       <span class="icon">&#8646;</span>
-      <h3>Ship without a compiler</h3>
-      <p><code>ringpp build</code> assembles bytecode plus a prebuilt runtime stub —
-      no C compiler on the user's machine, ever. Win64, Linux x64/arm64, macOS
-      x64/arm64, from one command.</p>
-    </div>
-    <div class="card">
-      <span class="icon">&#10064;</span>
-      <h3>What must ship beside it, named</h3>
-      <p><code>ringpp deps</code> reports every native library a program can reach —
-      statically, before running it. A missing one is named <code>MISSING</code>, never
-      silently dropped.</p>
-    </div>
-    <div class="card">
-      <span class="icon">&#10697;</span>
-      <h3>An opinion, held on purpose</h3>
-      <p>A program reaching Ring's Qt bridge is refused, not half-packaged. One
-      engine, dependency-free, beats a shelf of native extensions with dependencies
-      nobody is tracking — <a href="build.html">why, with the numbers</a>.</p>
-    </div>
-    <div class="card">
-      <span class="icon">&#10022;</span>
-      <h3>Learn Ring's own design</h3>
-      <p>Eight worked examples, each holding the plain-Ring path and the Ring++ path
-      side by side, asserting byte-identical output before printing a single speed
-      number. Three of the eight conclude plain Ring wins.</p>
+      <h3><a href="build.html">Native build</a></h3>
+      <p>Ring can already write a program with no compiler involved — the
+      mechanism just sat unused. One command, five platforms, cross-built from
+      whichever one you're on.</p>
     </div>
   </div>
+</section>
+
+<section class="wrap narrow">
+  <h2>Ring already gives you this. Nobody was using it.</h2>
+  <p class="lead">That is the one idea behind all three. Ring passes a list from
+  function to function by handing over its address — instantly, regardless of
+  size. A string, on the other hand, gets copied, in full, every single time it
+  crosses into a function — <a href="performance.html">that's pillar one</a>. Ring's
+  parser already reads and accepts type annotations like <code>int func Sum(int x,
+  int y)</code> — it just throws them away after checking they parse —
+  <a href="checker.html">that's pillar two</a>. And Ring can already turn a
+  program into bytecode with no compiler in sight — <a href="build.html">that's
+  pillar three</a>. None of this required changing Ring. It required noticing
+  what was already there.</p>
 </section>
 
 <section class="wrap">
@@ -172,8 +106,8 @@
   href="https://github.com/mayouni/ringpp/blob/main/docs/FINDINGS.md">The programs that
   produced them</a> are in the repository.</p>
   <div class="stats">
+    <div><div class="num">75&times;</div><div class="what">faster on the exact loop shown on the performance page</div></div>
     <div><div class="num">16</div><div class="what">checker rules, each traced to a measured finding</div></div>
-    <div><div class="num">22</div><div class="what">gates, one command, ~35 seconds on this machine</div></div>
     <div><div class="num">0</div><div class="what">false positives across Ring's own 1,959-file corpus</div></div>
     <div><div class="num">5</div><div class="what">platforms packaged with no C compiler</div></div>
   </div>
@@ -181,31 +115,30 @@
 
 <section class="wrap narrow">
   <h2>Honest limits</h2>
-  <p class="lead">A packaged program is a stub-plus-bytecode <b>pair</b>, not a single
-  self-modifying file — Ring's own runtime does not look for a same-named bytecode file,
-  and that was measured before it was assumed. Bare-metal microcontrollers are out of
-  scope entirely: a Ring VM does not fit an ESP32-class device, and no packaging tool
-  changes that. Where Ring++'s own library loses to plain Ring, the examples say so
-  before they say anything else — <a href="build.html">the Qt refusal has its own
-  page</a>, because it deserves more than one line.</p>
+  <p class="lead">Ring++'s own library is not a default-yes: three of its eight
+  worked examples conclude plain Ring is the right answer for their shape, and say
+  so before printing a single speed number. A packaged program is a small
+  <b>pair</b> of files, not one self-contained executable. Bare-metal
+  microcontrollers are out of scope entirely — a Ring VM does not fit one, and no
+  packaging tool changes that. And Ring++ will not package a program that reaches
+  Ring's Qt bridge — <a href="build.html">why, with the reasoning and the
+  numbers</a>.</p>
 </section>
 
 <section class="wrap narrow">
   <h2>Standing on named shoulders</h2>
-  <p class="lead">Ring++ vendors nothing at a user's install time, but two dependencies
-  are compiled into the CLI itself and their authors deserve their names here:
-  <b>Mahmoud Fayed</b> and the Ring team's
-  <a href="https://ring-lang.github.io/" target="_blank" rel="noopener">Ring language</a> —
-  the design this whole project is built <em>on</em>, not around; and
-  <b>Youssef Saeed</b>'s
+  <p class="lead">Ring++ vendors nothing at a user's install time, but two
+  dependencies are compiled into the CLI itself and their authors deserve their
+  names here: <b>Mahmoud Fayed</b> and the Ring team's
+  <a href="https://ring-lang.github.io/" target="_blank" rel="noopener">Ring
+  language</a> — the design this whole project is built <em>on</em>, not around —
+  and <b>Youssef Saeed</b>'s
   <a href="https://github.com/ysdragon/tree-sitter-ring" target="_blank" rel="noopener">tree-sitter-ring</a>
-  grammar, which every <code>ringpp check</code> is running. Adopted because it
-  independently reached the same reading of Ring's type annotations that Ring++'s own
-  measurements did. Grammar findings go back to him as issues, never patches around
-  him — and when this project reported one defect, his fix turned out to close two.
-  Built with <b>Andrew Kelley</b> and the Zig team's
-  <a href="https://ziglang.org" target="_blank" rel="noopener">Zig</a>, which compiles
-  the whole CLI into one binary per platform.</p>
+  grammar, which every <code>ringpp check</code> runs on. Adopted because it
+  independently reached the same reading of Ring's type annotations these
+  measurements did. Built with <b>Andrew Kelley</b> and the Zig team's
+  <a href="https://ziglang.org" target="_blank" rel="noopener">Zig</a>, which
+  compiles the whole CLI into one binary per platform.</p>
 </section>
 
 <section class="wrap">

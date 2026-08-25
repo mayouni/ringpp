@@ -6,7 +6,7 @@
 <title>Native build — Ring++</title>
 <meta name="description" content="ringpp build packages a Ring program into bytecode plus a runtime stub — no C compiler, ever. And it refuses to package Ring's Qt bridge, because bundling only what static analysis can see once produced a package that crashed with no diagnostic at all.">
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
-<link rel="stylesheet" href="style.css?v=0.2.0">
+<link rel="stylesheet" href="style.css?v=0.3.0">
 </head>
 <body>
 
@@ -14,8 +14,11 @@
   <div class="wrap">
     <a class="brand" href="index.html"><img src="favicon.svg" alt="">Ring<span>++</span></a>
     <a href="start.html">Start here</a>
+    <a href="performance.html">Performant code</a>
     <a href="checker.html">Static analysis</a>
     <a href="build.html" class="active">Native build</a>
+    <a href="reference.html">Reference</a>
+    <a href="blog.html">Blog</a>
     <a href="faq.html">Q&amp;A</a>
     <a class="repo" href="https://github.com/mayouni/ringpp" target="_blank" rel="noopener" aria-label="Ring++ on GitHub"><svg viewBox="0 0 16 16" width="22" height="22" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg></a>
     <a class="cta" href="https://github.com/mayouni/ringpp" target="_blank" rel="noopener">Get it <span class="newtab" aria-hidden="true">&#8599;</span></a>
@@ -43,6 +46,32 @@ run with:  hello.exe hello.ringo</pre>
   <p class="lead">That is the whole artefact. No installer, no <code>ring.dll</code>,
   no Ring install on the target machine at all — verified in this project's own gate
   by copying exactly those two files to a clean directory and running them there.</p>
+</section>
+
+<section class="wrap">
+  <h2>Five platforms — built from whichever one you're on</h2>
+  <p class="lead">This is the part Zig makes possible. <code>--target</code> names
+  where the program will <em>run</em>; it says nothing about where you're
+  <em>building</em> it. All five combinations work from a single machine:</p>
+  <div class="grid">
+    <div class="card"><h3>win64</h3><p>Windows x64</p></div>
+    <div class="card"><h3>linux-x64</h3><p>Linux x64, static musl — one file, any distro</p></div>
+    <div class="card"><h3>linux-arm64</h3><p>Linux arm64, static musl</p></div>
+    <div class="card"><h3>macos-x64</h3><p>macOS Intel</p></div>
+    <div class="card"><h3>macos-arm64</h3><p>macOS Apple Silicon</p></div>
+  </div>
+<pre class="code">$ ringpp build service.ring --target linux-x64 --out dist-linux
+
+built  dist-linux
+  service
+  service.ringo
+
+run with:  service service.ringo</pre>
+  <p class="lead">Built on a Windows machine, targeting Linux, with no Linux
+  anywhere in sight during the build. Not taken on faith: copied to a clean Ubuntu
+  machine and run there, output byte-identical to running the source directly on
+  Windows. Package once per target you ship to; nobody on the team needs a second
+  machine, a VM, or a container to produce any of the five.</p>
 </section>
 
 <section class="wrap">
@@ -95,11 +124,17 @@ ringpp build: this program reaches Ring's Qt bridge (ringqt), which
 
 <section class="wrap">
   <h2>Why this is a standing rule, not a one-off</h2>
-  <p class="lead">Ring reaches native code through a scattered shelf of extensions —
-  one <code>ring_*.dll</code> per capability, each with its own build, its own
-  transitive dependencies, none of it tracked in one place. The Qt refusal above is
-  one instance of a wider, deliberate stance: Softanza's own Ring foundations aim to
-  depend on nothing beyond what they vendor and support themselves.</p>
+  <p class="lead">Two reasons, and the first came before the second was ever
+  measured. Qt is dual-licensed — free under LGPL terms with real obligations
+  for how a commercial product links and redistributes it, or a paid commercial
+  licence otherwise. For software shipped to customers, that is a real business
+  risk, decided against before Ring++ existed. The crash above is the technical
+  reason underneath the business one: Ring reaches native code through a
+  scattered shelf of extensions — one <code>ring_*.dll</code> per capability,
+  each with its own build, its own transitive dependencies, none of it tracked
+  in one place. The Qt refusal is one instance of a wider, deliberate stance:
+  Softanza's own Ring foundations aim to depend on nothing beyond what they
+  vendor and support themselves.</p>
   <p class="lead">Softanza is not standing still on that either. Its own engine
   program — a separate effort from Ring++, in its own repository — has spent five
   milestones replacing exactly this shelf: <code>uuid.ring</code>,
@@ -116,6 +151,21 @@ ringpp build: this program reaches Ring's Qt bridge (ringqt), which
   Softanza's own project, further along a road Ring++'s own measurement (the Qt
   crash above) confirms is the right one to be on. Two independent efforts, the
   same direction: fewer scattered native dependencies, not more.</p>
+</section>
+
+<section class="wrap narrow">
+  <h2>The trip inside Ring, if you want it</h2>
+  <p class="lead">Run <code>ring yourfile.ring -go</code> on stock Ring, today,
+  and it writes <code>yourfile.ringo</code> — a compiled form of your program.
+  Run <code>ring yourfile.ringo</code>, and it just runs, no compiler involved
+  at any point. This has always been true; it's how Ring itself starts up
+  fast. Ring's own packaging tool, <code>ring2exe</code>, takes a different
+  route from there — it writes a C file and hands it to Visual C++, GCC or
+  Clang. <code>ringpp build</code> takes the other fork: it keeps the
+  bytecode Ring already writes, and attaches a small prebuilt copy of Ring
+  itself that knows how to run it. Nothing new was invented. Two doors were
+  already open in Ring's own design; this project just walked through the
+  second one.</p>
 </section>
 
 <section class="wrap narrow">

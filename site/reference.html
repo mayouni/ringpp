@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Library reference — Ring++</title>
+<meta name="description" content="Every RppBuffer, RppView, RppIndexed and RppSandbox method, with a real one-line example for each — pulled straight from rpp/core.ring and rpp/idioms.ring.">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="style.css?v=0.3.0">
+</head>
+<body>
+
+<nav>
+  <div class="wrap">
+    <a class="brand" href="index.html"><img src="favicon.svg" alt="">Ring<span>++</span></a>
+    <a href="start.html">Start here</a>
+    <a href="performance.html">Performant code</a>
+    <a href="checker.html">Static analysis</a>
+    <a href="build.html">Native build</a>
+    <a href="reference.html" class="active">Reference</a>
+    <a href="blog.html">Blog</a>
+    <a href="faq.html">Q&amp;A</a>
+    <a class="repo" href="https://github.com/mayouni/ringpp" target="_blank" rel="noopener" aria-label="Ring++ on GitHub"><svg viewBox="0 0 16 16" width="22" height="22" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg></a>
+    <a class="cta" href="https://github.com/mayouni/ringpp" target="_blank" rel="noopener">Get it <span class="newtab" aria-hidden="true">&#8599;</span></a>
+  </div>
+</nav>
+
+<header class="hero wrap" style="padding-top:2.6rem">
+  <h1>The library, one page,<br>every method.</h1>
+  <p class="sub">Four classes and a handful of free functions — that's the whole
+  surface. Every signature below is copied from <code>rpp/core.ring</code> and
+  <code>rpp/idioms.ring</code>, not a description that can drift from the code.</p>
+</header>
+
+<section class="wrap narrow">
+<pre class="code"><span class="k">load</span> <span class="s">"ringpp.ring"</span>
+
+oBuf = <span class="k">new</span> <span class="f">RppBuffer</span>(<span class="n">1024</span>)
+oBuf.PokeString(<span class="n">0</span>, <span class="s">"hello"</span>)
+? oBuf.Peek(<span class="n">0</span>, <span class="n">5</span>)        <span class="c"># --&gt; hello</span></pre>
+  <p class="lead" style="margin-top:1rem">That's the whole install story —
+  <code>ringpm install ringpp</code>, then one <code>load</code>. Everything
+  below is what's on the other side of it.</p>
+</section>
+
+<section class="wrap">
+  <h2>RppBuffer — bytes that cross a call by reference, not by copy</h2>
+  <p class="lead">The type <a href="performance.html">pillar one</a> is built
+  around. Build it with <code>new RppBuffer(nBytes)</code>, the free function
+  <code>RppBuffer(nBytes)</code>, or <code>RppBufferFromString(cStr)</code> to
+  wrap a string you already have.</p>
+  <div class="preamble">
+    <p><code>Capacity()</code>, <code>Size()</code> — the buffer's byte capacity (both return the same number; two names for two habits of thought).</p>
+    <p><code>Peek(nOffset, nLen)</code> — an O(1) slice out. 0.09&nbsp;µs where <code>substr()</code> costs 12.5&nbsp;µs on a 500&nbsp;KB string.</p>
+    <p><code>Byte(nOffset)</code> — the single byte at <code>nOffset</code>, as a number.</p>
+    <p><code>Str()</code> — the whole buffer as an ordinary Ring string. The one place a copy happens on purpose, named so it's visible at the call site.</p>
+    <p><code>Poke(nOffset, cBytes)</code>, <code>PokeString(nOffset, cStr)</code> — write bytes at an offset, bounds-checked. The two names are the same call.</p>
+    <p><code>Fill(nOffset, nLen, nByte)</code> — repeat one byte <code>nLen</code> times, starting at <code>nOffset</code>.</p>
+    <p><code>PokeInt32(nOffset, n)</code> / <code>PeekInt32(nOffset)</code>, <code>PokeDouble</code> / <code>PeekDouble</code>, <code>PokeFloat</code> / <code>PeekFloat</code> — packed numeric fields, for binary record layouts.</p>
+    <p><code>View(nOffset, nLen)</code> — a zero-copy <code>RppView</code> window onto part of the buffer. <code>All()</code> is <code>View(0, Size())</code>.</p>
+    <p><code>Grow(nNewBytes)</code> — the only legal resize: allocates a new backing string, copies the old bytes in, returns the old capacity. Never resize any other way — the reasons are in the source comments, and they're not optional.</p>
+    <p><code>LoadFile(cPath)</code>, <code>SaveFile(cPath, nLen)</code> — read a file straight into the buffer (growing it if needed), or write <code>nLen</code> bytes of it back out.</p>
+    <p><code>AddressUnchecked()</code>, <code>PokeUnchecked(nOffset, cBytes)</code> — the escape hatch, named so it stays visible: no bounds check, your bug becomes a crash with no line number instead of a raised error.</p>
+  </div>
+<pre class="code">oBuf = <span class="f">RppBufferFromString</span>(<span class="s">"name=Mansour;role=maintainer"</span>)
+oBuf.PokeInt32(<span class="n">900</span>, <span class="n">42</span>)
+? oBuf.PeekInt32(<span class="n">900</span>)              <span class="c"># --&gt; 42</span></pre>
+</section>
+
+<section class="wrap">
+  <h2>RppView — a window, not a copy</h2>
+  <p class="lead">Never constructed with <code>new</code> directly — get one from
+  <code>oBuf.View(nOffset, nLen)</code> or <code>oBuf.All()</code>. It holds a
+  live reference to its owner (<code>ref()</code> — plain assignment would copy
+  the buffer and freeze a snapshot), so writes made through the buffer afterwards
+  are visible through the view too.</p>
+  <div class="preamble">
+    <p><code>Size()</code>, <code>Offset()</code> — the view's length, and where it starts inside its owner.</p>
+    <p><code>Peek(nOffset, nCount)</code>, <code>Byte(nOffset)</code> — same shape as <code>RppBuffer</code>'s, offsets relative to the view, not the owner.</p>
+    <p><code>Sub(nOffset, nCount)</code> — a view of a view, no new copy.</p>
+    <p><code>Str()</code> — the view's bytes as an ordinary Ring string.</p>
+    <p><code>Buffer()</code> — the owning <code>RppBuffer</code>, if you need to step back out to it.</p>
+  </div>
+<pre class="code">oView = oBuf.View(<span class="n">5</span>, <span class="n">7</span>)
+? oView.Str()                       <span class="c"># --&gt; Mansour</span></pre>
+</section>
+
+<section class="wrap">
+  <h2>RppIndexed — a phase, not a permanent state</h2>
+  <p class="lead">Wraps <code>ringvm_genarray()</code> — worth roughly 95&times; on
+  permuted reads of an append-built list, and up to 16&times; worse when
+  mutations outnumber reads. So it's spelled as a phase you open and close, not a
+  setting you leave on.</p>
+  <div class="preamble">
+    <p><code>RppIndexed(aList)</code> / <code>new RppIndexed(aList)</code> — opens the phase. Below 64 items it declines on its own (the cursor walk is already cheaper) rather than pay for an index nobody needs.</p>
+    <p><code>Applied()</code> — whether the index was actually built.</p>
+    <p><code>Why()</code> — one sentence explaining <code>Applied()</code>'s answer.</p>
+    <p><code>Release(aList)</code> — closes the phase. Returns <code>TRUE</code> when the index stayed valid the whole time.</p>
+    <p><code>Caveat()</code> — what <code>Release()</code> cannot see: <code>sort()</code> and <code>reverse()</code> invalidate the index without changing <code>len()</code>, so re-open the phase after sorting, always.</p>
+  </div>
+<pre class="code">oIdx = <span class="f">RppIndexed</span>(aRows)          <span class="c"># open, once, before the reads</span>
+<span class="k">for</span> i = <span class="n">1</span> <span class="k">to</span> <span class="n">50000</span>
+    x = aRows[ aKeys[i] ][<span class="n">3</span>]        <span class="c"># random access, many times</span>
+<span class="k">next</span>
+oIdx.Release(aRows)                  <span class="c"># same list object, not a copy</span></pre>
+  <p class="lead" style="margin-top:1rem">The list must be passed to <b>both</b>
+  calls, every time — storing it in an attribute would copy it by value, and
+  Ring++ would index the copy instead of your list.</p>
+</section>
+
+<section class="wrap">
+  <h2>RppSandbox — a second interpreter, for containment</h2>
+  <p class="lead">0.35&nbsp;ms to create. A Ring error inside does not kill the
+  host process. It buys containment, not speed — the same work runs roughly
+  1.75&times; slower in a fresh sub-state than in the host.</p>
+  <div class="preamble">
+    <p><code>RppSandbox()</code> / <code>new RppSandbox()</code> — opens a fresh Ring interpreter state.</p>
+    <p><code>Run(cCode)</code> — runs a string of Ring source inside it.</p>
+    <p><code>Quiet()</code> — suppresses the sandbox's own error output.</p>
+    <p><code>Var(cName)</code>, <code>Has(cName)</code> — read a variable back, or check it exists. (Not <code>Get</code> — <code>get</code> is a Ring statement keyword and can never be a method name.)</p>
+    <p><code>SetVar(cName, vValue)</code> — set a variable before running code that reads it.</p>
+    <p><code>Free()</code>, <code>IsOpen()</code> — release the sub-state, or check whether it already has been.</p>
+  </div>
+<pre class="code">oBox = <span class="f">RppSandbox</span>()
+oBox.Run(<span class="s">"nTotal = 2 + 2"</span>)
+? oBox.Var(<span class="s">"nTotal"</span>)            <span class="c"># --&gt; 4</span>
+oBox.Free()</pre>
+</section>
+
+<section class="wrap narrow">
+  <h2>The small helpers</h2>
+  <div class="preamble">
+    <p><code>RppRows(nRows, nCols)</code> — a 2D list via <code>list(rows, cols)</code>, roughly 6&times; faster to build than pushing sublists one at a time, with near-array random access as a side effect.</p>
+    <p><code>RppSyntaxOk(cCode)</code>, <code>RppTokens(cCode)</code> — Ring's own scanner, exposed as a service: <code>TRUE</code>/<code>FALSE</code>, or the actual token list, with no extension involved.</p>
+    <p><code>RppAdvise()</code>, <code>RppAdviseAdd(cWhere, cText)</code>, <code>RppAdviceClear()</code> — the log <code>RppIndexed</code> itself writes warnings to when a phase's list changed shape mid-flight. Call <code>RppAdvise()</code> to print what accumulated.</p>
+  </div>
+</section>
+
+<section class="wrap">
+  <h2>Which one, when</h2>
+  <div class="grid">
+    <div class="card">
+      <h3>Holding a block of bytes, touched a lot</h3>
+      <p><code>RppBuffer</code> — a document, a file you're building, a
+      parse buffer. Below ~512 bytes, plain Ring wins; this is for the
+      big, repeatedly-touched case.</p>
+    </div>
+    <div class="card">
+      <h3>Slicing that buffer, without copying</h3>
+      <p><code>RppView</code> — records inside one big read, fields inside
+      one big row. A window that stays live as the buffer changes.</p>
+    </div>
+    <div class="card">
+      <h3>Reading a big list many times, rarely changing it</h3>
+      <p><code>RppIndexed</code> — a lookup pass, a report, anything that
+      reads far more than it writes. Open the phase, read, close it.</p>
+    </div>
+    <div class="card">
+      <h3>Running code you don't fully trust</h3>
+      <p><code>RppSandbox</code> — generated Ring, a plugin, anything
+      where one bad statement should not take the host process down.</p>
+    </div>
+  </div>
+</section>
+
+<section class="wrap narrow">
+  <h2>Next</h2>
+  <div class="actions" style="justify-content:flex-start">
+    <a class="btn primary" href="performance.html">Performant code — why RppBuffer is fast</a>
+    <a class="btn ghost" href="https://github.com/mayouni/ringpp/blob/main/docs/CLI.md" target="_blank" rel="noopener">CLI.md — every command <span class="newtab" aria-hidden="true">&#8599;</span></a>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <span>Ring++ 0.1.0 — MIT</span>
+    <a href="https://github.com/mayouni/ringpp/tree/main/docs" target="_blank" rel="noopener">Documentation <span class="newtab" aria-hidden="true">&#8599;</span></a>
+    <a href="https://ring-lang.github.io/" target="_blank" rel="noopener">Ring language <span class="newtab" aria-hidden="true">&#8599;</span></a>
+    <a href="https://github.com/mayouni/stzlib" target="_blank" rel="noopener">Softanza <span class="newtab" aria-hidden="true">&#8599;</span></a>
+    <span class="sp">a Softanza project by Mansour Ayouni</span>
+  </div>
+</footer>
+
+</body>
+</html>
