@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Twenty-six green gates, and a bug that killed the process — Ring++</title>
+<meta name="description" content="Every gate was green. None of them had ever asked what the bytes were. A differential test found a four-line sequence that killed the Ring process with no message — and the same defect sitting in a 300,000-line library next door.">
+<meta property="og:type" content="article">
+<meta property="og:url" content="https://mayouni.github.io/ringpp/blog-differential-gate.html">
+<meta property="og:title" content="Twenty-six green gates, and a bug that killed the process">
+<meta property="og:description" content="Every gate was green. None had ever asked what the bytes were. A differential test found a four-line sequence that killed the process with no message.">
+<meta property="og:image" content="https://mayouni.github.io/ringpp/social-card.png">
+<meta property="og:image:width" content="1280">
+<meta property="og:image:height" content="640">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:image" content="https://mayouni.github.io/ringpp/social-card.png">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="style.css?v=0.3.0">
+</head>
+<body>
+
+<nav>
+  <div class="wrap">
+    <a class="brand" href="index.html"><img src="favicon.svg" alt="">Ring<span>++</span></a>
+    <a href="start.html">Start here</a>
+    <a href="performance.html">Performant code</a>
+    <a href="checker.html">Static analysis</a>
+    <a href="build.html">Native build</a>
+    <a href="faq.html">Q&amp;A</a>
+    <a class="repo" href="https://github.com/mayouni/ringpp" target="_blank" rel="noopener" aria-label="Ring++ on GitHub"><svg viewBox="0 0 16 16" width="22" height="22" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg></a>
+    <a class="cta" href="https://github.com/mayouni/ringpp" target="_blank" rel="noopener">Get it <span class="newtab" aria-hidden="true">&#8599;</span></a>
+  </div>
+</nav>
+
+<header class="wrap narrow" style="padding-top:2.6rem">
+  <p style="margin:0 0 .5rem"><a href="blog.html" style="color:var(--accent); text-decoration:none">&larr; Blog</a></p>
+  <h1 style="font-size:clamp(1.9rem, 5vw, 2.5rem)">Twenty-six green gates, and a
+  bug that killed the <em>process</em></h1>
+  <p style="color:var(--muted); font-size:var(--floor); margin:.4rem 0 0">25 August 2026 &middot; Mansour Ayouni</p>
+</header>
+
+<article class="wrap narrow">
+  <p class="lead">Ring++ had twenty-six gates. All green, on every commit,
+  for weeks. One of them fuzzes a hundred thousand random accesses and
+  asserts that not one of them crashes.</p>
+
+  <p class="lead">They were all asking the wrong question, and it took a
+  different kind of test — written in an afternoon — to find a four-line
+  sequence that kills the Ring process outright, with no error, no line
+  number, and nothing in the output at all.</p>
+
+  <h2>Why: what a green gate actually proves</h2>
+
+  <p class="lead">Go back through what those gates checked, and a pattern
+  falls out of them. <code>fuzz_bounds.ring</code> throws 100,000 random
+  offset/length pairs at a buffer and requires that every illegal one raises
+  a catchable error and that nothing crashes. <code>buffer.ring</code> makes
+  thirty assertions about the API. <code>name_collision.ring</code> proves
+  an object never writes into a caller's variables.</p>
+
+  <p class="lead">Every one of them asks either <b>"does this raise when it
+  should?"</b> or <b>"is the answer the right length?"</b></p>
+
+  <p class="lead">Not one of them had ever asked: <b>are the bytes
+  right?</b></p>
+
+  <div class="preamble">
+    <p>That gap is easy to miss precisely because the suite looks thorough.
+    A hundred thousand fuzzed accesses reads like coverage. It is coverage —
+    of the question it asks.</p>
+  </div>
+
+  <h2>What: two implementations, one truth</h2>
+
+  <p class="lead">The technique is differential testing, and it is old.
+  Keep two implementations of the same idea. Run identical operations
+  through both. Compare the results after every single step. Where they
+  disagree, one of them is wrong — and you find out at the operation that
+  caused it, not three thousand operations later when the damage surfaces.</p>
+
+  <p class="lead">Ring++ is unusually well suited to it, because the second
+  implementation writes itself. Every Ring++ operation exists precisely
+  because there is a slower, obvious way to do the same thing in plain Ring.
+  That slow way is the oracle.</p>
+
+  <div class="compare">
+    <div>
+      <span class="label"><b>The model</b> <span class="tag">plain Ring, obviously correct</span></span>
+<pre class="code"><span class="k">func</span> ModelPoke cModel, nOff, cData
+    <span class="c"># rebuild the whole string, the slow way</span>
+    cLeft = <span class="f">left</span>(cModel, nOff)
+    nAfter = <span class="f">len</span>(cModel) - nOff - <span class="f">len</span>(cData)
+    cRight = <span class="f">right</span>(cModel, nAfter)
+    <span class="k">return</span> cLeft + cData + cRight</pre>
+    </div>
+    <div>
+      <span class="label"><b>The subject</b> <span class="tag">Ring++, fast, unproven</span></span>
+<pre class="code">oBuf.Poke(nOff, cData)
+
+<span class="c"># after EVERY operation:</span>
+<span class="k">if</span> oBuf.Str() != cModel
+    <span class="c"># one of the two is wrong, and</span>
+    <span class="c"># we know exactly which op did it</span>
+<span class="k">ok</span></pre>
+    </div>
+  </div>
+
+  <h2>How: make the inputs hostile, and the failure reproducible</h2>
+
+  <p class="lead">A differential test is only as good as what you feed it.
+  Random printable text would have found nothing here. The payloads were
+  chosen to be nasty on purpose — seven kinds, drawn at random: ordinary
+  text, a leading zero byte, the literal <code>"NULL"</code>, runs of
+  <code>0xFF</code>, packed doubles, all zeros, digits.</p>
+
+  <p class="lead">Twelve buffer sizes, chosen to sit on either side of every
+  threshold in the library: 1, 2, 7, 8, 15, 16, 63, 64, 511, 512, 513, 4096.
+  Offsets and lengths random within legality. The whole buffer compared after
+  every operation — not sampled, not at the end. <b>20,002 operations in 243
+  milliseconds.</b></p>
+
+  <p class="lead">And the random number generator is a fixed-seed LCG, not
+  Ring's <code>random()</code>. A failure that cannot be reproduced is a
+  rumour.</p>
+
+  <h2>What it found, on the first run</h2>
+
+  <p class="lead">The process died after roughly 13,000 operations. No error
+  message, no line number — the shape of failure this project already knew
+  and had written down: an over-write kills the process silently and
+  uncatchably.</p>
+
+  <p class="lead">Bisecting the failing run took longer than writing the test.
+  What came out was four lines:</p>
+
+<pre class="code">oB = <span class="f">RppBuffer</span>(<span class="n">16</span>)
+oB.Poke(<span class="n">0</span>, <span class="s">"NULL"</span>)            <span class="c"># safe. The guard catches this.</span>
+oB.Poke(<span class="n">4</span>, RPP_NUL_BYTE)      <span class="c"># safe. The guard catches this too.</span>
+oB.Grow(<span class="n">33</span>)                  <span class="c"># process dies. No message.</span></pre>
+
+  <p class="lead">Neither write is dangerous. <code>Grow</code> is — because
+  it hands the whole buffer back to <code>Poke</code> as a single source, and
+  those sixteen bytes now begin <code>NULL\0</code>.</p>
+
+  <div class="preamble">
+    <p><b>The root cause is a category error, and an old one.</b> Ring's
+    <code>memcpy</code> decides whether an argument is a null pointer by
+    calling <code>strcmp(src, "NULL")</code>. Ring++ knew that and guarded
+    against it — but the guard tested the Ring <em>value</em> for equality
+    with <code>"NULL"</code>, and <code>strcmp</code> reads the <em>C
+    view</em>. A string whose bytes begin <code>N U L L \0</code> <em>is</em>
+    <code>"NULL"</code> to <code>strcmp</code>, whatever its Ring length says.
+    A sixteen-byte string can never equal <code>"NULL"</code> in Ring. It can
+    be <code>"NULL"</code> in C.</p>
+  </div>
+
+  <p class="lead">The library had carried that hole its entire life.</p>
+
+  <h2>What the fix cost, measured rather than assumed</h2>
+
+  <p class="lead">The repair is to test the bytes instead of the value. That
+  puts one more string index on the hottest path in the library, so it owes a
+  number.</p>
+
+  <div class="stats">
+    <div><div class="num">+0.075&nbsp;µs</div><div class="what">per <code>Poke</code>, the fix's true cost</div></div>
+    <div><div class="num">3.7%</div><div class="what">slower on 200,000 ordinary writes</div></div>
+    <div><div class="num">0.32&nbsp;µs</div><div class="what">what the first version of the fix cost — four times more</div></div>
+  </div>
+
+  <p class="lead" style="margin-top:1.6rem">Two things about that number are
+  worth more than the number itself.</p>
+
+  <p class="lead"><b>The first measurement was wrong.</b> A single run put the
+  baseline at 461 ms and made the fix look like a 14% regression. Alternating
+  three runs of each build gave 423 against 408 — the 461 was a cold process.
+  Had it been published, the library would carry a false claim about its own
+  slowest path.</p>
+
+  <p class="lead"><b>The first fix was four times too expensive.</b> Written
+  as a flag assigned across nested <code>if</code>s, it cost 0.32 µs. Testing
+  whether Ring's <code>and</code>/<code>or</code> short-circuit — they do, and
+  that also protects an out-of-range index — allowed one flat expression at
+  0.075 µs. That behaviour was not documented anywhere this project could
+  find, and finding it paid for itself immediately.</p>
+
+  <h2>Then the same treatment for everything else</h2>
+
+  <p class="lead">Three of the four public types had never been tested this
+  way. Two came back clean, and that is a result worth printing rather than
+  passing over in silence.</p>
+
+  <div class="grid">
+    <div class="card">
+      <h3>RppView — clean</h3>
+      <p>357 spans against plain-Ring slices, <code>Sub()</code> offsets
+      composing through a three-deep chain, and a view held <em>across</em> a
+      <code>Grow</code> that reallocates underneath it. <code>Sub()</code> had
+      been tested nowhere at all.</p>
+    </div>
+    <div class="card">
+      <h3>RppIndexed — clean</h3>
+      <p>4,000 indexed reads identical to plain ones. The documented limit
+      asserted <em>as a limit</em>: <code>sort()</code> must go undetected, so
+      if the guard ever starts catching it, the documentation has begun
+      overstating.</p>
+    </div>
+    <div class="card">
+      <h3>RppSandbox — a second bug</h3>
+      <p><code>SetVar</code> had never been called by any gate. It could not
+      create a variable — only assign to one that existed — and failed with a
+      raw VM error. The documentation promised what the code could not do.</p>
+    </div>
+  </div>
+
+  <h2>And one next door</h2>
+
+  <p class="lead">The same defective guard exists, character for character,
+  in <a href="https://github.com/mayouni/stzlib" target="_blank" rel="noopener">Softanza</a>'s
+  own buffer type — a separate 300,000-line library that had independently
+  arrived at the same design, including the same 512-byte threshold and the
+  same rule about never caching an address. It copied the reasoning correctly
+  and inherited the flaw with it.</p>
+
+  <p class="lead">It has not fired there yet, because its trigger is narrower.
+  That is not the same as being safe.</p>
+
+  <h2>What this is actually about</h2>
+
+  <p class="lead">Not that Ring++ had a bug. Every library has bugs; the
+  useful question is what kind of test finds them.</p>
+
+  <p class="lead">A green suite tells you the answers to the questions you
+  thought to ask. It says nothing whatever about the questions you did not.
+  Twenty-six gates, one of them a hundred-thousand-iteration fuzz, and the
+  thing they all had in common was that none of them ever compared a byte.</p>
+
+  <p class="lead">The differential test is now gate twenty-seven, and it runs
+  in 243 milliseconds. The crash sequence is a named case that runs before any
+  random one — because the fuzz found it by luck, and luck is not a regression
+  test. Reverting the fix kills the gate at that named case, which is the only
+  evidence that the gate is worth having.</p>
+
+  <div class="preamble">
+    <p><b>Where this does not help.</b> A differential test needs a reference
+    implementation that is obviously correct. Ring++ has one for everything it
+    does, because the whole library exists to replace a slower way of doing
+    the same thing. A project without that oracle gets no such gift, and
+    inventing one is usually harder than the code under test.</p>
+  </div>
+
+  <p class="lead">Everything above is in the repository: the gate is
+  <a href="https://github.com/mayouni/ringpp/blob/main/tests/differential.ring" target="_blank" rel="noopener"><code>tests/differential.ring</code></a>,
+  the findings are F-31 through F-33 in
+  <a href="https://github.com/mayouni/ringpp/blob/main/docs/FINDINGS.md" target="_blank" rel="noopener">FINDINGS.md</a>,
+  and the numbers came from the programs beside them.</p>
+</article>
+
+<section class="wrap narrow">
+  <h2>Next</h2>
+  <div class="actions" style="justify-content:flex-start">
+    <a class="btn primary" href="performance.html">Performant code</a>
+    <a class="btn ghost" href="design.html">The design underneath</a>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <span>Ring++ 0.1.0 — MIT</span>
+    <a href="reference.html">Reference</a>
+    <a href="design.html">Design</a>
+    <a href="blog.html">Blog</a>
+    <a href="https://github.com/mayouni/ringpp/tree/main/docs" target="_blank" rel="noopener">Documentation <span class="newtab" aria-hidden="true">&#8599;</span></a>
+    <a href="https://ring-lang.github.io/" target="_blank" rel="noopener">Ring language <span class="newtab" aria-hidden="true">&#8599;</span></a>
+    <a href="https://github.com/mayouni/stzlib" target="_blank" rel="noopener">Softanza <span class="newtab" aria-hidden="true">&#8599;</span></a>
+    <span class="sp">a Softanza project by Mansour Ayouni</span>
+  </div>
+</footer>
+
+</body>
+</html>
