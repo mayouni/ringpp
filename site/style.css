@@ -10,20 +10,31 @@
     --muted: #6a737d;
     /* Ring++: the family sheet, turned to the FLAME in the logo's own
        ring-to-flame sweep — RingScript is green, RingServ is violet, and a
-       signature should not be widely worn. Chosen, not measured with a
-       tool: a burnt orange-red dark enough to hold white button text
-       comfortably past typical AA text contrast on a white page. If this
-       is ever load-bearing (a compliance audit, not just a good read),
-       verify it with a real contrast checker rather than trust this
-       comment — unlike the numbers elsewhere on this site, this one is a
-       judgement call, not a measurement. */
-    --accent: #c1440e;
+       signature should not be widely worn. Revised 2026-08-25: the first
+       pass (#c1440e) read as muddy brown rather than flame. This one is
+       more saturated and a shade darker to compensate — estimated contrast
+       against white text ~4.7:1 by the standard sRGB formula, not run
+       through an actual checker; verify before treating that number as
+       load-bearing, the same caveat as before. */
+    --accent: #d43e12;
+    /* A THIRD colour, deliberately: the flame has two ends in the logo
+       itself (a hot orange-yellow tip beyond the red body), and one solid
+       accent could not carry that. Used only in the gradient below and in
+       small, sparing text emphasis — never as a second flat button colour,
+       which would just be a second accent with extra steps. */
+    --accent-3: #f2790c;
     /* The secondary is the RING itself — the shared teal every sibling's
        icon traces somewhere, reused deliberately as the family echo
        rather than invented fresh. */
     --accent-2: #0c7d8f;
     --accent-soft: #fdefe7;
     --accent-ink: #ffffff;
+    /* The one deliberately "modern" effect on this site: the same
+       teal-to-flame sweep the logo itself draws, on primary buttons and
+       the hero's own emphasis word. Everywhere else stays flat --accent,
+       on purpose — a gradient on every heading is not an effect any more,
+       it is wallpaper. */
+    --flame: linear-gradient(135deg, var(--accent-2) 0%, var(--accent) 55%, var(--accent-3) 100%);
     --error: #b42318;
     --border: #e2e8ee;
     --rule: #c3cede;
@@ -75,7 +86,7 @@ nav .brand span { color: var(--accent); }
 nav a.repo { display: inline-flex; align-items: center; gap: .4rem; }
 nav a.repo svg { width: 1.05em; height: 1.05em; fill: currentColor; }
 nav .cta {
-    background: var(--accent); color: var(--accent-ink);
+    background: var(--flame); color: var(--accent-ink);
     padding: .35rem 1rem; border-radius: 7px; font-weight: 600;
 }
 nav .cta:hover { color: var(--accent-ink); opacity: .9; }
@@ -83,7 +94,12 @@ nav .cta:hover { color: var(--accent-ink); opacity: .9; }
 .hero { text-align: center; padding-top: 4rem; padding-bottom: 2.5rem; }
 .hero img.logo { width: 200px; height: auto; margin-bottom: .6rem; }
 .hero h1 { font-size: clamp(2rem, 5vw, 2.9rem); line-height: 1.15; margin: .3rem 0 .8rem; letter-spacing: -.02em; }
-.hero h1 em { font-style: normal; color: var(--accent); }
+.hero h1 em {
+    font-style: normal;
+    background: var(--flame);
+    -webkit-background-clip: text; background-clip: text;
+    color: transparent;
+}
 .hero p.sub { font-size: var(--read); color: var(--ink-soft); max-width: 40rem; margin: 0 auto 1.4rem; }
 .badges { display: flex; gap: .5rem; justify-content: center; flex-wrap: wrap; margin-bottom: 1.6rem; }
 .badge {
@@ -97,7 +113,7 @@ nav .cta:hover { color: var(--accent-ink); opacity: .9; }
     text-decoration: none; font-weight: 600; font-size: var(--read);
     border: 1px solid var(--accent);
 }
-.btn.primary { background: var(--accent); color: var(--accent-ink); }
+.btn.primary { background: var(--flame); border-color: transparent; color: var(--accent-ink); }
 .btn.ghost { color: var(--accent); background: transparent; }
 .btn:hover { opacity: .9; }
 
@@ -123,6 +139,8 @@ h3 { font-size: var(--read); font-weight: 700; margin: 0 0 .35rem; }
 .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr)); gap: 1rem; }
 .card { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 1.3rem 1.4rem; }
 .card p { margin: 0; color: var(--ink-soft); font-size: var(--read); }
+.card h3 a { color: var(--ink); text-decoration: none; }
+.card h3 a:hover { color: var(--accent); }
 .card .icon {
     font-size: 2rem; line-height: 1;
     display: block; margin-bottom: .7rem;

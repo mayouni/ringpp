@@ -6,17 +6,17 @@
 <title>Ring++ — more performant, more governable Ring, in Ring itself</title>
 <meta name="description" content="Ring++ is a dependency-free pair: a pure-Ring library for the data-heavy work Ring's own design already allows, and a one-binary CLI that finds real bugs before they run and ships a program with no compiler. Measured, not claimed.">
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
-<link rel="stylesheet" href="style.css?v=0.1.0">
+<link rel="stylesheet" href="style.css?v=0.2.0">
 </head>
 <body>
 
 <nav>
   <div class="wrap">
     <a class="brand" href="index.html"><img src="favicon.svg" alt="">Ring<span>++</span></a>
-    <a href="https://github.com/mayouni/ringpp#install">Start here</a>
-    <a href="https://github.com/mayouni/ringpp/blob/main/docs/CASE-TYPE-SAFETY.md">What it found</a>
-    <a href="https://github.com/mayouni/ringpp/blob/main/docs/FINDINGS.md">Findings</a>
-    <a href="https://github.com/mayouni/ringpp/tree/main/docs">Docs</a>
+    <a href="start.html">Start here</a>
+    <a href="checker.html">Static analysis</a>
+    <a href="build.html">Native build</a>
+    <a href="faq.html">Q&amp;A</a>
     <a class="repo" href="https://github.com/mayouni/ringpp" target="_blank" rel="noopener" aria-label="Ring++ on GitHub"><svg viewBox="0 0 16 16" width="22" height="22" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg></a>
     <a class="cta" href="https://github.com/mayouni/ringpp" target="_blank" rel="noopener">Get it <span class="newtab" aria-hidden="true">&#8599;</span></a>
   </div>
@@ -36,8 +36,8 @@
     <span class="badge">MIT</span>
   </div>
   <div class="actions">
-    <a class="btn primary" href="https://github.com/mayouni/ringpp#install">Start here &mdash; one <code>load</code>, one binary</a>
-    <a class="btn ghost" href="https://github.com/mayouni/ringpp/blob/main/docs/CASE-TYPE-SAFETY.md">See what it found in Ring's own stdlib</a>
+    <a class="btn primary" href="start.html">Start here &mdash; one <code>load</code>, one binary</a>
+    <a class="btn ghost" href="checker.html">See what it found in Ring's own stdlib</a>
   </div>
 </header>
 
@@ -57,50 +57,64 @@
     <div class="card">
       <span class="icon">&#9672;</span>
       <h3>The CLI — one binary, no compiler</h3>
-      <p><code>ringpp check</code> finds dormant bugs before you run them.
-      <code>ringpp build</code> packages a program into bytecode plus a runtime
-      stub — no C compiler asked of you, ever, on any of five platforms.</p>
+      <p><a href="checker.html"><code>ringpp check</code></a> finds dormant bugs before
+      you run them. <a href="build.html"><code>ringpp build</code></a> packages a program
+      into bytecode plus a runtime stub — no C compiler asked of you, ever, on any of
+      five platforms.</p>
     </div>
   </div>
 </section>
 
 <section class="wrap">
-  <h2>The bug it found in Ring's own standard library</h2>
-  <p class="lead">Not a synthetic example — this is <code>libraries/stdlib/stdsecurity.ring</code>,
-  shipped in Ring 1.27, found by running <code>ringpp check</code> against Ring's own
-  source tree and confirmed by actually calling the function.</p>
+  <h2>The thesis, made concrete</h2>
+  <p class="lead">Ring passes <b>lists by reference</b> and <b>strings by copy</b>.
+  A helper that takes a large buffer as a plain string copies the whole thing onto the
+  VM stack — <i>on every call</i> — before its first line runs. Same task, same loop,
+  the only thing that changes is what you hold.</p>
 
   <div class="preamble">
-    <p><code>encrypt_ex</code> calls the three-parameter <code>std_encrypt</code> with four
-    arguments. It has never worked — nothing in Ring's own codebase ever called it, and
-    nothing static was looking until now.</p>
+    <p>1,500 calls to a helper that reads one byte out of a 1&nbsp;MB buffer. The helper
+    looks cheap — it reads one byte. The cost is not in the function; it is in the act
+    of calling it.</p>
   </div>
 
   <div class="compare">
     <div>
-      <span class="label"><b>What ships in Ring 1.27</b> <span class="tag">stdsecurity.ring</span></span>
-<pre class="code"><span class="k">Func</span> encrypt_ex cString,cKey,cIV,cCipher
-    <span class="k">return</span> <span class="f">std_encrypt</span>(cString,cKey,cIV,cCipher)  <span class="c"># 4 args --</span>
-<span class="c"># std_encrypt takes 3. std_encrypt_ex, right next to it, takes 4.</span></pre>
+      <span class="label"><b>Raw Ring</b> <span class="tag">copies on every call</span></span>
+<pre class="code"><span class="k">func</span> RawWay cData, nCalls, nSize
+    <span class="c"># cData is a STRING parameter -- the whole</span>
+    <span class="c"># megabyte is copied onto the VM stack, every call.</span>
+    nSum = <span class="n">0</span>
+    <span class="k">for</span> i = <span class="n">1</span> <span class="k">to</span> nCalls
+        nSum += ByteAtRaw(cData, (i * <span class="n">7919</span>) % (nSize - <span class="n">1</span>))
+    <span class="k">next</span>
+    <span class="k">return</span> nSum</pre>
     </div>
     <div>
-      <span class="label"><b><code>ringpp check</code> catches it before it runs</b></span>
-<pre class="code">stdsecurity.ring
-  52:10  <span class="err">error</span>  rpp/type-arity
-         std_encrypt() takes 3 argument(s), called with 4
-         Error (R20) at run time (defined in stdfunctions.ring)
-
-<span class="c"># running it instead:</span>
-<span class="f">x</span>.encrypt_ex(<span class="s">"secret"</span>, <span class="s">"key"</span>, <span class="s">"iv"</span>, <span class="s">"AES-256-CBC"</span>)
-<span class="c"># Error (R20) : Calling function with extra number of parameters</span></pre>
+      <span class="label"><b>Ring++</b> <span class="tag">nothing is copied</span></span>
+<pre class="code"><span class="k">func</span> RppWay oBuf, nCalls, nSize
+    <span class="c"># oBuf is an OBJECT, and an object is a list --</span>
+    <span class="c"># it crosses the call boundary by REFERENCE.</span>
+    nSum = <span class="n">0</span>
+    <span class="k">for</span> i = <span class="n">1</span> <span class="k">to</span> nCalls
+        nSum += ByteAtRpp(oBuf, (i * <span class="n">7919</span>) % (nSize - <span class="n">1</span>))
+    <span class="k">next</span>
+    <span class="k">return</span> nSum</pre>
     </div>
   </div>
 
-  <p class="lead" style="margin-top:1.6rem">Zero false positives across Ring's own 1,959
-  files, on the run this table is from. <a
-  href="https://github.com/mayouni/ringpp/blob/main/docs/CASE-TYPE-SAFETY.md">The full case
-  study</a> also records the three false positives an earlier version of the checker
-  produced, and what they cost — a page that lists only finds is marketing.</p>
+  <div class="stats" style="margin-top:1.6rem">
+    <div><div class="num">75&times;</div><div class="what">faster, 302 ms &rarr; 4 ms</div></div>
+    <div><div class="num">1,430&nbsp;MB</div><div class="what">copied by raw Ring — for 1,500 one-byte reads</div></div>
+    <div><div class="num">0</div><div class="what">bytes copied by Ring++, same result</div></div>
+  </div>
+
+  <p class="lead" style="margin-top:1.6rem">Output asserted byte-identical before either
+  number is printed — <a
+  href="https://github.com/mayouni/ringpp/blob/main/examples/02-pass-a-large-value/example.ring">the
+  whole runnable file</a> is one of eight examples that hold both paths side by side, so
+  the difference in the code <em>is</em> the lesson. Re-run it yourself:
+  <code>ring examples/02-pass-a-large-value/example.ring</code>.</p>
 </section>
 
 <section class="wrap">
@@ -136,10 +150,10 @@
     </div>
     <div class="card">
       <span class="icon">&#10697;</span>
-      <h3>A refusal where it matters</h3>
-      <p>A program reaching Ring's Qt bridge is refused, not half-packaged — bundling
-      only what static analysis can see there once produced a package that crashed with
-      no diagnostic at all.</p>
+      <h3>An opinion, held on purpose</h3>
+      <p>A program reaching Ring's Qt bridge is refused, not half-packaged. One
+      engine, dependency-free, beats a shelf of native extensions with dependencies
+      nobody is tracking — <a href="build.html">why, with the numbers</a>.</p>
     </div>
     <div class="card">
       <span class="icon">&#10022;</span>
@@ -149,17 +163,6 @@
       number. Three of the eight conclude plain Ring wins.</p>
     </div>
   </div>
-</section>
-
-<section class="wrap narrow">
-  <h2>The thesis, in one line</h2>
-  <p class="lead">Ring passes <b>lists by reference</b> and <b>strings by copy</b>.
-  That one asymmetry is behind almost everything slow about large-data work in Ring —
-  and Ring++ does not exist because pointers are fast. On most work they lose,
-  measurably, 3&ndash;28&times;, because every crossing from Ring into a native function
-  costs real time. It exists because a Ring string is copied every time it crosses a
-  call boundary, and a list is not — and everything Ring++ honestly offers is a way of
-  not paying that cost where it is real, and staying out of the way where it is not.</p>
 </section>
 
 <section class="wrap">
@@ -182,10 +185,9 @@
   self-modifying file — Ring's own runtime does not look for a same-named bytecode file,
   and that was measured before it was assumed. Bare-metal microcontrollers are out of
   scope entirely: a Ring VM does not fit an ESP32-class device, and no packaging tool
-  changes that. Ring's Qt bridge is out of scope by the same standing rule that keeps
-  every Softanza Ring foundation dependency-free except what it vendors and supports
-  itself. Where Ring++'s own library loses to plain Ring, the examples say so before
-  they say anything else.</p>
+  changes that. Where Ring++'s own library loses to plain Ring, the examples say so
+  before they say anything else — <a href="build.html">the Qt refusal has its own
+  page</a>, because it deserves more than one line.</p>
 </section>
 
 <section class="wrap narrow">
@@ -209,7 +211,10 @@
 <section class="wrap">
   <h2>One thesis, three siblings</h2>
   <p class="lead">Ring++ is one of several Ring foundations from the same author, each
-  standing alone and each dependency-free except for what it names and vendors itself.</p>
+  standing alone and each dependency-free except for what it names and vendors itself.
+  <a href="https://github.com/mayouni/ringpp/blob/main/docs/SIBLINGS.md">What running
+  Ring++ against all three actually found</a> — real code, and two mistakes in Ring++'s
+  own published claims, caught along the way.</p>
   <div class="actions" style="justify-content:flex-start">
     <a class="btn ghost" href="https://mayouni.github.io/ringscript/" target="_blank" rel="noopener">RingScript — Ring in the browser <span class="newtab" aria-hidden="true">&#8599;</span></a>
     <a class="btn ghost" href="https://mayouni.github.io/ringserv/" target="_blank" rel="noopener">RingServ — Ring on the server <span class="newtab" aria-hidden="true">&#8599;</span></a>

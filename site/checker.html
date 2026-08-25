@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Static analysis — Ring++</title>
+<meta name="description" content="ringpp check found two dead functions in Ring's own shipped standard library, and dormant bugs in a 6,000-file production codebase — with zero false positives. Here is how, and why it refuses rather than guesses.">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="style.css?v=0.2.0">
+</head>
+<body>
+
+<nav>
+  <div class="wrap">
+    <a class="brand" href="index.html"><img src="favicon.svg" alt="">Ring<span>++</span></a>
+    <a href="start.html">Start here</a>
+    <a href="checker.html" class="active">Static analysis</a>
+    <a href="build.html">Native build</a>
+    <a href="faq.html">Q&amp;A</a>
+    <a class="repo" href="https://github.com/mayouni/ringpp" target="_blank" rel="noopener" aria-label="Ring++ on GitHub"><svg viewBox="0 0 16 16" width="22" height="22" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg></a>
+    <a class="cta" href="https://github.com/mayouni/ringpp" target="_blank" rel="noopener">Get it <span class="newtab" aria-hidden="true">&#8599;</span></a>
+  </div>
+</nav>
+
+<header class="hero wrap" style="padding-top:2.6rem">
+  <h1>A checker whose only asset is<br>never being <em>wrong</em>.</h1>
+  <p class="sub">Not "might be slow" or "looks risky" — 16 rules, each predicting a
+  specific Ring error code on a specific line, verified by actually running the code.
+  Zero false positives across Ring's own 1,959 files.</p>
+</header>
+
+<section class="wrap">
+  <h2>The bug it found in Ring's own standard library</h2>
+  <p class="lead">Not a synthetic example — this is <code>libraries/stdlib/stdsecurity.ring</code>,
+  shipped in Ring 1.27, found by running <code>ringpp check</code> against Ring's own
+  source tree and confirmed by actually calling the function.</p>
+
+  <div class="preamble">
+    <p><code>encrypt_ex</code> calls the three-parameter <code>std_encrypt</code> with four
+    arguments. It has never worked — nothing in Ring's own codebase ever called it, and
+    nothing static was looking until now.</p>
+  </div>
+
+  <div class="compare">
+    <div>
+      <span class="label"><b>What ships in Ring 1.27</b> <span class="tag">stdsecurity.ring</span></span>
+<pre class="code"><span class="k">Func</span> encrypt_ex cString,cKey,cIV,cCipher
+    <span class="k">return</span> <span class="f">std_encrypt</span>(cString,cKey,cIV,cCipher)  <span class="c"># 4 args --</span>
+<span class="c"># std_encrypt takes 3. std_encrypt_ex, right next to it, takes 4.</span></pre>
+    </div>
+    <div>
+      <span class="label"><b><code>ringpp check</code> catches it before it runs</b></span>
+<pre class="code">stdsecurity.ring
+  52:10  <span class="err">error</span>  rpp/type-arity
+         std_encrypt() takes 3 argument(s), called with 4
+         Error (R20) at run time (defined in stdfunctions.ring)
+
+<span class="c"># running it instead:</span>
+<span class="f">x</span>.encrypt_ex(<span class="s">"secret"</span>, <span class="s">"key"</span>, <span class="s">"iv"</span>, <span class="s">"AES-256-CBC"</span>)
+<span class="c"># Error (R20) : Calling function with extra number of parameters</span></pre>
+    </div>
+  </div>
+</section>
+
+<section class="wrap">
+  <h2>Why the checker can be <em>certain</em>, not just suspicious</h2>
+  <p class="lead">An arity claim across files is only worth making if it cannot be
+  wrong. Three measured Ring behaviours make it safe, not three guesses:</p>
+  <div class="grid">
+    <div class="card">
+      <h3>One definition, guaranteed</h3>
+      <p>A duplicate function name is <code>C22</code> at <b>load</b> time — the
+      program never starts. So within one load graph, a resolving name has exactly
+      one live definition. "Defined in another file" is not a guess.</p>
+    </div>
+    <div class="card">
+      <h3>A known resolution order</h3>
+      <p>Inside a class: own method &rarr; inherited &rarr; global &rarr; builtin,
+      arity enforced at every step. A call inside a class body is decidable whenever
+      the whole method chain is visible.</p>
+    </div>
+    <div class="card">
+      <h3>It knows what Ring keeps</h3>
+      <p>Parameter type annotations are parsed and discarded by Ring itself; a
+      <em>return</em> annotation is an ordinary variable read that needs
+      <code>typehints.ring</code> loaded or it raises <code>R24</code>. The checker
+      knows which half of the syntax Ring actually evaluates.</p>
+    </div>
+  </div>
+  <p class="lead" style="margin-top:1.6rem">Where certainty is not available — an
+  unknown parent class, a file that did not parse, a name with two definitions — the
+  checker <b>refuses</b> rather than reports. A program whose <code>load
+  "stdlib.ring"</code> could not be followed gets <code>NO VERDICT</code>, never a
+  false "clean".</p>
+</section>
+
+<section class="wrap">
+  <h2>The 16 rules</h2>
+  <p class="lead">Every one traces to a measured finding — a specific microsecond
+  figure or a specific Ring error code, never "this might be slow".</p>
+  <table style="width:100%; border-collapse:collapse; font-size:var(--read)">
+    <thead><tr style="border-bottom:1px solid var(--border)">
+      <th style="text-align:left; padding:.5rem 0">layer</th>
+      <th style="text-align:left; padding:.5rem 0">rules</th>
+      <th style="text-align:left; padding:.5rem 0">needs</th>
+    </tr></thead>
+    <tbody>
+      <tr style="border-bottom:1px solid var(--border)">
+        <td style="padding:.6rem 0">lint</td>
+        <td style="padding:.6rem 0"><code>varptr-*</code>, <code>memcpy-*</code>,
+        <code>substr-in-loop</code>, <code>genarray-in-loop</code>,
+        <code>empty-catch</code>, <code>method-shadows-builtin</code>,
+        <code>unparsed</code></td>
+        <td style="padding:.6rem 0">a parse only</td>
+      </tr>
+      <tr style="border-bottom:1px solid var(--border)">
+        <td style="padding:.6rem 0">level-1 types</td>
+        <td style="padding:.6rem 0"><code>type-hints-missing</code>,
+        <code>type-arity</code>, <code>type-arg-mismatch</code>,
+        <code>type-return-mismatch</code>, <code>type-not-a-hint</code></td>
+        <td style="padding:.6rem 0">Ring's own annotation channel</td>
+      </tr>
+      <tr>
+        <td style="padding:.6rem 0">cross-file</td>
+        <td style="padding:.6rem 0"><code>type-duplicate-func</code>,
+        <code>type-declared-conflict</code></td>
+        <td style="padding:.6rem 0">the load graph, <code>--ring &lt;dir&gt;</code></td>
+      </tr>
+    </tbody>
+  </table>
+</section>
+
+<section class="wrap">
+  <h2>What it found at scale</h2>
+  <div class="stats">
+    <div><div class="num">1,959</div><div class="what">Ring's own files — 3 errors found, all real, 0 false positives</div></div>
+    <div><div class="num">99</div><div class="what">arity call sites found in Softanza's 6,012 files — 97 in dead archives</div></div>
+    <div><div class="num">46</div><div class="what">distinct functions those 99 call sites reached across</div></div>
+    <div><div class="num">3</div><div class="what">false positives an earlier version produced, and what they cost — below</div></div>
+  </div>
+</section>
+
+<section class="wrap narrow">
+  <h2>What it got wrong, and what that cost</h2>
+  <p class="lead">Every one was a Ring scoping rule the checker did not yet know —
+  and not one would have been caught by a test written from imagination. All three
+  were caught by running real corpora, not by reasoning about the rules in the
+  abstract.</p>
+  <div class="preamble">
+    <p><b>344 invented errors</b> — a brace block like
+    <code>StzCharQ("x") { ? Name() }</code> runs in the object's own scope, so
+    <code>Name()</code> is a method call, not an undefined function. Would have
+    buried the 99 real findings thirty to one.</p>
+    <p><b>A call inside a comment</b> — one file that failed to parse had a call
+    invented by the grammar's own error recovery inside a <code>/* block comment */</code>.
+    Files that do not parse are now excluded from cross-file checking entirely, in
+    both directions — costing 12 genuine duplicate definitions in a specification
+    sketch that cannot run. A true finding in a file that never runs costs less than
+    one false finding in a file that does.</p>
+    <p><b>Ring's own <code>call</code> keyword</b> — <code>call draw(oGame, self)</code>
+    invokes a function held in a <em>variable</em>. Took Ring's own libraries from 0
+    errors to 5 until the checker learned to recognise it.</p>
+  </div>
+  <p class="lead">The rule underneath all three: <b>a checker's only asset is that it
+  is never wrong about correct code.</b> <a
+  href="https://github.com/mayouni/ringpp/blob/main/docs/CASE-TYPE-SAFETY.md">The full
+  case study</a> has the rest, including two live bugs found and fixed in Softanza.</p>
+</section>
+
+<section class="wrap narrow">
+  <h2>Next</h2>
+  <div class="actions" style="justify-content:flex-start">
+    <a class="btn primary" href="build.html">Native build &mdash; ship it with no compiler</a>
+    <a class="btn ghost" href="faq.html">Q&amp;A</a>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <span>Ring++ 0.1.0 — MIT</span>
+    <a href="https://github.com/mayouni/ringpp/tree/main/docs" target="_blank" rel="noopener">Documentation <span class="newtab" aria-hidden="true">&#8599;</span></a>
+    <a href="https://ring-lang.github.io/" target="_blank" rel="noopener">Ring language <span class="newtab" aria-hidden="true">&#8599;</span></a>
+    <a href="https://github.com/mayouni/stzlib" target="_blank" rel="noopener">Softanza <span class="newtab" aria-hidden="true">&#8599;</span></a>
+    <span class="sp">a Softanza project by Mansour Ayouni</span>
+  </div>
+</footer>
+
+</body>
+</html>
