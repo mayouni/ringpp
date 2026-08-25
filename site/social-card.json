@@ -1,0 +1,26 @@
+{
+  "logo": "../ringpp-logo.jpg",
+  "out": "social-card.png",
+  "split": "auto",
+
+  "background": "#ffffff",
+  "ink": "#0f213e",
+  "muted": "#6a737d",
+  "accent": "#d43e12",
+
+  "tagline": [
+    "Faster, safer and more portable —",
+    "without ever leaving Ring."
+  ],
+  "meta": "Performant code  ·  Static analysis  ·  Native build",
+  "url": "github.com/mayouni/ringpp",
+
+  "bar": 12,
+  "bar_stops": [
+    [0.0,  "#0c7d8f"],
+    [0.30, "#115b8c"],
+    [0.50, "#0f213e"],
+    [0.72, "#d43e12"],
+    [1.0,  "#f2790c"]
+  ]
+}
