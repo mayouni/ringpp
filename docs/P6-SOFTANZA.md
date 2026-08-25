@@ -126,17 +126,39 @@ the address re-derived per access rather than cached. That is `RppBuffer`
 plus `RppView`, and it is the one place in this proposal where adopting
 Ring++ is the straightforward answer rather than a consolidation argument.
 
-**Two acceptable outcomes, in the plan's own words — it works or it goes:**
+**First, a distinction the plan's "works or is deleted" does not make.** The
+dead machinery is private; the methods standing on it are **public**, and
+they do not fail — they return constants:
+
+| method | returns today, always |
+|---|---|
+| `GetRawPointer()` | `""` |
+| `GetMemoryAddress()` | `0` |
+| `GetViewAddress()` | `0` |
+| `ComparePointer(oOther)` | `0` |
+| `IsNullPointer()` | `TRUE` |
+
+`IsNullPointer()` is the one to look at twice: it answers **true, always**,
+and it is not wrong — there is no pointer. It is a correct answer to a
+question the class can no longer really ask.
+
+So "delete it" splits into two different acts:
 
 1. **Rebuild on `RppBuffer`/`RppView`.** `stkPointer` holds a view; every
-   accessor goes through it; no address is stored on the object.
-2. **Delete the low-level half.** Every guarded branch already has a working
-   fallback, and has been using it all along. Deleting is a *no-op at
-   runtime* — which is itself the proof that nothing depends on it.
+   accessor goes through it; no address is stored on the object. The five
+   methods above start returning real values for the first time.
+2. **Remove the private machinery, keep the five methods.** Honest, but
+   barely a change: they already return those constants. Worth it only as
+   bookkeeping, and the comments must then say the class has no low-level
+   access rather than implying it might.
+3. **Remove the methods.** This is an **API break** — `stkPointer`'s public
+   surface loses five names. Nothing in the estate calls them today, but that
+   is a fact about today, and it is the maintainer's call, not a session's.
 
-Option 2 is free and honest. Option 1 is worth doing only if something
-actually needs the address. **Nothing in the estate does today**, which is
-why nobody noticed in the first place.
+**Recommendation: 1 if anything needs the address, 3 if nothing does — and 3
+is a decision to be taken deliberately, not as a side effect of tidying.**
+Nothing in the estate needs it today, which is exactly why nobody noticed for
+as long as they did not.
 
 ---
 
@@ -223,7 +245,7 @@ Each item carries the gate that decides whether it worked.
 | # | work | gate |
 |---|---|---|
 | **1** | **Measure the bridge.** A registered extension function taking a 1 MB string, against the same function taking a pointer and a length. Minima over repetitions, both paths returning identical results | a number, either way. If the copy does not reproduce, strike §3 |
-| **2** | **`stkPointer`: decide, then act.** Rebuild on `RppBuffer`/`RppView`, or delete the low-level half | `stkPointerTest.ring` (247 lines) passes unchanged. If deleting: it passes *because nothing used the feature* — which is the finding restated as a test result |
+| **2** | **`stkPointer`: report, then let the maintainer choose.** The three options in §2 differ in whether the public surface changes; a session must not pick between them alone | `stkPointerTest.ring` (247 lines) passes unchanged. Whichever option: it passes *because nothing used the feature* — the finding restated as a test result |
 | **3** | **Do not touch `stkBuffer.Write`** | none. Recorded here so the next reader does not re-open it |
 | **4** | **If gate 1 reproduces:** a handle-taking form for the bridge functions that carry bulk bytes | the same payload through both forms, byte-identical output, with the crossover stated — the size below which the string form still wins |
 
