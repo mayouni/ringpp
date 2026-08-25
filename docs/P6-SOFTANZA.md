@@ -162,6 +162,49 @@ as long as they did not.
 
 ---
 
+## 2b. Finding S-2 — `stkBuffer.Write` carries the `"NULL"`-prefix hole too
+
+*Added 2026-08-25, after the finding above was written. It does not change
+§1's recommendation to leave `stkBuffer.Write` alone — it adds one line to
+it.*
+
+`libraries/stzlib/core/system/stkBuffer.ring:144`:
+
+```ring
+if _cData_[1] = @cNulByte or (_nLenData_ = 4 and _cData_ = "NULL")
+```
+
+That is, character for character, the guard Ring++ shipped until today —
+and it has the same hole, for the same reason. **[F-31](FINDINGS.md)**:
+`ring_vm_memcpy` decides "is this argument a null pointer?" with `strcmp`,
+so it reads the **C view** of the source. A string whose bytes begin
+`N U L L \0` *is* `"NULL"` to `strcmp` whatever its Ring length. The test
+above compares the Ring *value* against `"NULL"`, which only a 4-byte
+string can ever satisfy.
+
+**The trigger here is narrower than it was in Ring++**, which is why it has
+not fired: `stkBuffer.Write` only reaches that `memcpy` on its in-place path
+— buffer at least `@nInPlaceMin` (512) and the write landing entirely inside
+the existing bytes — and the source is the *caller's* data, never the whole
+buffer. Ring++'s `Grow` fed itself the entire buffer as one source, which is
+what made the shape reachable by accident there.
+
+So the exposure is: **any caller writing five or more bytes that begin
+`"NULL"` followed by a zero, into a buffer of 512 bytes or more.** Binary
+records, a serialised field holding the text `NULL`, a length-prefixed value
+— none of these are exotic in a buffer type.
+
+**The fix is one expression**, and Ring++'s is measured: on the bytes rather
+than the value, written as a single condition because Ring's `and`/`or`
+short-circuit (**F-32**), which costs **+0.075 µs per write, ~3.7%** — one
+string index. `rpp/core.ring` `Poke` carries the working version to copy.
+
+**This is a genuine defect, not a style note, and it is the one place in this
+proposal that argues for changing `stkBuffer` after all** — a two-line guard
+repair, not the rewrite §1 recommends against.
+
+---
+
 ## 3. The architectural frame — where Ring++ applies now that the engine is Zig
 
 The Softanza Engine is Zig, loaded through a thin FFI bridge
@@ -246,7 +289,7 @@ Each item carries the gate that decides whether it worked.
 |---|---|---|
 | **1** | **Measure the bridge.** A registered extension function taking a 1 MB string, against the same function taking a pointer and a length. Minima over repetitions, both paths returning identical results | a number, either way. If the copy does not reproduce, strike §3 |
 | **2** | **`stkPointer`: report, then let the maintainer choose.** The three options in §2 differ in whether the public surface changes; a session must not pick between them alone | `stkPointerTest.ring` (247 lines) passes unchanged. Whichever option: it passes *because nothing used the feature* — the finding restated as a test result |
-| **3** | **Do not touch `stkBuffer.Write`** | none. Recorded here so the next reader does not re-open it |
+| **3** | **Do not *rewrite* `stkBuffer.Write`** — but do repair its guard, §2b | a test that writes `"NULL" + char(0) + ...` into a buffer of 512+ and survives. Before the repair it kills the process with no message |
 | **4** | **If gate 1 reproduces:** a handle-taking form for the bridge functions that carry bulk bytes | the same payload through both forms, byte-identical output, with the crossover stated — the size below which the string form still wins |
 
 Items 1 and 2 are independent and can run in either order. Item 2 needs no

@@ -29,6 +29,11 @@ Gate "P3 idioms"    "idioms.ring"       "0 failed"
 # The rest of the suite could not see this bug -- fuzz_bounds.ring even
 # contains a live collision and passed anyway.
 Gate "P2 collision" "name_collision.ring" "0 failed"
+# FINDINGS F-31: every gate above asks whether an access RAISES or returns the
+# right LENGTH. This one asks whether the BYTES match what plain Ring would
+# have produced, which is how the "NULL"-prefix crash was found after the
+# others had been green for weeks.
+Gate "P2 differential" "differential.ring" "GATE PASSED"
 
 Pop-Location
 

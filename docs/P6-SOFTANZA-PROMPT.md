@@ -45,6 +45,32 @@ returns a copy that dies at return while its address stays cached on the
 object. That is the F-22 failure — no raise, no message, the process vanishes
 once the allocator reuses the block.
 
+--- A2. stkBuffer.Write: repair one guard (this one you DO implement) ---
+
+libraries/stzlib/core/system/stkBuffer.ring:144 has, character for character,
+the guard Ring++ shipped until 2026-08-25:
+
+    if _cData_[1] = @cNulByte or (_nLenData_ = 4 and _cData_ = "NULL")
+
+It has the same hole. Ring's memcpy asks strcmp whether the source is a null
+pointer, so it reads the C view: any string whose bytes begin "NULL" followed
+by a zero IS "NULL" to strcmp, whatever its Ring length. Comparing the Ring
+value against "NULL" only ever catches a 4-byte string.
+
+Reproduce it first, in stzlib, before changing anything: write
+"NULL" + char(0) + something into a buffer of 512 bytes or more, at an offset
+where the write lands inside the existing bytes so the in-place path is taken.
+The process should die with no message and no line number. If it does not,
+say so and stop — the trigger may be narrower than predicted and I want to
+know that rather than have the guard widened on my say-so.
+
+Then port the fix from ringpp/rpp/core.ring's Poke: test the bytes, not the
+value, in one expression. Ring's and/or short-circuit (FINDINGS F-32), so the
+fifth byte is safe to name after the length test. Measured cost in Ring++:
++0.075 us per write, about 3.7%, which is one string index.
+
+Gate: the reproduction above survives, and stkBufferTest.ring still passes.
+
 --- B. Measure the Ring-to-Zig bridge ---
 
 Gate 1 of the document. The claim is that a string argument to a registered
@@ -65,11 +91,12 @@ that section rather than soften it, and I mean it.
 
 --- Constraints ---
 
-- Change no code in item A. Item B is a benchmark; it does not modify stkString
-  or the engine.
-- Do not touch stkBuffer.Write. §1 explains why: it already carries the
-  in-place path and reached every one of Ring++'s numbers independently. It is
-  recorded as deliberately-not-touched so nobody reopens it.
+- Change no code in item A. Item A2 is the one repair authorised here, and only
+  after you have reproduced the crash. Item B is a benchmark; it does not
+  modify stkString or the engine.
+- Do not REWRITE stkBuffer.Write onto RppBuffer. §1 explains why: it already
+  carries the in-place path and reached every one of Ring++'s numbers
+  independently. A2 repairs one guard inside it; that is the whole mandate.
 - Ring 1.27 at D:\ring127\bin\ring.exe.
 - Never background a build or a scan, and cap any native build at -j2. This
   machine has 2 GB of page file and has frozen three times under load.

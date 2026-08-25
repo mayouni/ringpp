@@ -129,7 +129,27 @@ class RppBuffer
 		# those two shapes need the slow pointer route; everything else can hand
 		# the string straight to memcpy and save a varptr (790 ns) plus a
 		# nullptr (520 ns) per call.
-		if cBytes[1] = cRppNul or (nL = 4 and cBytes = "NULL")
+		#
+		# F-31: what strcmp() sees is the C view of the source, NOT the Ring
+		# value, so the test must be on the bytes. Any string that BEGINS
+		# "NULL" followed by a zero byte is `"NULL"` to strcmp whatever its
+		# Ring length -- a 511-byte buffer starting NULL\0 killed the process
+		# here, because the old test only recognised the literal 4-byte case.
+		# Found by tests/differential.ring, 2026-08-25.
+		#
+		# Compared byte by byte on purpose: left(cBytes, 4) would pass the
+		# whole string by value and pay the F-5 copy on every single Poke,
+		# while s[i] is ~0.07 us and does not copy.
+		#
+		# Written as one expression because Ring's `and`/`or` DO short-circuit
+		# (F-32) -- so cBytes[5] is never evaluated when nL is 4, and an
+		# ordinary payload leaves the chain at the second test. The obvious
+		# alternative, a flag assigned across nested ifs, measured 0.32 us
+		# slower per Poke.
+		if cBytes[1] = cRppNul or
+		   (nL >= 4 and cBytes[1] = "N" and cBytes[2] = "U" and
+		    cBytes[3] = "L" and cBytes[4] = "L" and
+		    (nL = 4 or cBytes[5] = cRppNul))
 			setptr(pRppSrcPtr, getptr(varptr(:cBytes, "char *")))
 			memcpy(pRppScratch, pRppSrcPtr, nL)
 		else

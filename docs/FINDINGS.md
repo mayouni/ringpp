@@ -1187,6 +1187,75 @@ bridge is not excluded for being a native extension; it is excluded for
 being one whose own transitive dependency surface Ring's source cannot
 name and Ring++ will not guess at.
 
+### F-31. `memcpy()` reads the **C view** of the source, so `"NULL"` is a prefix, not a value
+
+F-14 recorded that `memcpy()` aborts the process when the source string
+is the literal `"NULL"`, because `ring_vm_memcpy` uses `strcmp` to decide
+whether an argument is a null pointer. The shape of that test was read
+too narrowly here, and Ring++ carried the resulting hole for its whole
+life until `tests/differential.ring` found it on 2026-08-25.
+
+**`strcmp` sees a C string. A Ring string whose bytes begin `N U L L \0`
+*is* `"NULL"` to `strcmp`, whatever its Ring length.**
+
+Four lines kill the process, with no message and no line number:
+
+```ring
+oB = RppBuffer(16)
+oB.Poke(0, "NULL")            # 4 bytes -- the old guard caught this
+oB.Poke(4, RPP_NUL_BYTE)      # 1 byte  -- the old guard caught this too
+oB.Grow(33)                   # <-- copies all 16 bytes as ONE source. Dead.
+```
+
+Neither write is dangerous. `Grow` is: it hands the whole buffer back to
+`Poke` as a single source, and those 16 bytes now begin `NULL\0`. The old
+guard —
+
+```ring
+if cBytes[1] = cRppNul or (nL = 4 and cBytes = "NULL")
+```
+
+— tests the Ring *value* for equality with `"NULL"`, which a 16-byte
+string can never satisfy. The correct test is on the bytes: first four
+are `NULL`, and either the length is 4 or the fifth byte is zero.
+
+**Cost of the fix: +0.075 µs per `Poke`, ~3.7%** — 200,000 pokes of an
+ordinary 8-byte payload, three alternating measurements of each build,
+minima 423 ms fixed against 408 ms before. That is one string index,
+which is exactly what F-6 prices `s[i]` at. A process-killing bug for
+one index is not a trade worth thinking about.
+
+**How it was found, and why it was not found earlier.** Every existing
+gate checked that illegal accesses *raise* and that legal ones return the
+right *length*. None compared the resulting **bytes** against what plain
+Ring would have produced. The differential gate keeps an `RppBuffer` and
+an ordinary Ring string side by side, applies the same operation to both,
+and compares the whole buffer after every one. It needed a `"NULL"`
+payload at offset 0, then a zero at offset 4, then a `Grow` — a
+combination the fuzz reached by luck after ~13,000 operations. Luck is
+not a regression test, so the shape is now a named case that runs before
+any random one.
+
+### F-32. Ring's `and` / `or` **do** short-circuit — and that protects an index
+
+Not documented anywhere this project could find, and load-bearing for
+F-31's fix:
+
+```ring
+nCalls = 0
+if FALSE and Side() ok        # Side called 0 times
+if TRUE  or Side() ok         # Side called 0 times
+
+c = "abc"
+if len(c) >= 5 and c[5] = "x" ok    # no error: c[5] is never evaluated
+```
+
+So a guard may test a length and then index past it in the same
+expression, which is what lets F-31's replacement be one expression
+rather than a flag assigned across nested `if`s. The flag version was
+measured at **0.32 µs per call slower** — the extra local assignment and
+branch cost four times what the extra index does.
+
 ---
 
 ## Part 5 — Safety, measured
