@@ -26,6 +26,16 @@ bin/**/ringpp.exe binary
 # wrong, which is the version anyone would actually compare.
 vendor/** -text
 
+# Ring sources check out LF, which is what 68 of the 76 .ring files in this
+# repository already were. The other eight -- one per example -- sat CRLF in
+# the working tree against LF in the index, so `git status` called them
+# modified on every single command while `git diff` showed nothing at all,
+# because normalisation hid the only difference there was. Verified identical
+# before pinning: same md5 after stripping CR, 139 lines, no BOM, no mixed
+# endings. A file that reports modified forever trains you to stage around it,
+# which is how a real edit gets committed by accident or missed entirely.
+*.ring text eol=lf
+
 # Image assets: same reasoning as the CLI binaries above, extended before
 # it was needed rather than after a corrupted checkout was found. JPEGs
 # and PNGs are binary-heavy enough that git's heuristic almost always
