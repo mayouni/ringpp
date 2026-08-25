@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The one thing we refuse to package — Ring++</title>
+<meta name="description" content="Ring++ will not package a program that uses Ring's Qt bridge. Two reasons: a licence that is a real business risk, and a package that reports itself complete and then dies with no message at all.">
+<meta property="og:type" content="article">
+<meta property="og:url" content="https://mayouni.github.io/ringpp/blog-why-not-qt.html">
+<meta property="og:title" content="The one thing we refuse to package">
+<meta property="og:description" content="A package that reported nothing missing, then died with no message at all. Why Ring++ refuses Qt — the licence reason and the measured one.">
+<meta property="og:image" content="https://mayouni.github.io/ringpp/social-card.png">
+<meta property="og:image:width" content="1280">
+<meta property="og:image:height" content="640">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:image" content="https://mayouni.github.io/ringpp/social-card.png">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="style.css?v=0.4.0">
+</head>
+<body>
+
+<nav>
+  <div class="wrap">
+    <a class="brand" href="index.html"><img src="favicon.svg" alt="">Ring<span>++</span></a>
+    <a href="start.html">Start here</a>
+    <a href="performance.html">Performant code</a>
+    <a href="checker.html">Static analysis</a>
+    <a href="build.html">Native build</a>
+    <a class="repo" href="https://github.com/mayouni/ringpp" target="_blank" rel="noopener" aria-label="Ring++ on GitHub"><svg viewBox="0 0 16 16" width="22" height="22" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg></a>
+    <a class="cta" href="https://github.com/mayouni/ringpp" target="_blank" rel="noopener">Get it <span class="newtab" aria-hidden="true">&#8599;</span></a>
+  </div>
+</nav>
+
+<header class="wrap narrow" style="padding-top:2.6rem">
+  <p style="margin:0 0 .5rem"><a href="blog.html" style="color:var(--accent); text-decoration:none">&larr; Blog</a></p>
+  <h1 style="font-size:clamp(1.9rem, 5vw, 2.5rem)">The one thing we <em>refuse</em>
+  to package</h1>
+  <p style="color:var(--muted); font-size:var(--floor); margin:.4rem 0 0">26 August 2026 &middot; Mansour Ayouni</p>
+</header>
+
+<article class="wrap narrow">
+  <p class="lead">Ring++ can take a Ring program and turn it into something you
+  hand to someone else, with no compiler and no Ring installation needed on
+  their machine. It does that for essentially anything — except one case,
+  which it stops and refuses outright.</p>
+
+  <p class="lead">If your program draws a window using Ring's Qt bridge,
+  Ring++ will not package it. Not "will try and warn you" — it stops before
+  writing a single byte.</p>
+
+  <p class="lead">That is a strong thing for a tool to do, so it owes an
+  explanation. There are two, and they arrived in that order.</p>
+
+  <h2>Reason one: a licence, not a technicality</h2>
+
+  <p class="lead">Qt is the toolkit Ring uses to draw graphical interfaces.
+  It is dual-licensed: you may use it free under the LGPL, which carries real
+  obligations about how a commercial product links to it and redistributes
+  it — or you buy a commercial licence instead.</p>
+
+  <p class="lead">For software delivered to paying customers, that is a
+  business risk with a cost attached, and someone eventually has to answer
+  for it. That decision was taken before Ring++ existed. It is not a
+  judgement about Qt's quality, which is not in question.</p>
+
+  <h2>Reason two: it was measured, and it was worse than expected</h2>
+
+  <p class="lead">The second reason came later and turned a policy into a
+  hard refusal.</p>
+
+  <p class="lead">Ring++ can look at a program and list every outside
+  component it needs, without running it. Point it at a program that draws
+  windows and it finds exactly <b>one</b>: a single file called
+  <code>ringqt.dll</code>. Bundle that file and every check agrees the
+  package is complete — nothing is reported missing.</p>
+
+  <div class="preamble">
+    <p>Copied to a clean machine and run: <b>no output whatsoever.</b> No
+    error, no window, no message. Windows reports exit code
+    <code>0xC0000409</code> and that is the entire story the user gets.</p>
+  </div>
+
+  <p class="lead">The reason is that <code>ringqt.dll</code> is not one
+  component. It is a doorway to roughly <b>seventy-five more</b> Qt
+  libraries, which the operating system loads at the moment the program
+  starts — and which no amount of reading the Ring source could ever
+  reveal, because the Ring source never mentions them.</p>
+
+  <h2>Why silence is worse than an error</h2>
+
+  <p class="lead">A missing-file error is a bad afternoon. You read the name,
+  you find the file, you move on.</p>
+
+  <p class="lead">This is the other kind. Every automated check said the
+  package was complete. It would have passed review. It would have shipped.
+  And the first person to discover otherwise would be a customer, watching
+  nothing happen, with no message to send back to anyone.</p>
+
+  <p class="lead"><b>A tool that can produce that outcome should not offer
+  it.</b> So <code>ringpp build</code> now recognises the case and stops,
+  naming the reason, before writing anything at all. That refusal is itself
+  tested: the test puts the exclusion back and confirms the silent-crash
+  package reappears, because a safety rule nobody has watched fail is not
+  known to work.</p>
+
+  <h2>What this is not</h2>
+
+  <p class="lead">It is not a rule against native components in general.
+  Ring++ happily packages programs that use databases, networking or
+  encryption — six such libraries are bundled and run in the test suite. Each
+  is a single self-contained file that declares what it needs.</p>
+
+  <p class="lead">The Qt bridge is excluded for being the one whose real
+  dependencies cannot be seen from the outside — and Ring++ would rather
+  refuse than guess.</p>
+
+  <p class="lead"><a href="build.html">The build page</a> has the full
+  walkthrough, including the captured output from the package that crashed.</p>
+</article>
+
+<section class="wrap narrow">
+  <h2>Next</h2>
+  <div class="actions" style="justify-content:flex-start">
+    <a class="btn primary" href="build.html">Native build</a>
+    <a class="btn ghost" href="blog-two-files.html">Two files, not one</a>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <span>Ring++ 0.1.0 — MIT</span>
+    <a href="reference.html">Reference</a>
+    <a href="design.html">Design</a>
+    <a href="blog.html">Blog</a>
+    <a href="https://github.com/mayouni/ringpp/tree/main/docs" target="_blank" rel="noopener">Documentation <span class="newtab" aria-hidden="true">&#8599;</span></a>
+    <a href="https://ring-lang.github.io/" target="_blank" rel="noopener">Ring language <span class="newtab" aria-hidden="true">&#8599;</span></a>
+    <a href="https://github.com/mayouni/stzlib" target="_blank" rel="noopener">Softanza <span class="newtab" aria-hidden="true">&#8599;</span></a>
+    <span class="sp">a Softanza project by Mansour Ayouni</span>
+  </div>
+</footer>
+
+</body>
+</html>

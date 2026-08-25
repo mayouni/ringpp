@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>A checker that says "I don't know" — Ring++</title>
+<meta name="description" content="When Ring++'s checker cannot follow a program completely, it refuses to give a verdict rather than reporting it clean. Why the silence of a tool that guessed is the most expensive kind.">
+<meta property="og:type" content="article">
+<meta property="og:url" content="https://mayouni.github.io/ringpp/blog-i-dont-know.html">
+<meta property="og:title" content="A checker that says &quot;I don't know&quot;">
+<meta property="og:description" content="A checker's only asset is that it is never wrong about correct code. So when it cannot see the whole program, it refuses a verdict instead of guessing clean.">
+<meta property="og:image" content="https://mayouni.github.io/ringpp/social-card.png">
+<meta property="og:image:width" content="1280">
+<meta property="og:image:height" content="640">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:image" content="https://mayouni.github.io/ringpp/social-card.png">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="style.css?v=0.4.0">
+</head>
+<body>
+
+<nav>
+  <div class="wrap">
+    <a class="brand" href="index.html"><img src="favicon.svg" alt="">Ring<span>++</span></a>
+    <a href="start.html">Start here</a>
+    <a href="performance.html">Performant code</a>
+    <a href="checker.html">Static analysis</a>
+    <a href="build.html">Native build</a>
+    <a class="repo" href="https://github.com/mayouni/ringpp" target="_blank" rel="noopener" aria-label="Ring++ on GitHub"><svg viewBox="0 0 16 16" width="22" height="22" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg></a>
+    <a class="cta" href="https://github.com/mayouni/ringpp" target="_blank" rel="noopener">Get it <span class="newtab" aria-hidden="true">&#8599;</span></a>
+  </div>
+</nav>
+
+<header class="wrap narrow" style="padding-top:2.6rem">
+  <p style="margin:0 0 .5rem"><a href="blog.html" style="color:var(--accent); text-decoration:none">&larr; Blog</a></p>
+  <h1 style="font-size:clamp(1.9rem, 5vw, 2.5rem)">A checker that says
+  <em>"I don't know"</em></h1>
+  <p style="color:var(--muted); font-size:var(--floor); margin:.4rem 0 0">26 August 2026 &middot; Mansour Ayouni</p>
+</header>
+
+<article class="wrap narrow">
+  <p class="lead">Ring++ includes a tool that reads your code without running
+  it and tells you about mistakes — calling a function with the wrong number
+  of arguments, say. It found two functions in Ring's own standard library
+  that had never worked in any release.</p>
+
+  <p class="lead">Sometimes it reads a program and reports neither "clean"
+  nor a list of problems. It reports <code>NO VERDICT</code>: <b>I could not
+  see all of this, so I am not going to tell you it is fine.</b></p>
+
+  <p class="lead">People occasionally ask why it does not just say "probably
+  fine" and move on. This is the answer.</p>
+
+  <h2>The one thing such a tool is for</h2>
+
+  <p class="lead">A checker has exactly one asset, and it is not the number
+  of problems it finds. It is this:</p>
+
+  <p class="lead" style="font-size:1.35rem; color:var(--ink)">It is never
+  wrong when it says your code is fine.</p>
+
+  <p class="lead">Lose that, and the tool becomes worse than nothing. Not
+  neutral — <em>worse</em>. A checker nobody runs wastes a download. A
+  checker that says "clean" when it has not looked properly makes you stop
+  looking too, and it does that at the exact moment when something was
+  there to find.</p>
+
+  <h2>When it cannot see everything</h2>
+
+  <p class="lead">Ring programs are assembled from files that pull in other
+  files. To know that a function is called correctly, the checker has to find
+  where that function was defined — possibly several files away.</p>
+
+  <p class="lead">Usually it can follow the whole chain. Sometimes it cannot:
+  a file lives somewhere it was not told about, or one file fails to parse,
+  or a name genuinely has two definitions and there is no way to tell which
+  one wins.</p>
+
+  <p class="lead">At that moment the tool has two options, and only one of
+  them is honest.</p>
+
+  <div class="grid">
+    <div class="card">
+      <h3>Report clean</h3>
+      <p>Comfortable, and usually right. But the one time it is wrong, it is
+      wrong in the direction that costs the most — and the user has no way
+      of telling that case apart from a real all-clear.</p>
+    </div>
+    <div class="card">
+      <h3>Refuse a verdict</h3>
+      <p>Says exactly what happened: this part could not be followed, so
+      nothing is being claimed about it. Less satisfying. Always true.</p>
+    </div>
+  </div>
+
+  <p class="lead" style="margin-top:1.6rem">Ring++ takes the second one, and
+  tells you which file it could not follow so you can point it at the missing
+  piece and ask again.</p>
+
+  <h2>Why this project takes it personally</h2>
+
+  <p class="lead">Because it has been caught by exactly this failure twice —
+  in its own measurement tools, not in someone else's code.</p>
+
+  <p class="lead">Both times the pattern was identical: a program reported
+  success while silently doing nothing. One check had been written to look
+  for a tool that was not installed on the machine; finding nothing, it
+  matched nothing, allowed everything, and printed a clean result every time
+  it ran. It was not guarding anything at all.</p>
+
+  <div class="preamble">
+    <p><b>A guard that reports success by staying quiet is indistinguishable
+    from one that works.</b> That sentence is now a rule here: every safety
+    check has to be watched failing on purpose before it is trusted to pass.</p>
+  </div>
+
+  <p class="lead">A checker that guesses "clean" is the same defect wearing
+  better clothes. Having been fooled twice by our own tools, we were not
+  going to build a third one that could fool a user.</p>
+
+  <h2>What it costs</h2>
+
+  <p class="lead">Honesty of this kind is not free, and the bill is small but
+  real: you will occasionally get <code>NO VERDICT</code> when the code was in
+  fact fine, and you will have to tell the tool where the missing files are
+  before it will commit to an answer.</p>
+
+  <p class="lead">The trade is deliberate. Across Ring's own 1,959 files the
+  checker reported <b>zero</b> false alarms — no invented problems in correct
+  code — while finding three real ones. That number is only worth something
+  because the tool refuses to pad it with guesses.</p>
+
+  <p class="lead"><a href="checker.html">The static analysis page</a> has the
+  bug it found in Ring's shipped standard library, and the three false alarms
+  an earlier version did produce, with what each one cost.</p>
+</article>
+
+<section class="wrap narrow">
+  <h2>Next</h2>
+  <div class="actions" style="justify-content:flex-start">
+    <a class="btn primary" href="checker.html">Static analysis</a>
+    <a class="btn ghost" href="blog-differential-gate.html">We spent a day attacking our own library</a>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <span>Ring++ 0.1.0 — MIT</span>
+    <a href="reference.html">Reference</a>
+    <a href="design.html">Design</a>
+    <a href="blog.html">Blog</a>
+    <a href="https://github.com/mayouni/ringpp/tree/main/docs" target="_blank" rel="noopener">Documentation <span class="newtab" aria-hidden="true">&#8599;</span></a>
+    <a href="https://ring-lang.github.io/" target="_blank" rel="noopener">Ring language <span class="newtab" aria-hidden="true">&#8599;</span></a>
+    <a href="https://github.com/mayouni/stzlib" target="_blank" rel="noopener">Softanza <span class="newtab" aria-hidden="true">&#8599;</span></a>
+    <span class="sp">a Softanza project by Mansour Ayouni</span>
+  </div>
+</footer>
+
+</body>
+</html>
