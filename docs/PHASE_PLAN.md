@@ -405,7 +405,30 @@ Reimplement `stkBuffer.Write` and `stkPointer` on `RppBuffer`.
 in-place shape. Also: `stkPointer.InitializeLowLevelAccess` either works
 or is deleted — it must not go on silently returning `NULL`.
 
-*Status: conditional, not started.*
+*Status: **read, not written** — 2026-08-25. The framing above is stale in
+both halves and is superseded by **[P6-SOFTANZA.md](P6-SOFTANZA.md)**, a
+finding and a proposal with nothing changed in `stzlib` yet.*
+
+**What the reading found.** `stkBuffer.Write` no longer has the 803 ms
+shape: it already carries an in-place path whose every decision lands on a
+number measured here — 512 (F-8), a fresh address per call (F-22), the
+NUL-source route (F-14), `@nSize` over `len()` (F-5). It reached them
+**without loading Ring++**; the findings transferred and the dependency did
+not, which for two dependency-free projects is the good outcome. That half
+is closed, and the proposal recommends *not* rewriting it.
+
+`stkPointer` is worse than the plan assumed. `InitializeLowLevelAccess` does
+not sometimes return `NULL` — it has **never once succeeded**: it calls
+`varptr(:cBufferData)` where the local is `_cBufferData_`, which raises `R6`
+into the `catch` beneath it. Every low-level path in the class has taken its
+fallback since the file was written. Fixing the typo alone would be *worse*
+than the bug — the pointer would address a local copy that dies at return,
+cached on the object, which is F-22 exactly.
+
+Also opened, and new to the plan: now that the engine is Zig, the place
+Ring++ still applies at the boundary is **the Ring↔Zig bridge**, where a
+string argument is copied onto the VM stack before Zig starts (predicted
+from F-5, measurement is gate 1 of the proposal).
 
 ---
 
