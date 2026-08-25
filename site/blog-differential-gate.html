@@ -3,12 +3,12 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Twenty-six green gates, and a bug that killed the process — Ring++</title>
-<meta name="description" content="Every gate was green. None of them had ever asked what the bytes were. A differential test found a four-line sequence that killed the Ring process with no message — and the same defect sitting in a 300,000-line library next door.">
+<title>We spent a day attacking our own library — Ring++</title>
+<meta name="description" content="A deliberately aggressive testing campaign against Ring++. The goal was not to confirm the software works, but to break it on purpose. Two real bugs fell out, one of which made the program vanish mid-run.">
 <meta property="og:type" content="article">
 <meta property="og:url" content="https://mayouni.github.io/ringpp/blog-differential-gate.html">
-<meta property="og:title" content="Twenty-six green gates, and a bug that killed the process">
-<meta property="og:description" content="Every gate was green. None had ever asked what the bytes were. A differential test found a four-line sequence that killed the process with no message.">
+<meta property="og:title" content="We spent a day attacking our own library — and it died in four lines">
+<meta property="og:description" content="An aggressive testing campaign against Ring++. The goal was to break it on purpose. Two real bugs fell out, one of which made the program vanish mid-run.">
 <meta property="og:image" content="https://mayouni.github.io/ringpp/social-card.png">
 <meta property="og:image:width" content="1280">
 <meta property="og:image:height" content="640">
@@ -34,40 +34,122 @@
 
 <header class="wrap narrow" style="padding-top:2.6rem">
   <p style="margin:0 0 .5rem"><a href="blog.html" style="color:var(--accent); text-decoration:none">&larr; Blog</a></p>
-  <h1 style="font-size:clamp(1.9rem, 5vw, 2.5rem)">Twenty-six green gates, and a
-  bug that killed the <em>process</em></h1>
+  <h1 style="font-size:clamp(1.9rem, 5vw, 2.5rem)">We spent a day attacking our
+  own library — and it died in <em>four lines</em></h1>
   <p style="color:var(--muted); font-size:var(--floor); margin:.4rem 0 0">25 August 2026 &middot; Mansour Ayouni</p>
 </header>
 
 <article class="wrap narrow">
-  <p class="lead">Ring++ had twenty-six gates. All green, on every commit,
-  for weeks. One of them fuzzes a hundred thousand random accesses and
-  asserts that not one of them crashes.</p>
+  <p class="lead">This is the story of a deliberately aggressive testing
+  campaign against Ring++ — the kind where the goal is not to confirm that
+  the software works, but to <b>break it on purpose</b> and see what falls
+  out.</p>
 
-  <p class="lead">They were all asking the wrong question, and it took a
-  different kind of test — written in an afternoon — to find a four-line
-  sequence that kills the Ring process outright, with no error, no line
-  number, and nothing in the output at all.</p>
+  <p class="lead">Two real bugs fell out. One of them made the program
+  vanish mid-run: no error message, no line number, nothing printed at all.
+  It had been there since the library was written, and it took four lines of
+  ordinary-looking code to trigger.</p>
 
-  <h2>Why: what a green gate actually proves</h2>
+  <h2>First, the words</h2>
 
-  <p class="lead">Go back through what those gates checked, and a pattern
-  falls out of them. <code>fuzz_bounds.ring</code> throws 100,000 random
-  offset/length pairs at a buffer and requires that every illegal one raises
-  a catchable error and that nothing crashes. <code>buffer.ring</code> makes
-  thirty assertions about the API. <code>name_collision.ring</code> proves
-  an object never writes into a caller's variables.</p>
+  <p class="lead">Three terms do most of the work in this piece, and none of
+  them needs to be mysterious.</p>
 
-  <p class="lead">Every one of them asks either <b>"does this raise when it
-  should?"</b> or <b>"is the answer the right length?"</b></p>
+  <div class="grid">
+    <div class="card">
+      <h3>A gate</h3>
+      <p>An automatic check that runs on every change. If it fails, nothing
+      ships. Think of a spell-checker that refuses to let you send the
+      letter. Ring++ had <b>26</b> of them.</p>
+    </div>
+    <div class="card">
+      <h3>A buffer</h3>
+      <p>A block of memory holding raw bytes — a document being assembled, a
+      file being read. Ring++ exists to let Ring programs handle these
+      without copying them constantly.</p>
+    </div>
+    <div class="card">
+      <h3>The campaign</h3>
+      <p>Not one more gate of the same kind. A different <em>question</em>,
+      asked several million times, with inputs chosen to be as awkward as
+      possible.</p>
+    </div>
+  </div>
 
-  <p class="lead">Not one of them had ever asked: <b>are the bytes
-  right?</b></p>
+  <h2>The goal, in one sentence</h2>
+
+  <p class="lead" style="font-size:1.35rem; color:var(--ink)">Find the bugs
+  the existing checks were <em>structurally incapable</em> of finding — not
+  the ones they had merely missed.</p>
+
+  <p class="lead">That distinction is the whole point. A check that has run
+  clean for weeks might be watching carefully. Or it might be looking in a
+  direction where nothing bad ever happens.</p>
+
+  <h2>What we found, at a glance</h2>
+
+  <p class="lead">Four parts of the library, attacked separately. Two came
+  back clean — which is a result, and is reported here as one rather than
+  quietly skipped.</p>
+
+  <table style="width:100%; border-collapse:collapse; font-size:var(--read)">
+    <thead><tr style="border-bottom:2px solid var(--rule)">
+      <th style="text-align:left; padding:.6rem .5rem .6rem 0">what was attacked</th>
+      <th style="text-align:left; padding:.6rem .5rem">how hard</th>
+      <th style="text-align:left; padding:.6rem 0 .6rem .5rem">what came out</th>
+    </tr></thead>
+    <tbody>
+      <tr style="border-bottom:1px solid var(--border)">
+        <td style="padding:.7rem .5rem .7rem 0"><b>Byte storage</b><br>
+          <span style="color:var(--muted)">the core buffer</span></td>
+        <td style="padding:.7rem .5rem">20,002 operations,<br>7 kinds of hostile data</td>
+        <td style="padding:.7rem 0 .7rem .5rem"><b style="color:var(--error)">Crash.</b>
+          Killed the process outright, silently</td>
+      </tr>
+      <tr style="border-bottom:1px solid var(--border)">
+        <td style="padding:.7rem .5rem .7rem 0"><b>Windows into a buffer</b><br>
+          <span style="color:var(--muted)">looking at part of the bytes</span></td>
+        <td style="padding:.7rem .5rem">357 windows,<br>nested three deep</td>
+        <td style="padding:.7rem 0 .7rem .5rem">Clean. Nothing found</td>
+      </tr>
+      <tr style="border-bottom:1px solid var(--border)">
+        <td style="padding:.7rem .5rem .7rem 0"><b>The safe sandbox</b><br>
+          <span style="color:var(--muted)">running untrusted code</span></td>
+        <td style="padding:.7rem .5rem">8 checks on parts<br>never tested before</td>
+        <td style="padding:.7rem 0 .7rem .5rem"><b style="color:var(--error)">A method that
+          never worked</b> — and the manual promised it did</td>
+      </tr>
+      <tr>
+        <td style="padding:.7rem .5rem .7rem 0"><b>Fast list reading</b><br>
+          <span style="color:var(--muted)">the speed-up for big lists</span></td>
+        <td style="padding:.7rem .5rem">4,000 reads,<br>compared one by one</td>
+        <td style="padding:.7rem 0 .7rem .5rem">Clean. Nothing found</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <p class="lead" style="margin-top:1.6rem">And one more, outside Ring++
+  entirely: <b>the same flaw was found sitting in a separate 300,000-line
+  library</b> that had arrived at the same design independently.</p>
+
+  <h2>Why the existing checks could not have caught it</h2>
+
+  <p class="lead">Go back through what those 26 gates actually asked. One
+  throws a hundred thousand random reads and writes at a buffer and demands
+  that none of them crash. Another makes thirty assertions about how the
+  library behaves. A third proves that a Ring++ object never accidentally
+  overwrites one of your own variables.</p>
+
+  <p class="lead">Every single one asks either <b>"does this refuse illegal
+  input?"</b> or <b>"is the answer the right size?"</b></p>
+
+  <p class="lead">Not one had ever asked: <b>are the bytes actually
+  correct?</b></p>
 
   <div class="preamble">
     <p>That gap is easy to miss precisely because the suite looks thorough.
-    A hundred thousand fuzzed accesses reads like coverage. It is coverage —
-    of the question it asks.</p>
+    A hundred thousand random accesses <em>reads</em> like coverage. It is
+    coverage — of the one question it happens to ask.</p>
   </div>
 
   <h2>What: two implementations, one truth</h2>
@@ -81,7 +163,7 @@
   <p class="lead">Ring++ is unusually well suited to it, because the second
   implementation writes itself. Every Ring++ operation exists precisely
   because there is a slower, obvious way to do the same thing in plain Ring.
-  That slow way is the oracle.</p>
+  That slow way is the yardstick — slow, but beyond suspicion.</p>
 
   <div class="compare">
     <div>
@@ -119,9 +201,9 @@
   every operation — not sampled, not at the end. <b>20,002 operations in 243
   milliseconds.</b></p>
 
-  <p class="lead">And the random number generator is a fixed-seed LCG, not
-  Ring's <code>random()</code>. A failure that cannot be reproduced is a
-  rumour.</p>
+  <p class="lead">The randomness is deliberately fake, too — a fixed formula
+  that produces the same "random" sequence every run. A failure you cannot
+  reproduce on demand is a rumour, not a bug report.</p>
 
   <h2>What it found, on the first run</h2>
 
@@ -235,18 +317,20 @@ oB.Grow(<span class="n">33</span>)                  <span class="c"># process di
   Twenty-six gates, one of them a hundred-thousand-iteration fuzz, and the
   thing they all had in common was that none of them ever compared a byte.</p>
 
-  <p class="lead">The differential test is now gate twenty-seven, and it runs
-  in 243 milliseconds. The crash sequence is a named case that runs before any
-  random one — because the fuzz found it by luck, and luck is not a regression
-  test. Reverting the fix kills the gate at that named case, which is the only
-  evidence that the gate is worth having.</p>
+  <p class="lead">This test is now the twenty-seventh check, and it finishes
+  in a quarter of a second. The crash sequence is written in by name and runs
+  before any random one — because the random search found it by luck, and luck
+  does not run again on demand. And putting the bug back makes the check fail
+  at exactly that line, which is the only real evidence that a test is worth
+  keeping.</p>
 
   <div class="preamble">
     <p><b>Where this does not help.</b> A differential test needs a reference
     implementation that is obviously correct. Ring++ has one for everything it
     does, because the whole library exists to replace a slower way of doing
-    the same thing. A project without that oracle gets no such gift, and
-    inventing one is usually harder than the code under test.</p>
+    the same thing. A project without that ready-made yardstick gets no such
+    gift, and inventing one is usually harder than writing the code being
+    tested.</p>
   </div>
 
   <p class="lead">Everything above is in the repository: the gate is
