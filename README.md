@@ -27,16 +27,15 @@ the library's idioms are what the checker recommends.
 
 ## Why this exists
 
-Ring++ exists to get three things in my own real-world Ring projects,
-without ever leaving Ring: **performant code, static safety, and deployment
-flexibility**. The goal became concrete, not academic, from two directions
-at once. A customer bank in Niger, running Ring in production, liked the
-language — but asked for exactly those three things before trusting it with
-critical projects. And [Softanza](https://github.com/mayouni/stzlib), the
-base library I've been building in Ring alongside Ring++, has grown past
-**300,000 lines** — a size where performance, safety and deployment stop
-being nice-to-haves and start being how a codebase survives. Ring++ answers
-all three, without leaving Ring and without adding a dependency to it.
+Ring++ exists because of real customer-facing work, not a lab exercise. A
+bank in Niger, running Ring in production, liked the language but wanted
+more before trusting it with critical projects. A restaurant management
+platform in France asked the same question from a different angle —
+real-time, high-volume, and unwilling to leave Ring. And
+[Softanza](https://github.com/mayouni/stzlib), the base library I've been
+building in Ring alongside Ring++, has grown past **300,000 lines** — a
+codebase where the same concerns stop being optional. Ring++ is what came
+out of answering all three, without ever leaving Ring.
 
 ## Install
 
