@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Ring++ — Ring, faster, safer and more portable, without leaving Ring</title>
+<title>Ring++ — Faster, safer and more portable, without leaving Ring</title>
 <meta name="description" content="Ring++ is a dependency-free pair for Ring: a library that removes a real performance cost, and a CLI that finds real bugs and ships your program with no compiler. Learn how Ring itself was built, through three practical examples.">
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="style.css?v=0.3.0">
@@ -25,7 +25,7 @@
 
 <header class="hero wrap">
   <img class="logo" src="ringpp-logo.jpg" alt="Ring++">
-  <h1>Ring, faster, safer and more portable —<br>without ever leaving <em>Ring</em>.</h1>
+  <h1>Faster, safer and more portable —<br>without ever leaving <em>Ring</em>.</h1>
   <p class="sub">Ring++ is a dependency-free library and CLI for Ring — nothing
   else to install, nothing else to learn. <b>Performant code</b> that skips a
   real, measured copying cost. <b>Static analysis</b> that reads what Ring's
@@ -88,17 +88,11 @@
 
 <section class="wrap narrow">
   <h2>Ring already gives you this. Nobody was using it.</h2>
-  <p class="lead">That is the one idea behind all three. Ring passes a list from
-  function to function by handing over its address — instantly, regardless of
-  size. A string, on the other hand, gets copied, in full, every single time it
-  crosses into a function — <a href="performance.html">that's pillar one</a>. Ring's
-  parser already reads and accepts type annotations like <code>int func Sum(int x,
-  int y)</code> — it just throws them away after checking they parse —
-  <a href="checker.html">that's pillar two</a>. And Ring can already turn a
-  program into bytecode with no compiler in sight — <a href="build.html">that's
-  pillar three</a>. None of this required changing Ring. It required noticing
-  what was already there — <a href="design.html">the full design story, and
-  the contract that keeps it working as Ring evolves</a>.</p>
+  <p class="lead">That's the one idea behind all three — not three separate
+  tricks, but the same habit applied three times: read Ring's own design
+  closely enough to notice what it already lets you do. <a
+  href="design.html">The full design story, and the contract that keeps it
+  working as Ring evolves</a>.</p>
 </section>
 
 <section class="wrap">
