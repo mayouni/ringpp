@@ -178,6 +178,26 @@ ringpp build: this program reaches Ring's Qt bridge (ringqt), which
 </section>
 
 <section class="wrap narrow">
+  <h2>Which packaging tool should you actually use?</h2>
+  <p class="lead">Ring has three, and they answer different questions rather
+  than competing. <b>Ring2EXE</b> ships with Ring and is the only one that
+  reaches mobile and the browser, by preparing a Qt project for you.
+  <b><a href="https://github.com/ysdragon/ring2exe-plus" target="_blank"
+  rel="noopener">Ring2EXE++</a></b>, Youssef Saeed's extended tool, is by far
+  the strongest at distribution — ten installer formats, from
+  <code>.deb</code> to MSI, plus auto-detection and presets. Nothing here
+  approaches that. <b><code>ringpp build</code></b> is the only one that
+  needs no C compiler on any machine and cross-builds five platforms from
+  whichever one you are sitting at.</p>
+  <p class="lead">The full comparison — read from each tool's own source,
+  with the mobile and WebAssembly situation measured rather than asserted, and
+  a map of which sibling project covers which target so nobody duplicates
+  work — is <a
+  href="https://github.com/mayouni/ringpp/blob/main/docs/BUILD-OPTIONS.md"
+  target="_blank" rel="noopener">BUILD-OPTIONS.md</a>.</p>
+</section>
+
+<section class="wrap narrow">
   <h2>Next</h2>
   <div class="actions" style="justify-content:flex-start">
     <a class="btn primary" href="blog.html">Blog</a>
