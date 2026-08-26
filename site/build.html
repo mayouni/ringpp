@@ -179,6 +179,14 @@ ringpp build: this program reaches Ring's Qt bridge (ringqt), which
 
 <section class="wrap narrow">
   <h2>And it runs on a phone</h2>
+  <p class="lead">Mobile is usually where a small language's packaging story
+  ends. The standard route asks you to install Qt, install Qt Creator, let a
+  tool prepare a Qt project, and then build that project — a toolchain far
+  larger than the program going through it. Ring++ takes none of that road.
+  The runtime it already ships for Linux ARM is, unchanged, a runtime Android
+  will run: the VM is a plain bytecode interpreter, it never asks the system
+  for executable memory, and so nothing about a locked-down phone objects to
+  it. The photograph below is that runtime, on a phone, doing real work.</p>
   <figure class="shot">
     <img src="ringpp-on-android.jpg" width="760" height="1013"
          alt="An Infinix phone held in a hand, showing a Ring program's output:

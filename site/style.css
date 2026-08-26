@@ -149,12 +149,41 @@ h3 { font-size: var(--read); font-weight: 700; margin: 0 0 .35rem; }
 
 /* --------------------------------------------------------------- code */
 pre, code { font-family: var(--mono); }
+
 pre.code {
     background: var(--code-bg); color: var(--code-ink);
     border: 1px solid var(--code-border); border-radius: 10px;
-    padding: 1.1rem 1.2rem; overflow-x: auto; margin: 0;
+    margin: 0;
     font-size: var(--mono-size); line-height: 1.7;
+
+    /* No horizontal scrollbars anywhere on this site. A sideways scrollbar
+       hides the end of a line behind a gesture most readers never make --
+       and the hidden half is usually the part that carries the point, as it
+       did on the Qt refusal, where the cut word was the refusal itself.
+       Long lines wrap instead.
+
+       No hanging indent on the wrapped part, and that was tried: `text-indent`
+       applies to the FIRST LINE OF THE BLOCK, not to each line inside a <pre>,
+       so it left line one sitting 19px left of every other line and indented
+       no continuation at all. Measured before it shipped -- left offsets came
+       back [20, 39, 80, 39, 39...] where they should all agree. */
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    overflow-x: hidden;
+    padding: 1.1rem 1.2rem;
 }
+
+/* A code block needs the SAME air below it as above.
+   Measured, not guessed: every panel on the build page sat 32px under the
+   paragraph that introduced it and 0px above the paragraph that explained
+   it -- the explanation was glued to the panel's bottom border, so the two
+   read as one object and the reader had no signal that the prose had
+   resumed. The gap above came from the preceding paragraph's own bottom
+   margin; nothing supplied the one below.
+   Scoped to blocks in the prose flow: a panel inside a .compare cell or a
+   card is positioned by its container and must not be pushed around. */
+section > pre.code,
+article > pre.code { margin: 2rem 0; }
 pre.code .k { color: var(--k); font-weight: 600; }
 pre.code .s { color: var(--s); }
 pre.code .n { color: var(--n); }
