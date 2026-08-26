@@ -215,6 +215,13 @@ article pre {
 .stats .num { font-size: 1.9rem; font-weight: 700; color: var(--accent); }
 .stats .what { font-size: var(--read); color: var(--ink-soft); }
 
+/* A photograph, not a mockup. Capped narrow because it is a phone held in a
+   hand: past ~22rem it stops reading as evidence and starts reading as
+   decoration, and the screen text is the whole point of showing it. */
+figure.shot { margin: 0 0 2rem; text-align: center; }
+figure.shot img { width: 100%; max-width: 22rem; height: auto; border-radius: 14px; border: 1px solid var(--border); }
+figure.shot figcaption { color: var(--muted); font-size: var(--floor); margin-top: .7rem; max-width: 32rem; margin-left: auto; margin-right: auto; }
+
 footer { border-top: 1px solid var(--border); margin-top: 2rem; padding: 2rem 0 3rem; color: var(--ink-soft); font-size: var(--floor); }
 footer a { color: var(--accent); text-decoration: none; }
 footer .wrap { display: flex; gap: 1.2rem; flex-wrap: wrap; align-items: center; }

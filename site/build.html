@@ -178,17 +178,42 @@ ringpp build: this program reaches Ring's Qt bridge (ringqt), which
 </section>
 
 <section class="wrap narrow">
+  <h2>And it runs on a phone</h2>
+  <figure class="shot">
+    <img src="ringpp-on-android.jpg" width="760" height="1013"
+         alt="An Infinix phone held in a hand, showing a Ring program's output:
+              device Infinix X6817, abi arm64-v8a, android 12 (API 31), a list of
+              squared values, a sum, a file written and re-read at 123 bytes, and
+              the line: exit 0 - the VM ran clean.">
+    <figcaption>A Ring program running as an Android app on an ordinary phone.
+    Lists, a class holding state, a file written and read back exact.</figcaption>
+  </figure>
+  <p class="lead">One command builds that:
+  <code>ringpp build app.ring --target android</code>, and out comes a signed,
+  installable <code>.apk</code>. No NDK, no Qt, no Qt Creator, no Gradle, no
+  JNI, no C compiler. The Ring runtime inside the app is <b>byte-identical</b>
+  to the one the Linux build ships — it isn't a port, it's the same file.</p>
+  <p class="lead">Android is the one target that does ask something of you: an
+  Android SDK and a JDK, because only Google's own tool writes the manifest
+  format Android reads. That is said plainly here because the command says it
+  plainly too — without them it tells you which one is missing and stops,
+  rather than handing you an app that installs and then dies.</p>
+</section>
+
+<section class="wrap narrow">
   <h2>Which packaging tool should you actually use?</h2>
   <p class="lead">Ring has three, and they answer different questions rather
   than competing. <b>Ring2EXE</b> ships with Ring and is the only one that
-  reaches mobile and the browser, by preparing a Qt project for you.
+  reaches the browser, and it reaches mobile the Qt way, by preparing a Qt
+  project for you to open in Qt Creator.
   <b><a href="https://github.com/ysdragon/ring2exe-plus" target="_blank"
   rel="noopener">Ring2EXE++</a></b>, Youssef Saeed's extended tool, is by far
   the strongest at distribution — ten installer formats, from
   <code>.deb</code> to MSI, plus auto-detection and presets. Nothing here
   approaches that. <b><code>ringpp build</code></b> is the only one that
   needs no C compiler on any machine and cross-builds five platforms from
-  whichever one you are sitting at.</p>
+  whichever one you are sitting at — and the only one that reaches Android
+  without Qt.</p>
   <p class="lead">The full comparison — read from each tool's own source,
   with the mobile and WebAssembly situation measured rather than asserted, and
   a map of which sibling project covers which target so nobody duplicates

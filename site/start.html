@@ -62,7 +62,8 @@ oBuf.Poke(<span class="n">0</span>, <span class="s">"hello"</span>)
 
     <li><b>Package it, no compiler.</b>
 <pre class="code">ringpp build myproject/main.ring --out dist</pre>
-    Bytecode plus a runtime stub, for whichever of five platforms you name.
+    Bytecode plus a runtime stub, for whichever of five platforms you name —
+    or <code>--target android</code> for a signed <code>.apk</code>.
     <a href="build.html">How the packaging actually works</a>, including the one
     thing it refuses to do.</li>
   </ol>
