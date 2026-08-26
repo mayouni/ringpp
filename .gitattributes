@@ -43,3 +43,7 @@ vendor/** -text
 # this file exists to not rely on.
 *.jpg binary
 *.png binary
+
+# The demo APK is a signed archive: a single line-ending rewrite invalidates
+# the signature, and the failure appears only on someone else's phone.
+*.apk binary

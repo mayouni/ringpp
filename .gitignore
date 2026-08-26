@@ -38,3 +38,12 @@ Thumbs.db
 # open a mailbox under D:/GitHub/softanza. None of that is Ring++'s roadmap
 # or a reader's business. Ring++'s own plan is docs/PHASE_PLAN.md.
 WHATS-NEXT.md
+
+# Android demo: build scratch, the generated debug signing key, and the
+# bytecode ring -go leaves beside the source. A signing key never belongs
+# in a repository, even a throwaway one.
+android/build/
+android/debug.jks
+android/app.ringo
+android/report.txt
+android/*.idsig
