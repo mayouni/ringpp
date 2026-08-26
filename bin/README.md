@@ -15,11 +15,11 @@ grammar rejected.
 
 | file | format, verified with `file(1)` | size | how far it is verified |
 |---|---|---:|---|
-| `win64/ringpp.exe` | PE32+ x86-64 | 3.4 MB | **run**: full gate, all corpora |
-| `linux-x64/ringpp` | ELF x86-64, **statically linked** | 7.3 MB | **run** under WSL Ubuntu — see below |
-| `linux-arm64/ringpp` | ELF aarch64, **statically linked** | 7.4 MB | built and format-checked only |
-| `macos-x64/ringpp` | Mach-O x86_64 | 3.1 MB | built and format-checked only |
-| `macos-arm64/ringpp` | Mach-O arm64 | 3.0 MB | built and format-checked only |
+| `win64/ringpp.exe` | PE32+ x86-64 | 3.7 MB | **run**: full gate, all corpora |
+| `linux-x64/ringpp` | ELF x86-64, **statically linked** | 7.8 MB | **run** under WSL Ubuntu — see below |
+| `linux-arm64/ringpp` | ELF aarch64, **statically linked** | 7.9 MB | built and format-checked only |
+| `macos-x64/ringpp` | Mach-O x86_64 | 3.3 MB | built and format-checked only |
+| `macos-arm64/ringpp` | Mach-O arm64 | 3.3 MB | built and format-checked only |
 
 ## What "verified" means here, exactly
 
@@ -68,7 +68,14 @@ report. When the rules have settled, add `.strip = true` to the module in
 
 ## Rebuilding them
 
+All five were rebuilt on 2026-08-26 for `ringpp build --target android`.
+The Linux x64 binary was re-verified under WSL as described above, and it
+prints the Android section of `build --help` identically to the Windows
+one — which is the part most likely to differ, since that target reads
+`$ANDROID_HOME` and `$JAVA_HOME` and joins paths with the host separator.
+
 ```bash
+zig build -Doptimize=ReleaseSafe -j2                          # win64, the host
 zig build -Doptimize=ReleaseSafe -Dtarget=x86_64-linux-musl  -j2
 zig build -Doptimize=ReleaseSafe -Dtarget=aarch64-linux-musl -j2
 zig build -Doptimize=ReleaseSafe -Dtarget=aarch64-macos      -j2

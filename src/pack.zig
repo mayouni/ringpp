@@ -34,6 +34,7 @@
 
 const std = @import("std");
 const deps = @import("deps.zig");
+const android = @import("android.zig");
 const builtin = @import("builtin");
 
 const Platform = struct {
@@ -97,6 +98,7 @@ fn usage(w: anytype) void {
         \\usage: ringpp build <entry.ring> [options]
         \\
         \\  --target <platform>   win64 | linux-x64 | linux-arm64 | macos-x64 | macos-arm64
+        \\                        | android
         \\                        (default: the platform ringpp itself is running on)
         \\  --ring <path>         a working `ring` executable, used to compile the
         \\                        entry point ( -go ). Default: search PATH.
@@ -108,6 +110,19 @@ fn usage(w: anytype) void {
         \\  --lib-dir <dir>       a directory holding the TARGET's actual native
         \\                        library files, to bundle what `deps` names
         \\  --out <dir>           output directory (default: <entry-basename>-<target>)
+        \\
+        \\  --target android produces a signed APK. It is the ONE target that needs
+        \\  a toolchain — an Android SDK and a JDK 17+ — because only Google's aapt2
+        \\  writes Android's binary manifest. It still needs no NDK, no Qt, no
+        \\  Gradle and no C compiler: the VM is the same static musl stub the Linux
+        \\  targets ship (FINDINGS F-36). Extra options for it:
+        \\
+        \\  --sdk <dir>           Android SDK (default: $ANDROID_HOME, $ANDROID_SDK_ROOT)
+        \\  --jdk <dir>           JDK 17+     (default: $JAVA_HOME)
+        \\  --package <id>        application id (default: org.ringpp.<entry-basename>)
+        \\  --label <text>        the name shown under the launcher icon
+        \\  --app-version <text>  versionName in the manifest (default: 1.0)
+        \\  --keystore <path>     signing keystore (default: <out>/debug.jks, made once)
         \\
     , .{}) catch {};
 }
@@ -130,6 +145,12 @@ pub fn run(gpa: std.mem.Allocator, w: anytype, args: []const []const u8) !u8 {
     var runtime_dir: ?[]const u8 = null;
     var lib_dir: ?[]const u8 = null;
     var out_dir: ?[]const u8 = null;
+    var and_sdk: ?[]const u8 = null;
+    var and_jdk: ?[]const u8 = null;
+    var and_pkg: ?[]const u8 = null;
+    var and_label: ?[]const u8 = null;
+    var and_version: ?[]const u8 = null;
+    var and_keystore: ?[]const u8 = null;
 
     var i: usize = 3;
     while (i < args.len) : (i += 1) {
@@ -156,6 +177,24 @@ pub fn run(gpa: std.mem.Allocator, w: anytype, args: []const []const u8) !u8 {
         } else if (std.mem.eql(u8, flag, "--out") and val.len > 0) {
             out_dir = val;
             i += 1;
+        } else if (std.mem.eql(u8, flag, "--sdk") and val.len > 0) {
+            and_sdk = val;
+            i += 1;
+        } else if (std.mem.eql(u8, flag, "--jdk") and val.len > 0) {
+            and_jdk = val;
+            i += 1;
+        } else if (std.mem.eql(u8, flag, "--package") and val.len > 0) {
+            and_pkg = val;
+            i += 1;
+        } else if (std.mem.eql(u8, flag, "--label") and val.len > 0) {
+            and_label = val;
+            i += 1;
+        } else if (std.mem.eql(u8, flag, "--app-version") and val.len > 0) {
+            and_version = val;
+            i += 1;
+        } else if (std.mem.eql(u8, flag, "--keystore") and val.len > 0) {
+            and_keystore = val;
+            i += 1;
         } else {
             try w.print("ringpp build: unknown option '{s}'\n", .{flag});
             usage(w);
@@ -167,8 +206,13 @@ pub fn run(gpa: std.mem.Allocator, w: anytype, args: []const []const u8) !u8 {
         try w.print("ringpp build: no such file: {s}\n", .{entry});
         return 1;
     }
-    const plat = findPlatform(target_name) orelse {
-        try w.print("ringpp build: unknown --target '{s}'. Known: win64, linux-x64, linux-arm64, macos-x64, macos-arm64\n", .{target_name});
+    // Android carries no Platform row of its own: its VM *is* the Linux stub,
+    // renamed to the lib*.so spelling Android insists on. The row bound here
+    // is a stand-in for the compile and dependency steps below, which are
+    // shared with every other target and do not consult it.
+    const is_android = std.mem.eql(u8, target_name, "android");
+    const plat = findPlatform(if (is_android) "linux-arm64" else target_name) orelse {
+        try w.print("ringpp build: unknown --target '{s}'. Known: win64, linux-x64, linux-arm64, macos-x64, macos-arm64, android\n", .{target_name});
         return 1;
     };
 
@@ -195,18 +239,27 @@ pub fn run(gpa: std.mem.Allocator, w: anytype, args: []const []const u8) !u8 {
     const entry_base = std.fs.path.stem(std.fs.path.basename(entry));
     const ringo_path = try std.fs.path.join(a, &.{ entry_dir, try std.fmt.allocPrint(a, "{s}.ringo", .{entry_base}) });
 
+    // `-norun` is not optional, and its absence was a real defect here until
+    // 2026-08-26 (FINDINGS F-37): `ring x.ring -go` COMPILES AND THEN RUNS the
+    // program. Every `ringpp build` was executing the thing it was packaging —
+    // printing its output into the build log, and letting its side effects
+    // land for real. Found because building the Android demo left the demo's
+    // own report.txt sitting in the repository root.
+    //
+    // Measured before relying on it: with and without `-norun` the .ringo is
+    // byte-identical, so this costs nothing but the execution.
     const compiled = std.process.Child.run(.{
         .allocator = gpa,
-        .argv = &.{ ring, entry, "-go" },
+        .argv = &.{ ring, entry, "-go", "-norun" },
         .max_output_bytes = 4 * 1024 * 1024,
     }) catch |err| {
-        try w.print("ringpp build: could not run `{s} {s} -go`: {s}\n", .{ ring, entry, @errorName(err) });
+        try w.print("ringpp build: could not run `{s} {s} -go -norun`: {s}\n", .{ ring, entry, @errorName(err) });
         return 1;
     };
     defer gpa.free(compiled.stdout);
     defer gpa.free(compiled.stderr);
     if (!exists(ringo_path)) {
-        try w.print("ringpp build: `{s} {s} -go` did not produce {s}\n", .{ ring, entry, ringo_path });
+        try w.print("ringpp build: `{s} {s} -go -norun` did not produce {s}\n", .{ ring, entry, ringo_path });
         if (compiled.stderr.len > 0) try w.print("  {s}\n", .{compiled.stderr});
         return 1;
     }
@@ -229,6 +282,46 @@ pub fn run(gpa: std.mem.Allocator, w: anytype, args: []const []const u8) !u8 {
         try w.print("  Ring++ does not package — see DESIGN_BUILD.md sections 3 and 6.\n", .{});
         try w.print("  `ringpp deps` explains why bundling it would be unsafe.\n", .{});
         return 1;
+    }
+
+    // ------------------------------------------------------- 2b. android
+    // Branches here, after the two checks it shares with every other target
+    // and before the desktop layout, which it does not use: an APK is one
+    // signed archive, not a directory of files beside an executable.
+    if (is_android) {
+        // A native library cannot travel into an APK the way it travels into
+        // a desktop package: it would have to be built for Android's own ABI,
+        // which is exactly the NDK dependency this target exists without.
+        // Refuse rather than build an APK that dies on the phone.
+        if (rep.libs.items.len > 0) {
+            try w.print("ringpp build --target android: this program reaches {d} native librar{s},\n", .{ rep.libs.items.len, if (rep.libs.items.len == 1) "y" else "ies" });
+            try w.print("  which cannot be bundled into an APK — an Android build of each would\n", .{});
+            try w.print("  need the NDK. Ring code and Ring++ itself are fine; `ringpp deps {s}`\n", .{entry});
+            try w.print("  names what is in the way.\n", .{});
+            return 1;
+        }
+        if (!closure_complete) {
+            try w.print("ringpp build --target android: {d} load target(s) could not be located,\n", .{rep.loads_unfound.items.len});
+            try w.print("  so whether this program needs a native library is unknown. Pass\n", .{});
+            try w.print("  --ring-root <dir> so the picture is complete before it is packaged.\n", .{});
+            return 1;
+        }
+        const out_a = out_dir orelse try std.fmt.allocPrint(a, "{s}-android", .{entry_base});
+        try std.fs.cwd().makePath(out_a);
+        return android.assemble(a, gpa, w, .{
+            .entry = entry,
+            .entry_base = entry_base,
+            .ringo_bytes = ringo_bytes,
+            .out = out_a,
+            .package = and_pkg,
+            .label = and_label,
+            .sdk = and_sdk,
+            .jdk = and_jdk,
+            .keystore = and_keystore,
+            .app_version = and_version,
+            .runtime_dir = runtime_dir,
+            .ring_used = ring,
+        });
     }
 
     // ---------------------------------------------------------- 3. runtime

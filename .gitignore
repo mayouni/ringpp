@@ -39,11 +39,14 @@ Thumbs.db
 # or a reader's business. Ring++'s own plan is docs/PHASE_PLAN.md.
 WHATS-NEXT.md
 
-# Android demo: build scratch, the generated debug signing key, and the
-# bytecode ring -go leaves beside the source. A signing key never belongs
-# in a repository, even a throwaway one.
-android/build/
-android/debug.jks
+# Android demo: the build directory `ringpp build --target android` writes,
+# which holds the generated manifest, Java, dex and the debug signing key.
+# A signing key never belongs in a repository, even a throwaway one.
+#
+# `android/report.txt` was ignored here until 2026-08-26. It was not a build
+# artefact -- it was the demo program's own output, proof that `ring -go` was
+# executing the program while packaging it (FINDINGS F-37). Ignoring it made
+# the symptom invisible for as long as the entry existed. The entry is gone,
+# and so is the behaviour that produced the file.
+android/out/
 android/app.ringo
-android/report.txt
-android/*.idsig

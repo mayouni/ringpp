@@ -160,19 +160,28 @@ that lets it run untouched on a locked-down platform.
 
 ### So where mobile actually stands
 
-- **Android: the runtime is solved today.** No NDK, no Qt, no Qt Creator, no
-  Gradle, and no change to the artefact `ringpp build` already produces.
-- **What remains is the APK envelope** — `aapt2`, `javac`, `d8`,
-  `apksigner`, all in a standard Android SDK, none needing the NDK. The
-  `libring.so` result above confirms the one naming rule that matters:
-  Android extracts and marks executable only files called `lib*.so`.
+- **Android is done, end to end.** `ringpp build app.ring --target android`
+  produces a signed, installable APK in one command. Verified on physical
+  hardware — an Infinix X6817, `arm64-v8a`, Android 12 (API 31) — running a
+  Ring program with lists, a class, file I/O round-tripped exact, and
+  `exit 0`.
 - **iOS is genuinely different** — a macOS host and Xcode, which is Apple's
   constraint rather than anyone's design choice.
 - **Linux ARM already works** and is also MicroRing's Tier 1 territory.
 
-**Still owed before this is claimed publicly:** arm64 was verified under the
-emulator's `arm64-v8a` translation, not on physical ARM hardware, and no
-`.apk` has been produced yet. Both are stated here rather than rounded up.
+**What the Android target costs, stated plainly:** it is the one `--target`
+that needs a toolchain. An Android SDK (build-tools plus a platform
+`android.jar`) and a JDK 17+, because only Google's `aapt2` writes Android's
+binary manifest format. It needs **no NDK, no Qt, no Qt Creator, no Gradle,
+no JNI and no C compiler** — the VM inside the APK is byte-identical to the
+`linux-arm64` stub every other build ships, carried under the `lib*.so` name
+Android insists on. When the SDK or JDK is absent the command says so and
+refuses; it never produces a half-package.
+
+**The debt this section used to carry is paid.** The earlier version of this
+document owed two things before the claim could be made publicly: arm64 on
+physical hardware rather than emulator translation, and an actual `.apk`.
+Both were delivered on 2026-08-26 and are the basis of the paragraphs above.
 
 ---
 
@@ -188,7 +197,7 @@ the useful arrangement is that each owns a target the others do not touch.
 | **Desktop native**, 5 platforms | **`ringpp build`** | bytecode + prebuilt stub, no compiler |
 | **Installers & packaging formats** | **Ring2EXE++** | ten formats, C compiler |
 | **Mobile via Qt** | **Ring2EXE** | prepares a Qt project |
-| **Mobile without Qt** | **`ringpp build`**, runtime proven ([F-36](FINDINGS.md)) | static musl stub; APK envelope still to build |
+| **Mobile without Qt** | **`ringpp build --target android`** ([F-36](FINDINGS.md)) | signed APK in one command; SDK + JDK, no NDK |
 | **Device — Linux class** (Pi, ARM SBC) | **MicroRing** Tier 1, and `ringpp build` | static musl ARM |
 | **Device — bare metal** (RP2350, ESP32) | **MicroRing** Tiers 2–3 | MicroZig / ESP-IDF, outside Ring++ by design |
 
@@ -201,9 +210,9 @@ split effort for no gain. If the two ever meet, the useful shape is Ring++
 are bare-metal firmware builds; the runtime-stub mechanism has nothing to
 offer there and says so.
 
-**Mobile without Qt was the one uncovered square**, and as of 2026-08-26 its
-hard half is done: the runtime runs on Android with nothing added. What is
-left is the APK envelope, which is ordinary Android SDK work.
+**Mobile without Qt was the one uncovered square**, and as of 2026-08-26 it
+is covered: `ringpp build --target android` ships a signed APK, verified on
+a physical arm64 phone.
 
 ---
 

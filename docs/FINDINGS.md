@@ -1236,6 +1236,54 @@ combination the fuzz reached by luck after ~13,000 operations. Luck is
 not a regression test, so the shape is now a named case that runs before
 any random one.
 
+### F-37. `ring file.ring -go` compiles the program **and then runs it** — `ringpp build` was executing everything it packaged
+
+Measured 2026-08-26 on Ring 1.27.
+
+```
+$ cat x.ring
+write("MARKER.txt","ran")
+? "side effect"
+
+$ ring x.ring -go
+side effect                 <-- it ran
+$ ls
+MARKER.txt  x.ring  x.ringo  <-- and its side effects landed
+
+$ ring x.ring -go -norun
+$ ls
+x.ring  x.ringo              <-- compiled only
+```
+
+The two `.ringo` files are **byte-identical** (`cmp`, no differences), so
+`-norun` costs nothing except the execution. Ring documents the flag in
+its own usage banner — *"Don't run the program after compiling"* — and
+`-go` simply does not imply it.
+
+**Why this mattered here.** `ringpp build` shells out to Ring for
+bytecode (`pack.zig`), and did so without `-norun` from the day phase B3
+shipped. Every build therefore *ran the program it was packaging*: its
+output went into the build log looking like build noise, and its side
+effects — files written, directories created, and in principle anything
+else a program does — happened for real, on the build machine, at build
+time. A build tool that executes its input is not a build tool.
+
+**How it was found.** Building the Android demo through the new
+`--target android` path left a stray `report.txt` in the repository root.
+The demo program writes `report.txt`; nothing in the build was supposed
+to run it. The earlier hand-written Python script had *hidden* this by
+running Ring with `cwd` set to `android/`, where the stray file landed
+next to the demo and got silently added to `.gitignore` as though it were
+a build artefact. It was not a build artefact. It was evidence.
+
+**The general lesson.** A file appearing where no step claims to write
+one is a finding, not litter. The `.gitignore` line that made it stop
+being visible was written by an earlier session in this same repository —
+which is how a symptom survives for as long as ignoring it is cheaper
+than explaining it.
+
+Fixed in `pack.zig`: the argv is now `{ring, entry, "-go", "-norun"}`.
+
 ### F-36. A Ring program runs on Android with no NDK, no Qt and no toolchain — because Ring's VM has no JIT
 
 Measured 2026-08-26 on an Android 36 emulator (`x86_64`, ABI list

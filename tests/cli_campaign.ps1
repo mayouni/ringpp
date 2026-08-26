@@ -116,7 +116,41 @@ try {
     Check-Case 'unknown cmd'   @('nonsense')                            1 'unknown command'
     Check-Case 'why unknown'   @('why', 'no-such-rule-at-all')          1 'nothing known'
 
-    # ---- 7. and the good path is still good --------------------------------
+    # ---- 7. the android target refuses rather than half-packages -----------
+    # An APK that installs and then dies on the phone is the worst failure
+    # this target can produce, so every way of not having what it needs must
+    # stop it before it writes anything.
+    Check-Case 'android unknown target' @('build', (Join-Path $tmp 'good.ring'), '--target', 'androidx') 1 'unknown --target'
+    Check-Case 'android needs a JDK'    @('build', (Join-Path $tmp 'good.ring'), '--target', 'android', '--sdk', $tmp, '--jdk', (Join-Path $tmp 'no-jdk')) 1 'could not find'
+
+    # The refusal must name the toolchain it wants AND the ones it does not,
+    # because "Android build failed" reads to most people as "install the NDK".
+    $script:ran++
+    $out = & $exe build (Join-Path $tmp 'good.ring') --target android --sdk (Join-Path $tmp 'no-sdk') 2>&1 | Out-String
+    if ($out -notmatch 'NOT require the NDK') {
+        Write-Host "  FAIL the android refusal does not say the NDK is unnecessary"
+        $script:fail++
+    }
+
+    # ---- 8. building must not RUN the program (F-37) -----------------------
+    # `ring -go` compiles and then executes. Every build shipped that side
+    # effect until 2026-08-26; this is the gate that keeps it gone.
+    $script:ran++
+    $sideEffect = Join-Path $tmp 'BUILT-AND-RAN.txt'
+    $prog = Join-Path $tmp 'sideeffect.ring'
+    Set-Content -Path $prog -Value ('write("{0}","ran")' -f ($sideEffect -replace '\\','/')) -Encoding ascii
+    & $exe build $prog --out (Join-Path $tmp 'sideout') 2>&1 | Out-Null
+    # Non-vacuous: without this the gate goes green whenever `ring` is simply
+    # absent from PATH, because the build then never reaches the compile step
+    # and of course never runs anything. The .ringo proves it DID compile.
+    if (-not (Test-Path (Join-Path $tmp 'sideeffect.ringo'))) {
+        Write-Host "  SKIP F-37 side-effect gate: no bytecode produced, so nothing was proven"
+    } elseif (Test-Path $sideEffect) {
+        Write-Host "  FAIL building a program executed it -- FINDINGS F-37 has regressed"
+        $script:fail++
+    }
+
+    # ---- 9. and the good path is still good --------------------------------
     Check-Case 'a clean file'  @('check', (Join-Path $tmp 'good.ring')) 0 '0 error'
 }
 finally {
