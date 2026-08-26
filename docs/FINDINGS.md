@@ -1236,6 +1236,58 @@ combination the fuzz reached by luck after ~13,000 operations. Luck is
 not a regression test, so the shape is now a named case that runs before
 any random one.
 
+### F-36. A Ring program runs on Android with no NDK, no Qt and no toolchain — because Ring's VM has no JIT
+
+Measured 2026-08-26 on an Android 36 emulator (`x86_64`, ABI list
+`x86_64,arm64-v8a`), hours after this same file concluded the opposite.
+
+**The wrong conclusion, and how it was reached.** Earlier the same day,
+three `zig cc` runs established that Ring's VM cannot be compiled for the
+`aarch64-linux-android` triple — Zig does not bundle bionic — nor for
+`aarch64-ios`. True, both, and still verifiable. The conclusion drawn from
+them was that mobile needs the Android NDK. **That was an overreach in
+exactly the shape of F-35: the measurement was sound and the sentence was
+bigger than it.** Nobody had asked whether targeting Android's own libc is
+*necessary*.
+
+It is not. A **static musl** binary — the `linux-x64` and `linux-arm64`
+runtime stubs this project already ships — runs on Android as it stands:
+
+| what was run | result |
+|---|---|
+| `runtime/linux-x64/ring` + a `.ringo` | **ran**, exit 0 |
+| a full `ringpp build` package, unmodified | **ran**, exit 0 |
+| the same package renamed `libring.so` | **ran**, exit 0 |
+| `runtime/linux-arm64/ring` + the same `.ringo` | **ran**, exit 0 (via `arm64-v8a`) |
+
+The program was not a hello. It built lists, concatenated strings, **wrote
+and read a file**, and used a class with methods. Output byte-correct in
+every case.
+
+**Why it works here and failed elsewhere, which is the transferable part.**
+A sibling project measured (2026-08-20, real device) that a *musl* Node
+binary on Android starts and is then **killed by the seccomp filter** when
+V8 initialises — `SIGSYS`, exit 159, no diagnostic. The natural reading is
+"musl does not work on Android". The precise reading is narrower:
+**Android's seccomp filter objects to what a JIT does** — mapping memory
+writable-then-executable — not to musl.
+
+Ring's VM is a plain bytecode interpreter. It has no JIT, so it never makes
+the call that gets the process killed. The property that makes Ring "slow"
+in the benchmark sense is the same property that lets it run untouched on a
+locked-down platform.
+
+**What this does and does not establish.** It establishes that the packaging
+mechanism reaches Android with nothing added — no NDK, no Qt, no Qt Creator,
+no Gradle, and no change to the artefact. `libring.so` running proves the
+naming rule an APK requires (Android extracts and marks executable only
+`lib*.so`). It does **not** establish a shipped `.apk`: that still needs
+`aapt2` + `javac` + `d8` + `apksigner`, all present in a standard Android
+SDK and none requiring the NDK. And arm64 was verified under the emulator's
+`arm64-v8a` translation, not on physical ARM hardware — real-device
+confirmation is still owed before this is claimed anywhere public as
+"works on your phone".
+
 ### F-35. Ring auto-runs `ring.ringo` from the working directory — before reading a single argument
 
 Prompted 2026-08-26 by the author of Ring, who read the announcement and

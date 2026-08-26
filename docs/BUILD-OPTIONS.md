@@ -26,7 +26,7 @@ The three:
 | **Output** | one executable | one executable | a **pair**: `app[.exe]` + `app.ringo` |
 | **Cross-build from one machine** | no | not documented | **yes — 5 targets** |
 | **Installer formats** | dist folders | **DEB, RPM, AppImage, Flatpak, Snap, DMG, PKG, NSIS, Inno, MSI** | none |
-| **Mobile** | **yes** — prepares a Qt project | — | not yet (§4) |
+| **Mobile** | **yes** — prepares a Qt project | — | **runtime runs today**, no NDK/Qt (§4) |
 | **WebAssembly** | **yes** — prepares a Qt project | — | not its job (§5) |
 | **Lists native deps before building** | — | auto-detects libraries | **yes**, `ringpp deps`, statically |
 | **Refuses an unsafe package** | — | — | **yes**, by design (§3) |
@@ -126,25 +126,53 @@ The interesting question is whether the stub mechanism reaches mobile
 | `aarch64-linux-android` | **fails** — `unable to provide libc for target … android.29` |
 | `aarch64-ios` | **fails** — `'stdio.h' file not found` |
 
-**The blocker is not the mechanism. It is the platform SDK.** Zig ships libc
-for Linux, Windows and macOS, but not Android's bionic and not the iOS SDK —
-those come from the Android NDK and Xcode respectively, and any native
-toolchain needs them.
+Those two failures are real and still reproducible. **The conclusion first
+drawn from them was wrong**, and the correction is the interesting part.
 
-So an honest statement of where mobile stands:
+### Corrected the same day — Android needs none of it ([F-36](FINDINGS.md))
 
-- **Android is reachable** by pointing `zig cc` at an installed NDK sysroot.
-  That trades Ring's current requirement — Qt **and** Qt Creator **and** the
-  NDK — for the NDK alone. A real reduction, and still not "no toolchain".
-  Untried here; the NDK is a large download and this has not been attempted.
-- **iOS additionally requires a macOS host and Xcode**, which is Apple's
+The unasked question was whether targeting Android's *own* libc is
+necessary. It is not. A **static musl** binary — the very stubs this project
+already ships — runs on Android unchanged. Measured on an Android 36
+emulator (`x86_64`, ABI list `x86_64,arm64-v8a`):
+
+| what was run | result |
+|---|---|
+| `runtime/linux-x64/ring` + a `.ringo` | **ran**, exit 0 |
+| a full `ringpp build` package, **unmodified** | **ran**, exit 0 |
+| the same package renamed `libring.so` | **ran**, exit 0 |
+| `runtime/linux-arm64/ring` + the same `.ringo` | **ran**, exit 0 |
+
+Not a hello-world: the program built lists, concatenated strings, **wrote
+and read a file**, and used a class with methods. Output byte-correct every
+time.
+
+**Why this works, and why it is not luck.** A sibling project measured that
+a *musl* Node binary on Android starts and is then killed by the seccomp
+filter the moment V8 initialises — `SIGSYS`, exit 159, no diagnostic. The
+easy lesson would be "musl does not work on Android". The accurate one is
+narrower: **Android's seccomp filter objects to what a JIT does**, not to
+musl. Ring's VM is a plain bytecode interpreter with no JIT, so it never
+makes the call that gets a process killed.
+
+The property that makes Ring unremarkable in a benchmark is the same one
+that lets it run untouched on a locked-down platform.
+
+### So where mobile actually stands
+
+- **Android: the runtime is solved today.** No NDK, no Qt, no Qt Creator, no
+  Gradle, and no change to the artefact `ringpp build` already produces.
+- **What remains is the APK envelope** — `aapt2`, `javac`, `d8`,
+  `apksigner`, all in a standard Android SDK, none needing the NDK. The
+  `libring.so` result above confirms the one naming rule that matters:
+  Android extracts and marks executable only files called `lib*.so`.
+- **iOS is genuinely different** — a macOS host and Xcode, which is Apple's
   constraint rather than anyone's design choice.
-- **Linux ARM already works today** and is the one mobile-adjacent target
-  that needs nothing extra — which is also MicroRing's Tier 1 territory.
+- **Linux ARM already works** and is also MicroRing's Tier 1 territory.
 
-Nothing is promised here. What is established is that the *packaging
-mechanism* is not what stands in the way, and that a Qt-free mobile path is
-an SDK problem rather than an architecture problem.
+**Still owed before this is claimed publicly:** arm64 was verified under the
+emulator's `arm64-v8a` translation, not on physical ARM hardware, and no
+`.apk` has been produced yet. Both are stated here rather than rounded up.
 
 ---
 
@@ -160,6 +188,7 @@ the useful arrangement is that each owns a target the others do not touch.
 | **Desktop native**, 5 platforms | **`ringpp build`** | bytecode + prebuilt stub, no compiler |
 | **Installers & packaging formats** | **Ring2EXE++** | ten formats, C compiler |
 | **Mobile via Qt** | **Ring2EXE** | prepares a Qt project |
+| **Mobile without Qt** | **`ringpp build`**, runtime proven ([F-36](FINDINGS.md)) | static musl stub; APK envelope still to build |
 | **Device — Linux class** (Pi, ARM SBC) | **MicroRing** Tier 1, and `ringpp build` | static musl ARM |
 | **Device — bare metal** (RP2350, ESP32) | **MicroRing** Tiers 2–3 | MicroZig / ESP-IDF, outside Ring++ by design |
 
@@ -172,8 +201,9 @@ split effort for no gain. If the two ever meet, the useful shape is Ring++
 are bare-metal firmware builds; the runtime-stub mechanism has nothing to
 offer there and says so.
 
-**The one genuinely uncovered square is mobile without Qt** — and §4 says
-what it would actually cost.
+**Mobile without Qt was the one uncovered square**, and as of 2026-08-26 its
+hard half is done: the runtime runs on Android with nothing added. What is
+left is the APK envelope, which is ordinary Android SDK work.
 
 ---
 
