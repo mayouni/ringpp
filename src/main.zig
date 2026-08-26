@@ -10,7 +10,7 @@ const project = @import("project.zig");
 const deps = @import("deps.zig");
 const pack = @import("pack.zig");
 
-const version = "0.1.0";
+const version = "0.9";
 
 fn usage(w: anytype) void {
     w.print(
