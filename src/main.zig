@@ -71,6 +71,20 @@ pub fn main() !u8 {
         return 0;
     }
     if (std.mem.eql(u8, cmd, "check") or std.mem.eql(u8, cmd, "c")) {
+        // `check` takes one optional path and no options. Anything else was
+        // silently ignored until now, so `ringpp check src/ --fix` reported a
+        // clean run having done nothing of the kind. A tool that refuses
+        // rather than guesses has to refuse here too.
+        if (args.len > 3) {
+            try w.print("ringpp check: unexpected argument '{s}'\n", .{args[3]});
+            try w.print("usage: ringpp check [path]   -- one path, no options\n", .{});
+            return 1;
+        }
+        if (args.len > 2 and args[2].len > 1 and args[2][0] == '-') {
+            try w.print("ringpp check: unknown option '{s}'\n", .{args[2]});
+            try w.print("usage: ringpp check [path]   -- one path, no options\n", .{});
+            return 1;
+        }
         const path = if (args.len > 2) args[2] else ".";
         return try runCheck(gpa, w, path);
     }
@@ -118,7 +132,18 @@ fn runCheck(gpa: std.mem.Allocator, w: anytype, path: []const u8) !u8 {
         for (files.items) |f| gpa.free(f);
         files.deinit(gpa);
     }
-    try collectFiles(gpa, path, &files);
+    // Paths the user named that are not there at all, and files that are
+    // there and could not be read. Both mean the same thing to a reader --
+    // this was NOT checked -- and both used to be invisible.
+    var missing = std.ArrayList([]const u8){};
+    defer {
+        for (missing.items) |f| gpa.free(f);
+        missing.deinit(gpa);
+    }
+    var unreadable = std.ArrayList([]const u8){};
+    defer unreadable.deinit(gpa);
+
+    try collectFiles(gpa, path, &files, &missing);
     std.mem.sort([]const u8, files.items, {}, lessStr);
 
     const parser = ts.Parser.init();
@@ -146,6 +171,10 @@ fn runCheck(gpa: std.mem.Allocator, w: anytype, path: []const u8) !u8 {
     var any_typehints = false;
     for (files.items) |f| {
         const src = std.fs.cwd().readFileAlloc(gpa, f, 64 * 1024 * 1024) catch {
+            // Excluded from cross-file reasoning, which was already correct,
+            // and now also NAMED to the user -- a file the tool could not
+            // read is not a file it found nothing wrong with.
+            try unreadable.append(gpa, f);
             try infos.append(parena, .{
                 .path = try parena.dupe(u8, f),
                 .norm = try project.normPath(parena, "", f),
@@ -195,10 +224,58 @@ fn runCheck(gpa: std.mem.Allocator, w: anytype, path: []const u8) !u8 {
     }
 
     const c = report.counts();
+    const read_ok = files.items.len - unreadable.items.len;
+
+    // A file carrying rpp/unparsed had NO rules applied to it. That is
+    // already said in the finding, but the summary is the line people scan,
+    // and "in 12 files" beside "0 error" reads as twelve files checked.
+    // Counted here so the headline cannot imply coverage that was not there.
+    var unparsed: usize = 0;
+    for (report.findings.items) |f| {
+        if (std.mem.eql(u8, f.rule, "rpp/unparsed")) unparsed += 1;
+    }
+
     try w.print(
         "\n  {d} error, {d} warn, {d} perf, {d} note   in {d} files ({d:.1} KB, {d:.0} ms)\n",
-        .{ c.err, c.warn, c.perf, c.note, files.items.len, @as(f64, @floatFromInt(bytes)) / 1024.0, ms },
+        .{ c.err, c.warn, c.perf, c.note, read_ok, @as(f64, @floatFromInt(bytes)) / 1024.0, ms },
     );
+    if (unparsed > 0) {
+        try w.print(
+            "  {d} of those parsed as far as a point and no further, so no rule ran on them\n",
+            .{unparsed},
+        );
+    }
+
+    // NO VERDICT, on the same principle deps.zig already states: an answer
+    // that looks like a verdict and is actually a measure of what the tool
+    // could not see is worse than no answer. "0 error" beside a file that
+    // was never opened is exactly that.
+    if (missing.items.len > 0 or unreadable.items.len > 0) {
+        try w.print("\n  NO VERDICT. {d} path(s) were not checked, so this result is\n", .{missing.items.len + unreadable.items.len});
+        try w.print("  INCOMPLETE, not clean:\n", .{});
+        var shown: usize = 0;
+        for (missing.items) |m| {
+            if (shown >= 8) break;
+            try w.print("    {s}   -- not found\n", .{m});
+            shown += 1;
+        }
+        for (unreadable.items) |u| {
+            if (shown >= 8) break;
+            try w.print("    {s}   -- unreadable\n", .{u});
+            shown += 1;
+        }
+        const total = missing.items.len + unreadable.items.len;
+        if (total > shown) try w.print("    ... and {d} more\n", .{total - shown});
+        try w.print("\n", .{});
+        return 1;
+    }
+    // Naming a target and checking nothing is the same failure wearing a
+    // friendlier face: it exits 0 with "0 error" having opened no file.
+    if (files.items.len == 0) {
+        try w.print("\n  NO VERDICT. No .ring file was found under '{s}', so nothing\n", .{path});
+        try w.print("  was checked. This is not a clean result.\n\n", .{});
+        return 1;
+    }
     // A rule id with nowhere to go is a rule to obey rather than a fact to
     // understand. Name the way out, once, and only when there is something
     // to explain.
@@ -258,9 +335,24 @@ fn lessStr(_: void, a: []const u8, b: []const u8) bool {
     return std.mem.lessThan(u8, a, b);
 }
 
-fn collectFiles(gpa: std.mem.Allocator, path: []const u8, out: *std.ArrayList([]const u8)) !void {
+fn collectFiles(
+    gpa: std.mem.Allocator,
+    path: []const u8,
+    out: *std.ArrayList([]const u8),
+    missing: *std.ArrayList([]const u8),
+) !void {
     // Try as a directory first: on Windows statFile() fails on directories.
     var dir = std.fs.cwd().openDir(path, .{ .iterate = true }) catch {
+        // Not a directory. Before accepting it as a file, ask whether it is
+        // THERE. Without this, any argument ending in .ring was appended
+        // unseen, counted in the "in N files" line, failed to read, and was
+        // skipped in silence -- so `ringpp check typo.ring` answered
+        // "0 error ... in 1 files" about a file that does not exist.
+        // The same defect deps.zig already carries a comment about.
+        std.fs.cwd().access(path, .{}) catch {
+            try missing.append(gpa, try gpa.dupe(u8, path));
+            return;
+        };
         if (std.mem.endsWith(u8, path, ".ring")) try out.append(gpa, try gpa.dupe(u8, path));
         return;
     };

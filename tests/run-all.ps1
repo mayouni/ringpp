@@ -216,6 +216,17 @@ if ($b0line) { $b0line.TrimEnd() } else { "FAIL {0,-16} {1}" -f "b0 bytecode", "
 if ($b0line -match '^FAIL' -or -not $b0line) { $fail++ }
 Pop-Location
 
+# The CLI campaign. Every other CLI gate points the tool at a fixture built to
+# make a named rule fire; this one asks what it does when it CANNOT do what was
+# asked. `ringpp check typo.ring` used to answer "0 error ... in 1 files" and
+# exit 0 about a file that does not exist -- a clean verdict on nothing, from
+# the tool whose whole pitch is that it refuses to guess (FINDINGS F-34).
+$cli = & powershell -File (Join-Path $root "tests\cli_campaign.ps1") 2>&1 | Out-String
+$cliOk = $cli -match 'CLI CAMPAIGN PASSED'
+"{0} {1,-16} {2}" -f $(if ($cliOk) { "PASS" } else { "FAIL" }), "T2 cli campaign", `
+    $(if ($cliOk) { ($cli -split "`n" | Where-Object { $_ -match 'adversarial cases' } | Select-Object -First 1).Trim() } else { "" })
+if (-not $cliOk) { $fail++; $cli -split "`n" | Select-Object -Last 8 | ForEach-Object { "       $_" } }
+
 # B2 — one runtime stub per platform, generalising B0's mechanism. Same SKIP
 # discipline: no zig, no VM source, no gate failure, just a named reason.
 # Rebuilds all five from source every run (~6 s) rather than trusting a

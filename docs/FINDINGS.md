@@ -1236,6 +1236,48 @@ combination the fuzz reached by luck after ~13,000 operations. Luck is
 not a regression test, so the shape is now a named case that runs before
 any random one.
 
+### F-34. `ringpp check` reported a clean verdict on a file that does not exist
+
+Found 2026-08-26 by pointing the CLI campaign at its own argument surface.
+
+```
+$ ringpp check typo.ring          # no such file
+  0 error, 0 warn, 0 perf, 0 note   in 1 files (0.0 KB, 0 ms)
+$ echo $?
+0
+```
+
+**"in 1 files", about a file that is not there.** `collectFiles`
+(`main.zig`) tried `openDir`, and on failure appended the path unseen if it
+merely *ended in* `.ring`. The read then failed and was skipped by a bare
+`catch continue`, while the path stayed in the count. Three separate shapes
+produced the same false clean: an absent file, an absent directory, and a
+target holding no `.ring` file at all.
+
+This is the defect `deps.zig` already carries a comment about — *"the exact
+failure that made `tests/fidelity.ps1` report a clean corpus for a year: an
+answer that looks like a verdict and is actually a measure of what the tool
+could not see."* `deps` was taught to say `NO VERDICT`. `check`, which is the
+command people actually run, never was.
+
+**Two more from the same pass.** `check` accepted and silently ignored any
+argument it did not understand, so `ringpp check src/ --fix` reported a clean
+run having done nothing of the kind. And a file carrying `rpp/unparsed` — a
+rule whose text is literally *"no rules were applied to this file"* — was
+still counted in the `in N files` headline, so twelve unparsed files read as
+twelve files checked.
+
+**Fixed:** absent paths and unreadable files are collected and named under a
+`NO VERDICT` block with a non-zero exit; unknown options and extra arguments
+are refused; the summary now states how many files no rule ran on. Twenty-one
+adversarial cases are gated in `tests/cli_campaign.ps1`, verified non-vacuous
+— reverting the repair fails six of them.
+
+**What did not go wrong,** stated because the campaign looked for it: nothing
+crashed. A 200 KB single line, 400-deep nesting, a NUL byte mid-string, a BOM,
+CRLF, raw binary, circular `load`s, and an unterminated string all produced a
+verdict rather than a crash, and two runs over the same tree are byte-identical.
+
 ### F-33. `ring_state_setvar` **assigns**; it cannot create, and neither can `ring_state_newvar`
 
 Measured 2026-08-25 while extending the differential gate to `RppSandbox`:
