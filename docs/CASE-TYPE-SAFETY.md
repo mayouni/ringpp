@@ -171,3 +171,15 @@ strongest evidence available that the conclusion is right. Grammar defects
 found here go back to him as
 [issues](https://github.com/ysdragon/tree-sitter-ring/issues), never as
 patches routed around him.
+
+## Postscript — fixed upstream, 2026-08-25
+
+One day after Ring++'s announcement reached the Ring group, both dead
+functions were repaired in Ring's own repository:
+[`7890ea5`](https://github.com/ring-lang/ring/commit/7890ea5) — *"Update
+libraries/stdlib/stdsecurity.ring - Revise encrypt_ex() and decrypt_ex() -
+Reported by Mansour Ayouni"*. Verified through the GitHub API, 2026-08-26.
+
+The route this project committed to — a finding, posted by the maintainer
+himself, never a pull request — closed in a day. A closed PR is not the
+outcome; the commit is, and this is the commit.

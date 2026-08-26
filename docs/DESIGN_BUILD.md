@@ -46,6 +46,14 @@ and appends bytecode Ring already knows how to emit.
 > changes that, and ground rule 1 (never fight the VM) says a source patch
 > to add that lookup is a *finding*, not something Ring++ does itself.
 >
+> **Corrected again, 2026-08-26 (F-35).** The author of Ring read the
+> announcement and pointed at the manual-distribution chapter. Re-measured:
+> the *same-named* half above stands, but a file named literally
+> `ring.ringo` (or `ring.ring`) in the **current directory** is auto-run
+> before any argument is parsed (`state.c:476`). No source patch was ever
+> needed for an argument-free launch — the fixed name was the door, and
+> "needs an explicit filename argument" was the overreach.
+>
 > The real shape, corrected:
 
 ```

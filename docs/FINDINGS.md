@@ -1236,6 +1236,59 @@ combination the fuzz reached by luck after ~13,000 operations. Luck is
 not a regression test, so the shape is now a named case that runs before
 any random one.
 
+### F-35. Ring auto-runs `ring.ringo` from the working directory — before reading a single argument
+
+Prompted 2026-08-26 by the author of Ring, who read the announcement and
+pointed at the manual-distribution chapter of his own documentation.
+Ring++ had published, in five places, *"Ring's binary does not auto-load
+a same-named `.ringo` — measured directly."* The measurement was right;
+the sentence was bigger than the measurement.
+
+`ring_state_main` (`state.c:476`), before any argument is parsed:
+
+```c
+/* Check Startup files (ring.ring and ring.ringo) */
+if (ring_general_fexists(RING_FILES_AUTOLOADSRC)) { ... }       /* "ring.ring"  */
+else if (ring_general_fexists(RING_FILES_AUTOLOADOBJ)) { ... }  /* "ring.ringo" */
+```
+
+Measured on 1.27, four ways:
+
+| shape | result |
+|---|---|
+| `ring.exe` copied to `myapp.exe`, beside `myapp.ringo`, no args | usage screen — a **same-named** file is genuinely not found |
+| the same, bytecode renamed to `ring.ringo` | **runs it**, no arguments |
+| invoked from a *different* directory | usage screen — the check is on the CWD, not the exe's folder |
+| a `ringpp build` pair, bytecode copied to `ring.ringo`, `hello.exe` run bare | **runs it** — the stub is Ring's own entry point and inherits the behaviour |
+
+Three consequences.
+
+**One, the product could drop its argument.** `run with: hello.exe
+hello.ringo` could become a double-click by naming the bytecode
+`ring.ringo`. Not adopted yet — it costs the matched-pair naming, a gate,
+and a binaries rebuild. Recorded as an option, not a promise.
+
+**Two, a trap, found the hard way while measuring this.** Because the
+check runs *before* argument parsing, a stray `ring.ringo` in the working
+directory hijacks **every** invocation: `ring myfile.ring -go` with one
+nearby runs the stray file and silently ignores everything typed.
+Google-Group material, for Mansour to relay if he chooses.
+
+**Three, a correction debt, paid.** CLI.md, DESIGN_BUILD.md §2,
+PHASE_PLAN.md B3, `pack.zig`'s header and the "two files" post all said
+or implied *"needs an explicit filename argument"* — each now carries a
+dated correction. One detail kept for honesty: the author's note said the
+*renamed exe's* name drives the lookup (`myapp.exe` → `myapp.ringo`);
+1.27's source and the measurement say the name is the fixed literal
+`ring.ringo`. Both parties were corrected by the measurement, which is
+the house outcome.
+
+Also recorded, unexplained rather than explained away: during one failed
+build attempt in the scratch experiment, a `ring.ringo` appeared 46 ms
+after the source file was written, through no path that could be
+reproduced — clean replays of both the failing and the succeeding
+pipelines produce only the correct `hello.ringo`.
+
 ### F-34. `ringpp check` reported a clean verdict on a file that does not exist
 
 Found 2026-08-26 by pointing the CLI campaign at its own argument surface.

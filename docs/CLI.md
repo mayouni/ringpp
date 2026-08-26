@@ -252,6 +252,12 @@ directly before this command was designed around a wrong assumption
 ([`docs/DESIGN_BUILD.md` §2](DESIGN_BUILD.md#2-what-a-build-actually-is-then)).
 The artefact is always this pair, invoked together.
 
+*(Correction, 2026-08-26 — FINDINGS F-35: still a pair, never one file,
+but the argument is optional after all. Ring's entry point auto-runs a
+file named literally `ring.ringo` from the working directory before it
+reads any argument, and the packaged stub inherits this. Name the
+bytecode `ring.ringo` and the pair launches bare.)*
+
 **Refuses, harder than the happy path, in two places:**
 
 - no `--ring-root` when the program reaches `load`s that cannot be

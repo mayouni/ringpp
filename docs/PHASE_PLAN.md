@@ -798,7 +798,11 @@ Ring's binary does not auto-load a same-named `.ringo` when run with no
 arguments, and bytes appended to the exe do nothing. **The artefact is a
 pair** — `<name>[.exe]` and `<name>.ringo`, invoked as `<name> <name>.ringo`
 — never rounded up to one file, corrected in DESIGN_BUILD.md with the
-date.
+date. **Corrected again 2026-08-26, F-35:** the same-named half was
+measured right and the conclusion overreached — Ring auto-runs a bytecode
+named literally `ring.ringo` from the working directory before reading
+any argument, so an argument-free pair launch exists after all. Pointed
+out by Ring's author the day after the announcement.
 
 **Gate.**
 

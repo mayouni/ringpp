@@ -88,6 +88,32 @@
   small true claim is worth more than a large one that fails on someone
   else's machine.</p>
 
+  <h2>A correction, courtesy of Ring's own author</h2>
+
+  <p class="lead">The day after this post went out, the author of Ring read
+  it and pointed at an old, documented distribution trick. He was right in
+  substance, we were right in the letter, and the difference earned its own
+  finding.</p>
+
+  <p class="lead">Measured again, source in hand: Ring never looks for a
+  bytecode file <em>matching the program's name</em> — the table above
+  stands. But before reading a single argument, it looks in the current
+  directory for a file named <em>literally</em> <code>ring.ringo</code> (or
+  <code>ring.ring</code>) and runs it if found. Name the bytecode
+  <code>ring.ringo</code> and the pair launches with <b>no arguments at
+  all</b> — double-click included. The packaged program inherits this,
+  because its runtime <em>is</em> Ring's own entry point: verified by
+  renaming the bytecode beside a freshly packaged <code>hello.exe</code>
+  and running it bare.</p>
+
+  <p class="lead">So our published sentence was bigger than our
+  measurement: a <em>same-named</em> bytecode is not found; a
+  <em>fixed-named</em> one is. The same mechanism hides a trap, recorded as
+  finding F-35: a stray <code>ring.ringo</code> in your working directory
+  silently hijacks <em>every</em> Ring invocation — even
+  <code>ring myfile.ring -go</code> runs the stray file and ignores
+  everything you typed.</p>
+
   <h2>What you actually get</h2>
 
   <p class="lead">Two files, and nothing else required on the target machine
@@ -119,8 +145,10 @@
   </div>
 
   <p class="lead" style="margin-top:1.6rem">If you need one file, use
-  <code>ring2exe</code>. It is the right tool for that, and Ring++ neither
-  changes nor competes with it.</p>
+  <code>ring2exe</code> — or <a href="https://github.com/ysdragon/ring2exe-plus"
+  target="_blank" rel="noopener">Ring2EXE++</a>, Youssef Saeed's
+  cross-platform extension of it. They are the right tools for that, and
+  Ring++ neither changes nor competes with them.</p>
 
   <h2>And what does "dependency-free" precisely mean?</h2>
 

@@ -24,7 +24,10 @@
 //! What this is NOT: a single self-contained executable. Measured before
 //! writing this — Ring's own binary does not look for a same-named `.ringo`
 //! when run with no arguments, and appending bytecode to the exe does
-//! nothing either. A genuine one-file artefact needs a loader Ring++
+//! nothing either — though F-35 (2026-08-26) narrows this: a file named
+//! literally `ring.ringo` in the CWD IS auto-run before argument parsing,
+//! so the pair can launch bare if the bytecode takes that fixed name.
+//! A genuine one-file artefact needs a loader Ring++
 //! compiles itself, which touches no VM source (ground rule 1) but is
 //! unbuilt and unscheduled. The artefact here is a pair: `<name>[.exe]` and
 //! `<name>.ringo`, invoked as `<name>[.exe] <name>.ringo`.

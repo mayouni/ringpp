@@ -142,7 +142,10 @@ F-24](docs/FINDINGS.md) has the table; the checker knows the difference.)
 On real codebases the checker found **two functions in Ring's own
 standard library that have never worked** — `encrypt_ex` and
 `decrypt_ex` call the wrong function and die with `R20` on every call —
-with **zero false positives across Ring's 1,959 files**. See [the case
+with **zero false positives across Ring's 1,959 files**. Both were fixed
+upstream the day after the announcement —
+[`7890ea5`](https://github.com/ring-lang/ring/commit/7890ea5), *"Reported
+by Mansour Ayouni"*. See [the case
 study](docs/CASE-TYPE-SAFETY.md), which also records the three false
 positives an earlier version *did* produce and what they cost.
 
