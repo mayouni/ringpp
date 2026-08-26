@@ -19,9 +19,9 @@ for `build`, a working `ring` to shell out to for compilation.
 ```
 $ ringpp help
 
-+-------------------------------------+
-|  Ring++ v0.1.0 -- Ring, two levels  |
-+-------------------------------------+
++-----------------------------------+
+|  Ring++ v0.9 -- Ring, two levels  |
++-----------------------------------+
 
 Analyse
 

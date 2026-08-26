@@ -15,11 +15,11 @@ grammar rejected.
 
 | file | format, verified with `file(1)` | size | how far it is verified |
 |---|---|---:|---|
-| `win64/ringpp.exe` | PE32+ x86-64 | 3.3 MB | **run**: full gate, all corpora |
-| `linux-x64/ringpp` | ELF x86-64, **statically linked** | 6.7 MB | **run** under WSL Ubuntu — see below |
-| `linux-arm64/ringpp` | ELF aarch64, **statically linked** | 6.7 MB | built and format-checked only |
-| `macos-x64/ringpp` | Mach-O x86_64 | 3.0 MB | built and format-checked only |
-| `macos-arm64/ringpp` | Mach-O arm64 | 2.9 MB | built and format-checked only |
+| `win64/ringpp.exe` | PE32+ x86-64 | 3.4 MB | **run**: full gate, all corpora |
+| `linux-x64/ringpp` | ELF x86-64, **statically linked** | 7.3 MB | **run** under WSL Ubuntu — see below |
+| `linux-arm64/ringpp` | ELF aarch64, **statically linked** | 7.4 MB | built and format-checked only |
+| `macos-x64/ringpp` | Mach-O x86_64 | 3.1 MB | built and format-checked only |
+| `macos-arm64/ringpp` | Mach-O arm64 | 3.0 MB | built and format-checked only |
 
 ## What "verified" means here, exactly
 

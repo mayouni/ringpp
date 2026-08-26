@@ -13,10 +13,14 @@ const pack = @import("pack.zig");
 const version = "0.9";
 
 fn usage(w: anytype) void {
+    // The rule was drawn as a fixed run of dashes and lined up only because
+    // the version happened to be five characters. Going 0.1.0 -> 0.9 left the
+    // box two short. Derive the rule from the title instead, so it is right
+    // for any version anyone ever sets.
+    const title = "  Ring++ v" ++ version ++ " -- Ring, two levels  ";
+    const rule = "+" ++ ("-" ** title.len) ++ "+";
+    w.print("{s}\n|{s}|\n{s}\n", .{ rule, title, rule }) catch {};
     w.print(
-        \\+-------------------------------------+
-        \\|  Ring++ v{s} -- Ring, two levels  |
-        \\+-------------------------------------+
         \\
         \\Analyse
         \\
@@ -40,7 +44,7 @@ fn usage(w: anytype) void {
         \\Not built yet: probe, bench, run, emit, dist, doctor, vendor.
         \\
         \\
-    , .{version}) catch {};
+    , .{}) catch {};
 }
 
 pub fn main() !u8 {
