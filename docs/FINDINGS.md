@@ -1236,6 +1236,59 @@ combination the fuzz reached by luck after ~13,000 operations. Luck is
 not a regression test, so the shape is now a named case that runs before
 any random one.
 
+### F-44. `ringpp … | head` panicked: on Windows an MSYS pipe reports a closed reader as `IO_PENDING`, which Zig's std declares unreachable
+
+Found 2026-08-27 while piping a corpus scan into `head -2`.
+
+```
+thread 12316 panic: reached unreachable code
+D:\Zig\lib\std\os\windows.zig:699:28 in WriteFile
+            .IO_PENDING => unreachable,
+```
+
+**The mechanism.** MSYS/Git-Bash and PowerShell hand a child process an
+**overlapped** pipe handle. When the downstream reader (`head`, `grep -c`,
+`Select-Object -First`) closes its end, `kernel32.WriteFile` fails and
+`GetLastError()` returns `IO_PENDING` — which `std.os.windows.WriteFile`
+lists as `unreachable`, because a synchronous write is not supposed to see
+it. There is nothing to catch: the process aborts mid-report, printing a
+stack trace where a verdict should be. It affected every subcommand from
+the day output moved to the buffered stdout writer.
+
+**The fix**, in `src/main.zig` and touching no vendored code: a
+`PipeSafeStdout` implementing `std.Io.Writer`'s `drain` directly over
+`kernel32.WriteFile` (and `posix.write` elsewhere). Any write failure sets
+one `dead` flag; everything after is discarded and the command finishes
+with the verdict it computed. That is what a CLI should do when its reader
+leaves — `head` took what it wanted, and the rest of the output has no
+audience.
+
+**Three false gates were written before one worked, and that is the
+finding worth keeping.** The regression test must reproduce the defect, and
+the obvious constructions do not:
+
+| gate attempt | against the known-bad binary |
+|---|---|
+| .NET `RedirectStandardOutput` + close | **passed** — not an overlapped pipe |
+| PowerShell `\| Select-Object -First 1` | **passed** |
+| `cmd /c … \| findstr` | **passed** |
+| `bash -c "… \| head -2"` from PowerShell | **passed** — and for a worse reason (below) |
+| a `.sh` file run by Git Bash | **fails correctly** |
+
+The fourth is the instructive one. PowerShell mangles embedded double
+quotes when passing a command string to a native exe, so bash received the
+temp path truncated at its first space (`C:/Users/ASUS`), checked nothing,
+and the gate went green **while testing nothing at all**. Writing the
+command into a script file hands quoting back to bash and fixes it. Two
+further traps: `Get-Command bash.exe` resolves to **WSL's** bash here,
+which cannot see Windows paths; and Git is installed at `C:\Git`, so a
+hardcoded `Program Files` list would have SKIPped forever. The gate now
+derives bash from `git.exe`'s own location and prints SKIP when it truly
+cannot find one.
+
+**Every one of those false passes was verified against a binary known to
+crash.** A gate is not written until it has failed on the defect it names.
+
 ### F-43. for-in costs ~2× an indexed loop — and its loop variable writes through
 
 Measured 2026-08-27 on Ring 1.27, 200,000 elements, same body either side:

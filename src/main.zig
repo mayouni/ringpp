@@ -2,6 +2,7 @@
 //! Tier 0: analysis only, no compiler required. See docs/CLI.md.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const ts = @import("ts.zig");
 const check = @import("check.zig");
 const why = @import("why.zig");
@@ -47,6 +48,95 @@ fn usage(w: anytype) void {
     , .{}) catch {};
 }
 
+/// Stdout that survives its reader leaving.
+///
+/// `ringpp check big-tree | head -2` used to PANIC: "reached unreachable
+/// code" at std/os/windows.zig's WriteFile. The pipes MSYS and PowerShell
+/// hand a child are OVERLAPPED handles, so when the reader (head, grep -c,
+/// Select-Object -First) closes its end, kernel32.WriteFile fails with
+/// GetLastError() = IO_PENDING — a code std's synchronous wrapper declares
+/// unreachable. Nothing to catch: the process aborts mid-report.
+///
+/// So this writer calls kernel32.WriteFile itself and treats ANY write
+/// failure one way: the reader is gone, everything further is silently
+/// discarded, and the command finishes with the verdict it computed. That
+/// is what a CLI is expected to do when its pipe closes — head took what
+/// it wanted; the rest of the output has no audience, and a panic trace
+/// on stderr is not a verdict. POSIX builds take the same path via
+/// posix.write, where EPIPE arrives as an ordinary error.
+///
+/// Modeled on std.Io.Writer.Discarding: drain consumes buffer[0..end]
+/// first (tracked by resetting `end`), then the data slices with the last
+/// repeated `splat` times, and returns only the bytes consumed from
+/// `data`.
+const PipeSafeStdout = struct {
+    interface: std.Io.Writer,
+    file: std.fs.File,
+    /// Set on the first failed write; never cleared. One flag, not an
+    /// error return, so no caller anywhere has to handle a half-dead
+    /// stream — printing simply becomes free.
+    dead: bool = false,
+
+    fn init(buffer: []u8) PipeSafeStdout {
+        return .{
+            .interface = .{
+                .vtable = &.{ .drain = drain },
+                .buffer = buffer,
+            },
+            .file = std.fs.File.stdout(),
+        };
+    }
+
+    fn rawWrite(self: *PipeSafeStdout, bytes: []const u8) void {
+        if (self.dead) return;
+        var off: usize = 0;
+        while (off < bytes.len) {
+            if (builtin.os.tag == .windows) {
+                var written: std.os.windows.DWORD = 0;
+                const chunk: std.os.windows.DWORD =
+                    @intCast(@min(bytes.len - off, std.math.maxInt(u31)));
+                const ok = std.os.windows.kernel32.WriteFile(
+                    self.file.handle,
+                    bytes.ptr + off,
+                    chunk,
+                    &written,
+                    null,
+                );
+                if (ok == 0 or written == 0) {
+                    self.dead = true;
+                    return;
+                }
+                off += written;
+            } else {
+                const n = std.posix.write(self.file.handle, bytes[off..]) catch {
+                    self.dead = true;
+                    return;
+                };
+                if (n == 0) {
+                    self.dead = true;
+                    return;
+                }
+                off += n;
+            }
+        }
+    }
+
+    fn drain(io_w: *std.Io.Writer, data: []const []const u8, splat: usize) std.Io.Writer.Error!usize {
+        const self: *PipeSafeStdout = @alignCast(@fieldParentPtr("interface", io_w));
+        self.rawWrite(io_w.buffer[0..io_w.end]);
+        io_w.end = 0;
+        if (data.len == 0) return 0;
+        var consumed: usize = 0;
+        for (data[0 .. data.len - 1]) |bytes| {
+            self.rawWrite(bytes);
+            consumed += bytes.len;
+        }
+        const pattern = data[data.len - 1];
+        for (0..splat) |_| self.rawWrite(pattern);
+        return consumed + pattern.len * splat;
+    }
+};
+
 pub fn main() !u8 {
     var gpa_state = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa_state.deinit();
@@ -56,7 +146,7 @@ pub fn main() !u8 {
     defer std.process.argsFree(gpa, args);
 
     var out_buf: [8192]u8 = undefined;
-    var stdout_w = std.fs.File.stdout().writer(&out_buf);
+    var stdout_w = PipeSafeStdout.init(&out_buf);
     const w = &stdout_w.interface;
     defer w.flush() catch {};
 

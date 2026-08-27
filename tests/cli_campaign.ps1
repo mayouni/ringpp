@@ -153,7 +153,76 @@ try {
         $script:fail++
     }
 
-    # ---- 9. and the good path is still good --------------------------------
+    # ---- 9. a reader that leaves early must not crash the tool -------------
+    # `ringpp check big | head -2` used to PANIC: MSYS and PowerShell hand
+    # the child an OVERLAPPED pipe, and when the reader closes it,
+    # kernel32.WriteFile fails with IO_PENDING -- a code Zig's synchronous
+    # std wrapper declares unreachable. The fix is ringpp's own pipe-safe
+    # stdout writer; this is the gate that keeps it fixed.
+    #
+    # The fixture must out-write the 8 KB stdout buffer AFTER the reader has
+    # gone, or the test is vacuous: 3,000 empty-catch findings is ~1 MB of
+    # report against one line read.
+    $script:ran++
+    $sbBig = New-Object Text.StringBuilder
+    $null = $sbBig.AppendLine('func main')
+    for ($i = 0; $i -lt 3000; $i++) { $null = $sbBig.AppendLine("`ttry x$i = $i catch done") }
+    & $w 'floods.ring' ([Text.Encoding]::ASCII.GetBytes($sbBig.ToString()))
+
+    # It must be an MSYS/Git-Bash pipe. This was learned by writing the gate
+    # the obvious way first: a .NET RedirectStandardOutput pipe, PowerShell's
+    # native `| Select-Object -First 1`, and cmd.exe's `| findstr` ALL pass
+    # against the known-bad binary, because none of them is the overlapped
+    # pipe that provokes IO_PENDING. A gate that cannot fail on the defect it
+    # names is worse than no gate, so this one runs through bash or declares
+    # that it did not run.
+    # Derived from git.exe's own location, then the usual install paths. NOT
+    # from `Get-Command bash.exe`: on this machine that resolves to WSL's
+    # bash, which cannot see Windows paths and fails the test for a reason
+    # that has nothing to do with ringpp. Git lives at C:\Git here, so a
+    # hardcoded Program Files list would have silently SKIPped forever.
+    $bash = $null
+    $git = (Get-Command git.exe -ErrorAction SilentlyContinue).Source
+    if ($git) {
+        $gitRoot = Split-Path -Parent (Split-Path -Parent $git)   # <root>\cmd\git.exe
+        foreach ($rel in @('bin\bash.exe', 'usr\bin\bash.exe')) {
+            $cand = Join-Path $gitRoot $rel
+            if (Test-Path $cand) { $bash = $cand; break }
+        }
+    }
+    if (-not $bash) {
+        foreach ($cand in @('C:\Program Files\Git\bin\bash.exe',
+                            'C:\Program Files (x86)\Git\bin\bash.exe',
+                            'C:\Git\bin\bash.exe', 'C:\Git\usr\bin\bash.exe')) {
+            if (Test-Path $cand) { $bash = $cand; break }
+        }
+    }
+    if (-not $bash) {
+        Write-Host "  SKIP early pipe close : no Git Bash found -- only an MSYS pipe reproduces this"
+    } else {
+        $errFile  = Join-Path $tmp 'pipe.err'
+        # The command goes into a SCRIPT FILE, not `bash -c "..."`. Passing a
+        # command string with embedded double quotes through PowerShell to a
+        # native exe mangles them: bash received the temp path truncated at
+        # its first space ("C:/Users/ASUS") and checked nothing, so the gate
+        # passed while testing nothing at all. Inside a file, quoting is
+        # bash's own business and paths with spaces survive.
+        $script  = Join-Path $tmp 'pipeclose.sh'
+        $body    = '#!/bin/sh' + "`n" +
+                   '"' + ($exe -replace '\\','/') + '" check "' +
+                   ((Join-Path $tmp 'floods.ring') -replace '\\','/') + '" 2>"' +
+                   ($errFile -replace '\\','/') + '" | head -2 >/dev/null' + "`n"
+        [IO.File]::WriteAllText($script, $body, (New-Object Text.UTF8Encoding $false))
+        & $bash ($script -replace '\\','/') 2>&1 | Out-Null
+        $errText = if (Test-Path $errFile) { Get-Content $errFile -Raw } else { '' }
+        if ($errText -match 'panic|unreachable') {
+            Write-Host "  FAIL early pipe close : panic on stderr after the reader closed the pipe"
+            Write-Host ("       " + (($errText -split "`n")[0]).Trim())
+            $script:fail++
+        }
+    }
+
+    # ---- 10. and the good path is still good -------------------------------
     Check-Case 'a clean file'  @('check', (Join-Path $tmp 'good.ring')) 0 '0 error'
 }
 finally {
