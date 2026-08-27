@@ -1,63 +1,101 @@
-# Case study: N-Queens, analysed and made 16× faster
+# Case study: a program Ring++ could not speed up
 
-A real Ring program, taken as received, measured, and improved in three
-steps. Every number below is a minimum over three runs, and no speed
-figure is printed until the variants agree on the answer.
+`Queens-N-Timing.ring`, a backtracking N-Queens solver, taken as received
+and put through the whole Ring++ toolchain. **Neither half of the project
+improved it.** The checker found nothing to report, and the two library
+idioms that looked applicable each cost more than they saved.
+
+That is the result. This document exists because it is a result — the
+project's own rule is that a benchmark showing only its good case is
+marketing, and a toolchain that has never published a case it does not fit
+has not been tested, only advertised.
 
 ```
-powershell -File bench\queens\run.ps1 -N 11 -Reps 3
+powershell -File bench/queens/run.ps1 -N 11 -Reps 3
 ```
 
-**The program.** `Queens-N-Timing.ring` — a backtracking N-Queens solver
-with a timing harness around it. Its own header credits the algorithm to
-VIKASH VIK VIKASHVVERMA (programminggeek.in); the timing wrapper is a
-later adaptation. Nothing about it is unusual, which is the point: it is
+**The program.** Its own header credits the algorithm to VIKASH VIK
+VIKASHVVERMA (programminggeek.in); the timing wrapper is a later
+adaptation. Nothing about it is unusual, which is the point: it is
 ordinary Ring, written the way the algorithm is normally written.
 
 ---
 
-## The result first
+## What Ring++ contributed: nothing measurable
 
-Boards 1 through 11, all variants producing **3905 solutions** — the
-published constant, so a variant that is faster and wrong cannot pass.
+| Ring++ facility | applied to | result |
+|---|---|---|
+| `ringpp check --advise` | the whole file | **0 findings**, correctly |
+| `RppIndexed` (X1) | the board list | **1.03×** — inside the noise |
+| list-by-reference (X2) | the board | **0.85×** — 15% *slower* |
 
-| variant | time | vs original |
-|---|---:|---:|
-| **V0** the original | 5 016 ms | 1.00× |
-| **V1** one `fabs()` removed | 4 705 ms | 1.07× |
-| *X1* + `RppIndexed` — **rejected** | 4 853 ms | 1.03× |
-| *X2* board as a parameter — **rejected** | 5 899 ms | **0.85×** |
-| **V2** occupancy flags | 1 342 ms | 3.74× |
-| **V3** bitmask, no board at all | **304 ms** | **16.50×** |
-
-Two of the six made it slower or did nothing. They are in the repository
-with the others, because a study that reports only its wins is not a
-measurement.
-
----
-
-## Step 0 — what the analyser said: nothing
+**The checker.**
 
 ```
 $ ringpp check bench/queens/v0-original.ring --advise
   0 error, 0 warn, 0 perf, 0 note   in 1 files
 ```
 
-This is worth stating plainly rather than hiding. **Ring++'s checker had
-no comment on this program**, and it was right not to invent one. Its
-rules cover string copying, pointer misuse, loop headers that re-measure
-strings, and shapes where a measured Ring++ idiom is faster. This program
-touches none of that: it is integer arithmetic and recursion over an
-11-element list.
+Its rules come from findings about data-heavy code — string copies,
+pointer misuse, loop headers that re-measure strings, shapes where a
+measured Ring++ idiom is faster. This program is integer recursion over an
+11-element list and touches none of them. It was right not to invent a
+comment, and the gap is worth naming rather than hiding: a checker built
+from data-heavy findings has nothing to say about compute-heavy code.
 
-The gap is real and worth naming. A checker built from findings about
-*data-heavy* code has nothing to say about *compute-heavy* code, and no
-amount of wishing makes a rule appear. What follows was found by
-measuring, which is where the rules come from in the first place.
+**`RppIndexed` (X1).** The idiom exists because Ring reaches a list
+element by walking from a cursor, so a jumping access costs O(distance)
+([F-42](FINDINGS.md)) — worth 5× on an 8,000-item list. Here the board is
+**11 items**. There is no distance to save, `ringvm_genarray`'s setup is
+paid per board for a gain that never arrives, and the measurement lands
+inside the noise of the variant it wraps.
+
+**List-by-reference (X2).** A list crosses a Ring call boundary by
+reference — the asymmetry with strings is the reason this project exists —
+so threading the board through every call should have cost nothing and
+might have saved the global lookups inside `Place()`. It cost **15%**.
+`Place()` is called 2,247,737 times, and each call now pushes one more
+argument; the per-call price of the extra parameter exceeds the per-read
+saving inside.
+
+> Passing a list by reference means no **copy**. It does not mean free.
+
+> Ring++ targets the cost of **moving data**. This program moves almost
+> none. The library was measured against it and declined, which is the
+> outcome its own design predicts.
 
 ---
 
-## Step 1 — measure before touching anything
+## What did make it faster: plain Ring, and a better algorithm
+
+None of the gains below involve Ring++. They are recorded because the
+*method* is transferable even when the library is not, and because one of
+them produced a finding about the Ring VM worth more than the speed-up
+([F-44](FINDINGS.md)).
+
+Boards 1 through 11, minima of three runs, all variants producing **3905
+solutions** — the published constant, so a variant that is faster and
+wrong cannot pass.
+
+| variant | what changed | time | vs original |
+|---|---|---:|---:|
+| **V0** the original | — | 5 016 ms | 1.00× |
+| **V1** one `fabs()` removed | plain Ring | 4 705 ms | 1.07× |
+| *X1* + `RppIndexed` | **Ring++** | 4 853 ms | 1.03× |
+| *X2* board as a parameter | **Ring++ thesis** | 5 899 ms | **0.85×** |
+| **V2** occupancy flags | different algorithm | 1 342 ms | 3.74× |
+| **V3** bitmask, no board | different algorithm | **304 ms** | **16.50×** |
+
+**The 16.5× is an algorithm change** — not a Ring++ result and not even a
+Ring result. Replacing an O(k) conflict scan with O(1) bit tests pays off
+in any language. It is the largest number on this page and the least
+interesting one.
+
+---
+
+## How it was found
+
+### 1. Measure before touching anything
 
 The first question is not "what looks slow" but "what runs most".
 
@@ -67,8 +105,8 @@ inner iterations: 9,015,683
 fabs() calls    : 18,031,366
 ```
 
-The inner test of `Place()` runs nine million times, and each pass calls
-`fabs()` twice:
+The inner test of `Place()` runs nine million times and calls `fabs()`
+twice per pass:
 
 ```ring
 for j = 1 to k-1
@@ -78,19 +116,15 @@ for j = 1 to k-1
 
 Eighteen million calls into a C builtin. That is the whole program.
 
----
+### 2. The obvious rewrite, which was wrong
 
-## Step 2 — the obvious rewrite, which was wrong
-
-`fabs(j-k)` is computing a sign the loop header already fixed: `j` runs to
+`fabs(j-k)` computes a sign the loop header already fixed: `j` runs to
 `k-1`, so `j-k` is **always negative** and `fabs(j-k)` is just `k-j`. And
 `fabs(a) = b` is `a = b or a = -b`, needing no call at all.
 
-So the obvious move is to remove both calls, hoist `x[j]` into a local
-since it is read twice, and carry `k-j` in a counter instead of
-recomputing it. Three changes, all of them textbook.
-
-**All three made it slower.**
+So: remove both calls, hoist `x[j]` into a local since it is read twice,
+carry `k-j` in a counter. Three changes, all textbook. **All three made it
+slower.**
 
 | change | time |
 |---|---:|
@@ -100,7 +134,7 @@ recomputing it. Three changes, all of them textbook.
 | `k-j` carried in a counter | 5 253 ms |
 | **`fabs(j-k)` → `k-j`, nothing else** | **4 307 ms** |
 
-Measuring Ring's per-operation costs explains it ([F-44](FINDINGS.md)):
+Ring's per-operation costs explain it ([F-44](FINDINGS.md)):
 
 ```
   y = 1                 20 ns    assignment
@@ -110,54 +144,28 @@ Measuring Ring's per-operation costs explains it ([F-44](FINDINGS.md)):
 
 **An assignment costs about the same as the `fabs` call it was meant to
 avoid.** Hoisting a repeated call into a local is a trade at par, not a
-saving — and replacing one call with two comparisons is a loss outright.
+saving; replacing one call with two comparisons is a loss outright. The
+one change that helped deleted a call and put *nothing* in its place.
 
-The one change that helped deleted a call and put *nothing* in its place.
-That is V1, and it is worth 7%.
+*And there is deliberately no checker rule for this.* "Hoist this out of
+the loop" is wrong about as often as it is right in Ring, and a rule wrong
+half the time is worse than none.
 
-**Why there is no checker rule for this.** "Hoist this out of the loop" is
-wrong about as often as it is right in Ring, and a rule that is wrong half
-the time is worse than no rule. This stays a finding.
-
----
-
-## Step 3 — where Ring++ itself does not help
-
-Two library-informed attempts, both kept as counter-examples.
-
-**X1 — `RppIndexed` on the board.** The idiom exists because Ring reaches
-a list element by walking from a cursor, making jumping access O(distance)
-— worth 5× on an 8,000-item list ([F-42](FINDINGS.md)). Here the board is
-**11 items**. There is no distance to save, and no gain arrives: 4 853 ms
-against V1's 4 705, inside the noise. The size rule the library already
-states holds: the indexed idiom is for big lists read out of order.
-
-**X2 — passing the board as a parameter.** Ring passes a list by
-reference, so threading it through every call should cost nothing and
-might save the global lookups. It costs **15%**. `Place()` is called
-2,247,737 times, and each call now pushes one more argument; the per-call
-price of the extra parameter exceeds the per-read saving inside.
-
-> Passing a list by reference means no **copy**. It does not mean free.
-
----
-
-## Step 4 — stop asking the question
+### 3. Stop asking the question
 
 V0 and V1 both ask "does this square conflict?" nine million times, and
-answer by walking every queen already placed. The standard fix is to make
-the question O(1): a queen at `(k,i)` conflicts only on a column, a
-diagonal (`k+i`), or an anti-diagonal (`k-i`) — three numbers, three
-flags.
+answer by walking every queen already placed. Make the question O(1)
+instead: a queen at `(k,i)` conflicts only on a column, a diagonal
+(`k+i`), or an anti-diagonal (`k-i`) — three numbers, three flags.
 
 **V2** keeps one flag list per set: 1 342 ms, **3.74×**. The inner loop is
-gone; the price is six list writes per node for marking and unmarking.
+gone; the price is six list writes per node to mark and unmark.
 
 **V3** notices those three sets are each at most `n` bits wide, and `n` is
 12, so all three fit in ordinary Ring numbers. Marking becomes `OR`,
-testing `AND`, and unmarking becomes **free** — shifting the diagonal
-masks one position per row means the caller's own copy is never modified,
-so returning undoes it.
+testing `AND`, and unmarking becomes **free** — sliding the diagonal masks
+one position per row means the caller's copy is never modified, so
+returning undoes it.
 
 ```ring
 nFree = nAll & ~(nCol | nD1 | nD2)
@@ -168,28 +176,29 @@ while nFree != 0
 end
 ```
 
-**304 ms — 16.5×**, and the board list disappears entirely.
+**304 ms**, and the board list disappears entirely.
 
 ---
 
 ## What the study teaches
 
+**Ring++ is not a general speed-up, and this is what that looks like.**
+Its library targets copying and this program copies nothing; its checker
+targets data-heavy shapes and this program is compute-heavy. Both said so
+rather than manufacturing a win. A reader deciding whether Ring++ fits
+*their* program is better served by this page than by another one where it
+worked.
+
 **The order mattered more than the cleverness.** Counting the inner
 iterations took one minute and pointed at the only line worth touching.
-Every optimisation attempted before measuring — and three were — made the
+Every optimisation attempted before measuring — three of them — made the
 program slower.
 
 **Ring's cost model is not C's.** A builtin call is cheap; an assignment
-is not free. Optimisations that move work around lose. Only deleting work
-wins.
+is not free. Optimisations that *move* work around lose. Only deleting
+work wins.
 
-**The biggest win was not a micro-optimisation at all.** V1's careful
-7% is worth less than a twentieth of what V3 got by asking a different
-question. Micro-tuning a linear scan is effort spent making the wrong
-algorithm faster.
-
-**And Ring++ was not the answer here.** Its library targets copying, and
-this program copies nothing; its checker targets data-heavy shapes, and
-this program is compute-heavy. Both said so honestly rather than
-manufacturing a win. The gains came from Ring itself — measured, and
-reproducible with one command.
+**And the biggest number was the least interesting.** V1's careful 7% and
+the whole discussion of `fabs` are worth less than a twentieth of what
+came from asking a different question. Micro-tuning a linear scan is
+effort spent making the wrong algorithm faster.
