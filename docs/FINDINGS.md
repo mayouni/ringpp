@@ -1289,6 +1289,52 @@ cannot find one.
 **Every one of those false passes was verified against a binary known to
 crash.** A gate is not written until it has failed on the defect it names.
 
+### F-44. In Ring, a local assignment costs about as much as a builtin call — so "fewer function calls" is not an optimisation on its own
+
+Measured 2026-08-28 on Ring 1.27, 5,000,000 iterations, minimum of 3,
+reproduced twice within ±1 ns (`bench/queens/unit-costs.ring`). Costs are
+per iteration, with the 16 ns empty loop subtracted:
+
+```
+  y = 1                 20 ns    assignment
+  y++                   17 ns    increment
+  if k - j = 5          32 ns    arithmetic in a test
+  if aX[3] = 5          36 ns    list read in a test
+  if fabs(-5) = 5       53 ns    builtin call in a test
+  y = aX[3]             41 ns    list read INTO a local
+```
+
+**A `fabs()` call is ~21 ns more than the equivalent arithmetic — and an
+assignment is 20 ns.** They are the same price. That inverts the reflex
+every programmer carries in from C: hoisting a repeated call into a local
+is not free, it is a trade at par, and it *loses* whenever the call was
+already cheap or short-circuited away.
+
+**Found by trying it and being wrong.** Optimising the N-Queens study
+(`docs/CASE-QUEENS.md`), the inner test `x[j] = i or fabs(x[j]-i) =
+fabs(j-k)` ran 9,015,683 times — 18 million `fabs` calls. Removing *both*
+calls in favour of arithmetic, hoisting `x[j]` into a local, and carrying
+`k-j` in a counter was the obvious rewrite. Every one of those three
+changes made it **slower**:
+
+```
+  original                                  4 707 ms
+  + both fabs replaced by comparisons       5 097 ms   worse
+  + x[j] hoisted into a local               5 484 ms   worse
+  + k-j carried in a counter (nD--)         5 253 ms   worse
+  fabs(j-k) -> k-j, and NOTHING else        4 307 ms   better
+```
+
+The one change that helped removed a call and put *nothing* in its place.
+Every other change paid an assignment to save something that cost the
+same or less.
+
+**The rule this yields.** In a Ring hot loop, delete work — do not
+relocate it. A call whose result is used once and whose argument is
+already a plain expression is not worth a variable. This is also why the
+checker has no rule for it: "hoist this" is wrong about as often as it is
+right, and a rule that is wrong half the time is worse than none.
+
 ### F-43. for-in costs ~2× an indexed loop — and its loop variable writes through
 
 Measured 2026-08-27 on Ring 1.27, 200,000 elements, same body either side:

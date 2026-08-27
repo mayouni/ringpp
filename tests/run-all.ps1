@@ -382,6 +382,24 @@ foreach ($a in $arrays) {
 if ($binBad.Count) { $fail++; $binBad | Select-Object -Unique | ForEach-Object { "       $_" } }
 Pop-Location
 
+# The N-Queens case study (docs/CASE-QUEENS.md). Gated because its claim is
+# a CORRECTNESS one before it is a speed one: six variants of someone else's
+# program, two of them a different algorithm, all required to agree on 3905
+# solutions. If a rewrite ever drifts, this fails here rather than in a
+# document nobody re-ran. N is kept at 9 so the gate costs about a second;
+# the published table uses 11.
+$qOut = & powershell -File (Join-Path $PSScriptRoot 'queens_gate.ps1') 2>&1 | Out-String
+if ($qOut -match 'SKIP') {
+    "SKIP {0,-16} {1}" -f "queens case", ($qOut -replace '.*SKIP\s*', '').Trim()
+} elseif ($qOut -match 'QUEENS OK') {
+    $nSol = if ($qOut -match 'agree: (\d+) solutions') { $Matches[1] } else { '?' }
+    "{0} {1,-16} {2}" -f "PASS", "queens case", "6 variants agree on $nSol solutions; bitmask is fastest"
+} else {
+    "{0} {1,-16} {2}" -f "FAIL", "queens case", "variants disagree -- run bench\queens\run.ps1"
+    $qOut -split "`n" | Where-Object { $_ -match 'FAIL' } | ForEach-Object { "       " + $_.Trim() }
+    $fail++
+}
+
 # OPTIONAL: the whole library, its gates and the algorithm suite on a real
 # arm64 phone. Same policy as the corpus gate above -- no device attached is
 # a named SKIP, never a failure, because most machines running this suite
