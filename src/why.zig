@@ -162,6 +162,38 @@ pub const catalog = [_]Entry{
         .upstream = "Deliberately not sent. Language design, not a defect.",
     },
     .{
+        .rule = "rpp/advise-forin",
+        .findings = &.{"F-43"},
+        .title = "for-in is ~2x an indexed for — and its loop variable is a live reference",
+        .symptom = "A hot loop that is twice as slow as the same loop written with an index; " ++
+            "or a list that changed because a for-in body assigned to the loop variable.",
+        .cause = "for-in materialises a reference per element. Measured on 200,000 elements: " ++
+            "list read 24 vs 12 ms, list write 22 vs 10 ms, string read 28 vs 15 ms.",
+        .fix = "Where the loop is hot: `for i = 1 to nLen` with `aL[i]`, bound hoisted (F-41). " ++
+            "Converting a WRITING loop needs the assignment on aL[i], because for-in's `x = v` " ++
+            "wrote through the reference.",
+        .evidence = "probe of 2026-08-27, six shapes, 200,000 elements each; the write-through " ++
+            "was verified by reading the list back",
+        .hurts = "Nothing is WRONG with for-in — 2x of nanoseconds is nothing, and the " ++
+            "reference semantics are often exactly what the code wants. That is why this is " ++
+            "advice behind --advise, not a default diagnostic.",
+    },
+    .{
+        .rule = "rpp/advise-patch-rebuild",
+        .findings = &.{ "F-1", "F-38" },
+        .title = "left() + patch + substr() rebuilds the whole string to change a few bytes",
+        .symptom = "A patching loop whose cost grows with the size of the BUFFER instead of " ++
+            "the size of the patch.",
+        .cause = "Each patch builds a new string: one 8-byte write into a 500 KB buffer copies " ++
+            "500 KB. Two thousand patches copy a gigabyte to write 16 KB (examples/01).",
+        .fix = "RppBuffer.Poke writes through a pointer, O(patch): 12.9x on the desktop, 49x " ++
+            "measured on a phone before the allocator fix, ~12x after it. Example 01 asserts " ++
+            "the two ways produce byte-identical output before printing either number.",
+        .evidence = "examples/01-patch-a-large-buffer — tutorial, proof and gate in one file",
+        .hurts = "For a handful of patches on a small string the raw way is simpler and fast " ++
+            "enough; RppBuffer earns its keep when the buffer is large or the patches are many.",
+    },
+    .{
         .rule = "rpp/len-in-loop-header",
         .findings = &.{"F-41"},
         .title = "len() in a loop header runs on every iteration — and copies a string whole each time",

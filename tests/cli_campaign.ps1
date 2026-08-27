@@ -73,7 +73,10 @@ try {
 
     # ---- 2. arguments it does not understand are refused, not ignored ------
     Check-Case 'unknown option'  @('check', '--fix')                           1 'unknown option'
-    Check-Case 'extra argument'  @('check', (Join-Path $tmp 'good.ring'), '--json') 1 'unexpected argument'
+    # --json is an OPTION, and since check learned --advise it is named as
+    # one; the old parser called anything in third position an "argument".
+    Check-Case 'unknown option 2' @('check', (Join-Path $tmp 'good.ring'), '--json') 1 'unknown option'
+    Check-Case 'extra argument'  @('check', (Join-Path $tmp 'good.ring'), (Join-Path $tmp 'good.ring')) 1 'unexpected argument'
 
     # ---- 3. hostile CONTENT must not crash, and must still verdict ---------
     foreach ($f in 'good.ring','bom.ring','crlf.ring','binary.ring','nul.ring',

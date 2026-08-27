@@ -24,7 +24,7 @@ fn usage(w: anytype) void {
         \\
         \\Analyse
         \\
-        \\  ringpp check [path]         Type-check and lint; no run, no build     (always available)
+        \\  ringpp check [path] [--advise]  Type-check and lint; --advise names every place a measured Ring++ idiom is faster
         \\  ringpp why <thing>          Explain a rule, a finding, or a Ring error code
         \\  ringpp version              Show version
         \\  ringpp help                 This screen
@@ -75,22 +75,32 @@ pub fn main() !u8 {
         return 0;
     }
     if (std.mem.eql(u8, cmd, "check") or std.mem.eql(u8, cmd, "c")) {
-        // `check` takes one optional path and no options. Anything else was
-        // silently ignored until now, so `ringpp check src/ --fix` reported a
-        // clean run having done nothing of the kind. A tool that refuses
-        // rather than guesses has to refuse here too.
-        if (args.len > 3) {
-            try w.print("ringpp check: unexpected argument '{s}'\n", .{args[3]});
-            try w.print("usage: ringpp check [path]   -- one path, no options\n", .{});
-            return 1;
+        // `check` takes one optional path and one optional flag. Anything
+        // else was silently ignored until now, so `ringpp check src/ --fix`
+        // reported a clean run having done nothing of the kind. A tool that
+        // refuses rather than guesses has to refuse here too.
+        var advise = false;
+        var path: []const u8 = ".";
+        var got_path = false;
+        var ai: usize = 2;
+        while (ai < args.len) : (ai += 1) {
+            const a2 = args[ai];
+            if (std.mem.eql(u8, a2, "--advise")) {
+                advise = true;
+            } else if (a2.len > 1 and a2[0] == '-') {
+                try w.print("ringpp check: unknown option '{s}'\n", .{a2});
+                try w.print("usage: ringpp check [path] [--advise]\n", .{});
+                return 1;
+            } else if (!got_path) {
+                path = a2;
+                got_path = true;
+            } else {
+                try w.print("ringpp check: unexpected argument '{s}'\n", .{a2});
+                try w.print("usage: ringpp check [path] [--advise]\n", .{});
+                return 1;
+            }
         }
-        if (args.len > 2 and args[2].len > 1 and args[2][0] == '-') {
-            try w.print("ringpp check: unknown option '{s}'\n", .{args[2]});
-            try w.print("usage: ringpp check [path]   -- one path, no options\n", .{});
-            return 1;
-        }
-        const path = if (args.len > 2) args[2] else ".";
-        return try runCheck(gpa, w, path);
+        return try runCheck(gpa, w, path, advise);
     }
     if (std.mem.eql(u8, cmd, "deps") or std.mem.eql(u8, cmd, "d")) {
         if (args.len < 3) {
@@ -130,7 +140,7 @@ pub fn main() !u8 {
     return 1;
 }
 
-fn runCheck(gpa: std.mem.Allocator, w: anytype, path: []const u8) !u8 {
+fn runCheck(gpa: std.mem.Allocator, w: anytype, path: []const u8, advise: bool) !u8 {
     var files = std.ArrayList([]const u8){};
     defer {
         for (files.items) |f| gpa.free(f);
@@ -218,6 +228,9 @@ fn runCheck(gpa: std.mem.Allocator, w: anytype, path: []const u8) !u8 {
 
     var last_file: []const u8 = "";
     for (report.findings.items) |f| {
+        // Advice is opt-in. It describes working code that could be faster,
+        // and printing it beside real defects teaches people to skim both.
+        if (f.severity == .adv and !advise) continue;
         if (!std.mem.eql(u8, last_file, f.file)) {
             try w.print("\n{s}\n", .{f.file});
             last_file = f.file;
@@ -243,6 +256,11 @@ fn runCheck(gpa: std.mem.Allocator, w: anytype, path: []const u8) !u8 {
         "\n  {d} error, {d} warn, {d} perf, {d} note   in {d} files ({d:.1} KB, {d:.0} ms)\n",
         .{ c.err, c.warn, c.perf, c.note, read_ok, @as(f64, @floatFromInt(bytes)) / 1024.0, ms },
     );
+    if (c.adv > 0 and !advise) {
+        try w.print("  {d} place(s) where a measured Ring++ idiom is faster -- add --advise to see them\n", .{c.adv});
+    } else if (advise and c.adv > 0) {
+        try w.print("  {d} advice item(s) above are opportunities, not defects\n", .{c.adv});
+    }
     if (unparsed > 0) {
         try w.print(
             "  {d} of those parsed as far as a point and no further, so no rule ran on them\n",
@@ -283,8 +301,12 @@ fn runCheck(gpa: std.mem.Allocator, w: anytype, path: []const u8) !u8 {
     // A rule id with nowhere to go is a rule to obey rather than a fact to
     // understand. Name the way out, once, and only when there is something
     // to explain.
-    if (report.findings.items.len > 0) {
-        try w.print("  ringpp why {s}   for any rule above\n", .{report.findings.items[0].rule});
+    for (report.findings.items) |f| {
+        // The first VISIBLE finding: naming a rule this run just hid would
+        // send the reader to `why` for a line they cannot see above.
+        if (f.severity == .adv and !advise) continue;
+        try w.print("  ringpp why {s}   for any rule above\n", .{f.rule});
+        break;
     }
     return if (c.err > 0) 1 else 0;
 }

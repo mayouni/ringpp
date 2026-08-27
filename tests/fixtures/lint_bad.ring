@@ -55,3 +55,16 @@ func HeaderTrapPath cText
         nCount++
     next
     return nCount
+
+func AdvisablePaths aItems, cBuf
+    # rpp/advise-forin (--advise only): ~2x an indexed for, F-43.
+    nSum = 0
+    for x in aItems
+        nSum += x
+    next
+    # rpp/advise-patch-rebuild (--advise only): the rebuild-to-patch shape
+    # from examples/01 -- one small write copies the whole buffer.
+    for i = 1 to 10
+        cBuf = left(cBuf, i) + "ZZ" + substr(cBuf, i + 3)
+    next
+    return nSum + len(cBuf)

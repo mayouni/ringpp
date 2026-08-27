@@ -12,6 +12,11 @@ pub const Severity = enum {
     warn,
     perf,
     note,
+    /// A place where a measured Ring++ (or plain-Ring) idiom is faster than
+    /// what is written. Hidden by default and shown by `check --advise`,
+    /// because "could be faster" on working code is advice, not a defect --
+    /// mixing the two is how a lint gets ignored.
+    adv,
 
     pub fn label(self: Severity) []const u8 {
         return switch (self) {
@@ -19,6 +24,7 @@ pub const Severity = enum {
             .warn => "warn",
             .perf => "perf",
             .note => "note",
+            .adv => "adv",
         };
     }
 };
@@ -70,7 +76,7 @@ pub const Report = struct {
         });
     }
 
-    pub const Counts = struct { err: usize = 0, warn: usize = 0, perf: usize = 0, note: usize = 0 };
+    pub const Counts = struct { err: usize = 0, warn: usize = 0, perf: usize = 0, note: usize = 0, adv: usize = 0 };
 
     pub fn counts(self: Report) Counts {
         var r: Counts = .{};
@@ -79,6 +85,7 @@ pub const Report = struct {
             .warn => r.warn += 1,
             .perf => r.perf += 1,
             .note => r.note += 1,
+            .adv => r.adv += 1,
         };
         return r;
     }
@@ -142,6 +149,19 @@ fn inLoopHeader(n: ts.Node) bool {
         }
         if (std.mem.eql(u8, k, "source_file")) return false;
         cur = cur.parent();
+    }
+    return false;
+}
+
+/// True for the `for x in ...` form. The keywords are anonymous tokens, so
+/// this walks ALL children (child(), not namedChild()) looking for the
+/// aliased "in" — the counted-loop form has "=" and "to" there instead.
+fn isForIn(for_stmt: ts.Node) bool {
+    var i: u32 = 0;
+    while (i < for_stmt.childCount()) : (i += 1) {
+        const k = for_stmt.child(i).kind();
+        if (std.mem.eql(u8, k, "in")) return true;
+        if (std.mem.eql(u8, k, "=") or std.mem.eql(u8, k, "to")) return false;
     }
     return false;
 }
@@ -218,6 +238,37 @@ const Walker = struct {
     pointerish: *std.StringHashMap(void),
     unparsed_reported: bool = false,
     in_class: bool = false,
+
+    /// The patch shape of examples/01: a `+` chain containing BOTH a left()
+    /// and a substr() call over the same statement. Checked on the top
+    /// binary_expression of the chain only (its parent is not another `+`),
+    /// so one chain reports once, not once per operator.
+    fn patchPatternAt(self: *Walker, n: ts.Node) bool {
+        _ = self;
+        const par = n.parent();
+        if (!par.isNull() and std.mem.eql(u8, par.kind(), "binary_expression")) return false;
+        var has_left = false;
+        var has_substr = false;
+        var stack_buf: [64]ts.Node = undefined;
+        var top: usize = 0;
+        stack_buf[top] = n;
+        top += 1;
+        while (top > 0) {
+            top -= 1;
+            const cur = stack_buf[top];
+            if (std.mem.eql(u8, cur.kind(), "call_expression")) {
+                const nm = calleeName(cur);
+                if (eqIgnoreCase(nm, "left")) has_left = true;
+                if (eqIgnoreCase(nm, "substr")) has_substr = true;
+            }
+            var i: u32 = 0;
+            while (i < cur.childCount() and top < stack_buf.len) : (i += 1) {
+                stack_buf[top] = cur.child(i);
+                top += 1;
+            }
+        }
+        return has_left and has_substr;
+    }
 
     /// A class shadows a builtin harmfully only when it defines a method with
     /// that name AND calls the name unqualified with a different arity.
@@ -316,6 +367,24 @@ const Walker = struct {
 
             if (eqIgnoreCase(callee, "substr") and insideLoop(n)) {
                 try self.report.add(self.gpa, self.file, n, .perf, "rpp/substr-in-loop", "substr() inside a loop", .{}, "substr copies the WHOLE string before taking the slice: 12.5 us per call on a 500 KB string, and it grows with the string. ptr2str() through a cached pointer is ~0.09 us. See FINDINGS F-6.");
+            }
+        }
+
+        // ADVICE (shown by `check --advise` only) — F-43: `for x in ...` costs
+        // ~2x an indexed loop, measured on lists and strings, reads and
+        // writes alike. On a small loop that is nanoseconds, which is why
+        // this is .adv and not .perf: the default output stays quiet, and
+        // the person tuning a hot path asks for it.
+        if (std.mem.eql(u8, kind, "for_statement") and isForIn(n)) {
+            try self.report.add(self.gpa, self.file, n, .adv, "rpp/advise-forin", "for-in loop — an indexed for is ~2x faster", .{}, "Measured on 200,000 elements: list read 24 -> 12 ms, list write 22 -> 10 ms, string read 28 -> 15 ms. Worth changing only where the loop is hot. Note for-in's variable is a REFERENCE — `for x in aL x = 7` rewrites the list — so converting a WRITING loop needs aL[i] = ... on the left. See FINDINGS F-43.");
+        }
+
+        // ADVICE — F-1 / example 01: the rebuild-the-string patch pattern.
+        // `left(s, o) + patch + substr(s, ...)` inside a loop copies the whole
+        // string per patch; RppBuffer.Poke writes in place.
+        if (std.mem.eql(u8, kind, "binary_expression") and insideLoop(n)) {
+            if (self.patchPatternAt(n)) {
+                try self.report.add(self.gpa, self.file, n, .adv, "rpp/advise-patch-rebuild", "rebuilding a string to patch it — RppBuffer.Poke writes in place", .{}, "left(s,o) + patch + substr(s,...) builds a WHOLE new string per patch: one 8-byte write into a 500 KB buffer copies 500 KB. RppBuffer.Poke is O(patch): measured 12.9x on the desktop and 49x on a phone (examples/01, F-38/F-40). The output is asserted byte-identical in example 01.");
             }
         }
 

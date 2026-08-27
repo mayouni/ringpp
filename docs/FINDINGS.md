@@ -1236,6 +1236,30 @@ combination the fuzz reached by luck after ~13,000 operations. Luck is
 not a regression test, so the shape is now a named case that runs before
 any random one.
 
+### F-43. for-in costs ~2× an indexed loop — and its loop variable writes through
+
+Measured 2026-08-27 on Ring 1.27, 200,000 elements, same body either side:
+
+```
+                      for-in     indexed
+  list read            24 ms      12 ms
+  list write           22 ms      10 ms
+  string read          28 ms      15 ms
+```
+
+A steady ~2× across reads and writes, lists and strings. Mansour had
+noticed this by feel before it was measured; now it has a number and a
+scope: 2× of nanoseconds is nothing, so this matters only in hot loops —
+which is why the checker carries it as **advice** (`rpp/advise-forin`,
+shown by `check --advise`) rather than as a default diagnostic.
+
+The semantic half matters more than the speed: **for-in's variable is a
+live reference.** `for x in aL x = 7` rewrites every element of the list —
+verified by reading the list back (`aL[1]=7`, `aL[n]=7`). Converting a
+writing for-in to an indexed loop therefore moves the assignment to
+`aL[i] = ...`; a mechanical rewrite that keeps `x = ...` silently stops
+writing to the list.
+
 ### F-42. Ring list indexing costs O(distance from the last access) — so binary search over a Ring list is O(n) per query, and F-39's last outlier has its mechanism
 
 Measured 2026-08-27 on Ring 1.27, both architectures. This closes the

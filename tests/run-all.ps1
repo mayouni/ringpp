@@ -91,6 +91,21 @@ $ok = ($chk -match "rpp/varptr-unknown-name") -and
 "{0} {1,-16} {2}" -f $(if ($ok) { "PASS" } else { "FAIL" }), "T1 check gate", "4 rules fire on the local fixture"
 if (-not $ok) { $fail++ }
 
+# The advice layer, both directions. Advice must be INVISIBLE by default --
+# an "adv" line in plain `check` output means opportunities are being
+# presented as defects -- and must appear, both rules, under --advise.
+# The fixture contains one for-in and one rebuild-patch on purpose.
+$advDefaultClean = ($chk -notmatch "rpp/advise-") -and ($chk -match "idiom is faster")
+$advOut = & $ringpp check "tests\fixtures\lint_bad.ring" --advise 2>&1 | Out-String
+$advShown = ($advOut -match "rpp/advise-forin") -and ($advOut -match "rpp/advise-patch-rebuild")
+$aOk = $advDefaultClean -and $advShown
+"{0} {1,-16} {2}" -f $(if ($aOk) { "PASS" } else { "FAIL" }), "T1 advise gate", "hidden by default, both advice rules fire under --advise"
+if (-not $aOk) {
+    $fail++
+    if (-not $advDefaultClean) { "       default output leaked advice, or lost the summary line" }
+    if (-not $advShown)        { "       --advise did not show both advice rules" }
+}
+
 # OPTIONAL: the same checker over a large real corpus, when one happens to be
 # present. Never required -- but NAMED when skipped, because a gate quietly
 # not run is a green nobody earned (PX, CENTRAL-PXLATENCY-01).

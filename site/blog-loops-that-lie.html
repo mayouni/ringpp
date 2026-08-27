@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The loops that lie about their cost — Ring++</title>
+<meta name="description" content="A benchmark on a phone looked impossible, and chasing it uncovered two Ring loop patterns that cost far more than they read. Both are measured, both have one-line fixes, and the Ring++ checker now finds them for you.">
+<meta property="og:type" content="article">
+<meta property="og:url" content="https://mayouni.github.io/ringpp/blog-loops-that-lie.html">
+<meta property="og:title" content="The loops that lie about their cost">
+<meta property="og:description" content="Two ordinary-looking Ring loop patterns cost far more than they read — one is quadratic. Measured, explained, fixed in one line each, and now caught by the checker.">
+<meta property="og:image" content="https://mayouni.github.io/ringpp/social-card.png">
+<meta property="og:image:width" content="1280">
+<meta property="og:image:height" content="640">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:image" content="https://mayouni.github.io/ringpp/social-card.png">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="style.css?v=0.4.0">
+</head>
+<body>
+
+<nav>
+  <div class="wrap">
+    <a class="brand" href="index.html"><img src="favicon.svg" alt="">Ring<span>++</span></a>
+    <a href="start.html">Start here</a>
+    <a href="performance.html">Performant code</a>
+    <a href="checker.html">Static analysis</a>
+    <a href="build.html">Native build</a>
+    <a href="blog.html">Blog</a>
+    <a class="repo" href="https://github.com/mayouni/ringpp" target="_blank" rel="noopener" aria-label="Ring++ on GitHub"><svg viewBox="0 0 16 16" width="22" height="22" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg></a>
+    <a class="cta" href="https://github.com/mayouni/ringpp" target="_blank" rel="noopener">Get it <span class="newtab" aria-hidden="true">&#8599;</span></a>
+  </div>
+</nav>
+
+<header class="wrap narrow" style="padding-top:2.6rem">
+  <p style="margin:0 0 .5rem"><a href="blog.html" style="color:var(--accent); text-decoration:none">&larr; Blog</a></p>
+  <h1 style="font-size:clamp(1.9rem, 5vw, 2.5rem)">The loops that <em>lie</em>
+  about their cost</h1>
+  <p style="color:var(--muted); font-size:var(--floor); margin:.4rem 0 0">27 August 2026 &middot; Mansour Ayouni</p>
+</header>
+
+<article class="wrap narrow">
+  <p class="lead">This is the story of a benchmark that looked impossible,
+  and of what fell out when we refused to accept it. Three ordinary-looking
+  Ring loop patterns turned out to cost far more than they read — one of
+  them is <b>quadratic</b> while looking linear. Every claim below is a
+  measurement you can re-run, every fix is one line, and the Ring++ checker
+  now finds all of them in your code for you.</p>
+
+  <h2>Where it started: a number that made no sense</h2>
+
+  <p class="lead">While testing Ring on an Android phone, one benchmark —
+  reading a string one character at a time — came out <b>311 times slower
+  than Lua</b> doing exactly the same work, on the same phone, in the same
+  minute. Interpreters differ, but not by that much. A gap that size is not
+  a slow language; it is a hidden mechanism.</p>
+
+  <p class="lead">A profiler run on the phone itself settled it: the Ring
+  interpreter was executing for less than <b>half a percent</b> of the
+  time. Something else was eating the machine. Two findings later, that
+  benchmark runs <b>47&times; faster</b> — and neither finding changed a
+  single line of Ring itself. The first was about how our Android build was
+  put together, and <a href="blog-on-the-neighbours.html">that story is
+  told elsewhere</a>. The second is about Ring code — <em>your</em> code,
+  possibly — and that is this post.</p>
+
+  <h2>Lie number one: the loop header that copies your string</h2>
+
+  <p class="lead">Here is the loop every programmer has written. Read it
+  and estimate its cost:</p>
+
+  <pre class="code">for i = 1 to len(cText)
+    <span class="c"># ... look at cText[i] ...</span>
+next</pre>
+
+  <p class="lead">It reads as: measure the string once, then walk it. What
+  Ring actually does is different in one crucial way: <b>the header is
+  re-evaluated on every single pass</b> — and in Ring, a string handed to a
+  function is <b>copied</b> first. So every iteration copies the whole
+  string, just to ask its length again. The loop is O(n&sup2;) wearing
+  O(n) clothing.</p>
+
+  <p class="lead">The measurement — same body, 20,000 passes, only the
+  string size changes:</p>
+
+  <table style="width:100%; border-collapse:collapse; font-size:var(--read)">
+    <thead><tr style="border-bottom:2px solid var(--rule)">
+      <th style="text-align:left; padding:.6rem .5rem .6rem 0">the loop</th>
+      <th style="text-align:right; padding:.6rem .5rem">10 KB string</th>
+      <th style="text-align:right; padding:.6rem .5rem">1 MB string</th>
+    </tr></thead>
+    <tbody>
+      <tr style="border-bottom:1px solid var(--border)">
+        <td style="padding:.7rem .5rem .7rem 0">bound hoisted into a variable</td>
+        <td style="padding:.7rem .5rem; text-align:right">1 ms</td>
+        <td style="padding:.7rem .5rem; text-align:right">4 ms</td>
+      </tr>
+      <tr style="border-bottom:1px solid var(--border)">
+        <td style="padding:.7rem .5rem .7rem 0"><code>for i = 1 to len(cText)</code></td>
+        <td style="padding:.7rem .5rem; text-align:right">2 ms</td>
+        <td style="padding:.7rem .5rem; text-align:right"><b style="color:var(--error)">701 ms</b></td>
+      </tr>
+      <tr style="border-bottom:1px solid var(--border)">
+        <td style="padding:.7rem .5rem .7rem 0"><code>while i &lt;= len(cText)</code></td>
+        <td style="padding:.7rem .5rem; text-align:right">&mdash;</td>
+        <td style="padding:.7rem .5rem; text-align:right"><b style="color:var(--error)">5,194 ms</b></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <p class="lead">The string grew 100&times;; the loop got <b>350&times;
+  slower</b>. That is the signature of a hidden full copy per pass. And the
+  fix is one line:</p>
+
+  <pre class="code">nLen = len(cText)      <span class="c"># measure ONCE</span>
+for i = 1 to nLen
+    <span class="c"># ... exactly the same body ...</span>
+next</pre>
+
+  <p class="lead">Three neighbouring shapes were checked and are <b>fine</b>
+  — we measured them rather than assuming: <code>for c in cText</code>
+  walks without copying, <code>for i = 1 to len(aList)</code> is cheap
+  because lists are passed by reference, and <code>cText[i]</code> itself
+  is constant-time in every context we tried. The trap is strings, in
+  loop headers, and nowhere else.</p>
+
+  <p class="lead">One confession makes this credible: <b>our own benchmark
+  had the trap.</b> The "byte scan" we had been publishing was silently
+  measuring 6.4&nbsp;GB of header copies and calling it slow indexing.
+  Hoisting one variable took it from 123 to 13&nbsp;ms on the desktop and
+  from 518 to 77&nbsp;ms on the phone — same answer, byte-identical,
+  asserted before any number was printed. If it hid in our benchmark, it is
+  hiding in real code: our first sweep of a large Ring codebase found
+  <b>149</b> occurrences.</p>
+
+  <h2>Lie number two: the binary search that was never O(log n)</h2>
+
+  <p class="lead">Second impossible number, same campaign: binary search
+  over a sorted list, <b>105&times; behind Lua</b>. The arithmetic of the
+  loop accounted for a quarter of the measured time. The rest had no
+  explanation — until we tested how Ring reaches a list element.</p>
+
+  <p class="lead">Ring keeps a cursor at the position you touched last.
+  Reading the <em>same</em> position again is instant, and reading the
+  <em>next</em> one is a single step — which is why ordinary sequential
+  loops are fine. But a read far from the cursor <b>walks the distance</b>.
+  The measurement — 100,000 reads, only the access pattern changes:</p>
+
+  <table style="width:100%; border-collapse:collapse; font-size:var(--read)">
+    <thead><tr style="border-bottom:2px solid var(--rule)">
+      <th style="text-align:left; padding:.6rem .5rem .6rem 0">list size</th>
+      <th style="text-align:right; padding:.6rem .5rem">same index every time</th>
+      <th style="text-align:right; padding:.6rem .5rem">binary-search jumps</th>
+    </tr></thead>
+    <tbody>
+      <tr style="border-bottom:1px solid var(--border)">
+        <td style="padding:.7rem .5rem .7rem 0">100 items</td>
+        <td style="padding:.7rem .5rem; text-align:right">6 ms</td>
+        <td style="padding:.7rem .5rem; text-align:right">22 ms</td>
+      </tr>
+      <tr style="border-bottom:1px solid var(--border)">
+        <td style="padding:.7rem .5rem .7rem 0">8,000 items</td>
+        <td style="padding:.7rem .5rem; text-align:right">6 ms</td>
+        <td style="padding:.7rem .5rem; text-align:right">87 ms</td>
+      </tr>
+      <tr style="border-bottom:1px solid var(--border)">
+        <td style="padding:.7rem .5rem .7rem 0">64,000 items</td>
+        <td style="padding:.7rem .5rem; text-align:right">7 ms</td>
+        <td style="padding:.7rem .5rem; text-align:right"><b style="color:var(--error)">798 ms</b></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <p class="lead">A fixed index is flat at any size. Jumping reads scale
+  with the list. Binary search's very first probe jumps half the list — so
+  on a Ring list, the algorithm every textbook calls O(log&nbsp;n) is
+  actually <b>O(n) per lookup</b>.</p>
+
+  <p class="lead">This is exactly the situation Ring++'s
+  <code>RppIndexed</code> exists for. It asks Ring — using a facility Ring
+  itself provides — to build a direct index over the list, making any jump
+  constant-time. Same searches, same results, asserted equal:</p>
+
+  <table style="width:100%; border-collapse:collapse; font-size:var(--read)">
+    <thead><tr style="border-bottom:2px solid var(--rule)">
+      <th style="text-align:left; padding:.6rem .5rem .6rem 0">binary search, 6,000 queries</th>
+      <th style="text-align:right; padding:.6rem .5rem">plain list</th>
+      <th style="text-align:right; padding:.6rem .5rem">with RppIndexed</th>
+    </tr></thead>
+    <tbody>
+      <tr style="border-bottom:1px solid var(--border)">
+        <td style="padding:.7rem .5rem .7rem 0">desktop</td>
+        <td style="padding:.7rem .5rem; text-align:right">178 ms</td>
+        <td style="padding:.7rem .5rem; text-align:right"><b>22 ms</b></td>
+      </tr>
+      <tr style="border-bottom:1px solid var(--border)">
+        <td style="padding:.7rem .5rem .7rem 0">the Android phone</td>
+        <td style="padding:.7rem .5rem; text-align:right">657 ms</td>
+        <td style="padding:.7rem .5rem; text-align:right"><b>131 ms</b></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <p class="lead">The rule of thumb that survives: loops that walk a list
+  <em>in order</em> are fine. Algorithms whose reads <em>jump around</em> —
+  binary search, heaps, anything probing — want <code>RppIndexed</code>
+  around them, and the list must not change size while it is applied.</p>
+
+  <h2>Lie number three, the small one: for-in</h2>
+
+  <p class="lead">This one Mansour had noticed by feel long before we
+  measured it, and the measurement agrees: <code>for x in aList</code>
+  costs about <b>2&times;</b> the same loop written with an index — on
+  lists and strings, reading and writing alike. Two times nanoseconds is
+  nothing, so this only matters in genuinely hot loops. But one thing about
+  for-in matters everywhere: <b>its loop variable is live</b>. Write
+  <code>x = 7</code> inside <code>for x in aL</code> and you have just
+  rewritten the list. Useful when intended; startling when not.</p>
+
+  <h2>And now the checker finds all of it for you</h2>
+
+  <p class="lead">Every one of these patterns is visible in source code
+  before the program ever runs — which makes them exactly the static
+  analyzer's job. As of today:</p>
+
+  <div class="grid">
+    <div class="card">
+      <h3>Traps are flagged by default</h3>
+      <p><code>ringpp check</code> now fires on <code>len()</code> inside
+      any loop header — the quadratic one. It fires for lists too, where
+      hoisting merely removes a needless call, so the advice is never
+      wrong.</p>
+    </div>
+    <div class="card">
+      <h3>Opportunities are one flag away</h3>
+      <p><code>ringpp check --advise</code> names every place a measured
+      Ring++ idiom is faster than what is written: for-in in a hot path,
+      the rebuild-a-string-to-patch-it shape, and friends. Hidden by
+      default, because working code deserves quiet.</p>
+    </div>
+    <div class="card">
+      <h3>Every rule explains itself</h3>
+      <p><code>ringpp why rpp/len-in-loop-header</code> gives the symptom,
+      the cause, the fix and the measurement behind any rule — including
+      what each one deliberately does <em>not</em> claim.</p>
+    </div>
+  </div>
+
+  <p class="lead" style="margin-top:1.6rem">On its first run over a large
+  real codebase, the advice pass found <b>985</b> places where a measured
+  idiom was faster, alongside the 149 quadratic headers. None of them is a
+  bug. All of them are minutes to fix, now that something points at
+  them.</p>
+
+  <h2>What this whole episode teaches</h2>
+
+  <p class="lead">The 311&times; and 105&times; numbers were never "Ring is
+  slow". They were three specific mechanisms — a build choice, a loop
+  header, a data-structure access pattern — stacked on top of a perfectly
+  ordinary interpreter. Pulled apart with a profiler and a set of scaling
+  tests, Ring lands within a normal distance of Lua, and every remaining
+  gap has a name, a number, and either a fix or an open question honestly
+  labelled as one.</p>
+
+  <p class="lead">The measurements, the refuted hypotheses and the raw
+  tables live in
+  <a href="https://github.com/mayouni/ringpp/blob/main/docs/FINDINGS.md"
+  target="_blank" rel="noopener">FINDINGS.md</a> (F-41 through F-43), and
+  the phone campaign that started it all is reproducible with one command
+  from
+  <a href="https://github.com/mayouni/ringpp/blob/main/docs/ANDROID.md"
+  target="_blank" rel="noopener">ANDROID.md</a>.</p>
+</article>
+
+<section class="wrap narrow">
+  <h2>Next</h2>
+  <div class="actions" style="justify-content:flex-start">
+    <a class="btn primary" href="checker.html">Static analysis</a>
+    <a class="btn ghost" href="performance.html">Performant code</a>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <span>Ring++ 0.9 — MIT</span>
+    <a href="reference.html">Reference</a>
+    <a href="design.html">Design</a>
+    <a href="blog.html">Blog</a>
+    <a href="https://github.com/mayouni/ringpp/tree/main/docs" target="_blank" rel="noopener">Documentation <span class="newtab" aria-hidden="true">&#8599;</span></a>
+    <a href="https://ring-lang.github.io/" target="_blank" rel="noopener">Ring language <span class="newtab" aria-hidden="true">&#8599;</span></a>
+    <a href="https://github.com/mayouni/stzlib" target="_blank" rel="noopener">Softanza <span class="newtab" aria-hidden="true">&#8599;</span></a>
+    <span class="sp">a Softanza project by Mansour Ayouni</span>
+  </div>
+</footer>
+
+</body>
+</html>

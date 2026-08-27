@@ -40,6 +40,18 @@
 
 <section class="wrap narrow">
   <article style="margin-bottom:2.4rem">
+    <h3><a href="blog-loops-that-lie.html">The loops that lie about their cost</a></h3>
+    <p style="color:var(--muted); font-size:var(--floor); margin:0 0 .6rem">27 August 2026</p>
+    <p class="lead" style="margin-bottom:.8rem">A benchmark on a phone came out
+    311&times; slower than Lua, and refusing to accept it uncovered three Ring
+    loop patterns that cost far more than they read — one of them quadratic
+    while looking linear, hiding in our own benchmark and 149 times in a real
+    codebase. Each has a one-line fix, and the checker now finds all of them:
+    traps by default, opportunities with <code>--advise</code>.</p>
+    <a href="blog-loops-that-lie.html">Read it &rarr;</a>
+  </article>
+
+  <article style="margin-bottom:2.4rem">
     <h3><a href="blog-differential-gate.html">We spent a day attacking our own library — and it died in four lines</a></h3>
     <p style="color:var(--muted); font-size:var(--floor); margin:0 0 .6rem">25 August 2026</p>
     <p class="lead" style="margin-bottom:.8rem">A testing campaign whose goal

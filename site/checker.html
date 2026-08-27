@@ -153,7 +153,7 @@
 </section>
 
 <section class="wrap">
-  <h2>The 16 rules</h2>
+  <h2>The 19 rules</h2>
   <p class="lead">Every one traces to a measured finding — a specific microsecond
   figure or a specific Ring error code, never "this might be slow".</p>
   <table style="width:100%; border-collapse:collapse; font-size:var(--read)">
@@ -166,9 +166,18 @@
       <tr style="border-bottom:1px solid var(--border)">
         <td style="padding:.6rem 0">lint</td>
         <td style="padding:.6rem 0"><code>varptr-*</code>, <code>memcpy-*</code>,
-        <code>substr-in-loop</code>, <code>genarray-in-loop</code>,
+        <code>substr-in-loop</code>, <code>len-in-loop-header</code>,
+        <code>genarray-in-loop</code>,
         <code>empty-catch</code>, <code>method-shadows-builtin</code>,
         <code>unparsed</code></td>
+        <td style="padding:.6rem 0">a parse only</td>
+      </tr>
+      <tr style="border-bottom:1px solid var(--border)">
+        <td style="padding:.6rem 0">advice <span style="color:var(--muted)">(<code>--advise</code>)</span></td>
+        <td style="padding:.6rem 0"><code>advise-forin</code>,
+        <code>advise-patch-rebuild</code> &mdash; places where a measured
+        Ring++ idiom is faster. Hidden by default: opportunities are not
+        defects, and mixing them is how a lint gets ignored.</td>
         <td style="padding:.6rem 0">a parse only</td>
       </tr>
       <tr style="border-bottom:1px solid var(--border)">
