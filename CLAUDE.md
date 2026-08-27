@@ -171,6 +171,10 @@ any of them from the command line.
 - **`N` and `n` are the same variable.** Ring identifiers are
   case-insensitive (F-18).
 - **`get` and `put` cannot be method names** (F-20).
+- **`for i = 1 to len(s)` is O(n²) on a string.** The header is re-evaluated
+  every iteration and each evaluation copies the whole string into `len()`;
+  `while i <= len(s)` is worse. Hoist the bound (F-41). Lists are exempt —
+  they pass by reference. Caught by `rpp/len-in-loop-header`.
 
 ## Working rules
 

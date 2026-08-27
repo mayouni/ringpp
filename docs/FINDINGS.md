@@ -1236,6 +1236,108 @@ combination the fuzz reached by luck after ~13,000 operations. Luck is
 not a regression test, so the shape is now a named case that runs before
 any random one.
 
+### F-42. Ring list indexing costs O(distance from the last access) — so binary search over a Ring list is O(n) per query, and F-39's last outlier has its mechanism
+
+Measured 2026-08-27 on Ring 1.27, both architectures. This closes the
+question F-39 left open with, by then, four dead hypotheses (dispatch,
+scope size, allocator, header copies).
+
+**The scaling test.** 100,000 list reads, same body; only the list size and
+the access pattern change:
+
+```
+                 fixed middle index    binary-search-shaped jumps
+     100 items         6 ms                    22 ms
+   1 000 items         6 ms                    29 ms
+   8 000 items         6 ms                    87 ms
+  64 000 items         7 ms                   798 ms      <- scales with n
+```
+
+A *fixed* index is flat at any size: Ring keeps a cursor at the last
+accessed position. A *jumping* access walks the links from that cursor, so
+its cost is the distance jumped — and binary search's first probe jumps
+half the list. `BinSearchAll` on 8,000 items was therefore running
+O(n)-per-query while reading as O(log n): ~6.4 µs per inner iteration on
+the phone, of which the arithmetic accounted for ~1.5 µs and the walk the
+rest. This is the same VM fact behind `ringvm_genarray`'s 95× on permuted
+reads (F-9) — seen now from the algorithm's side.
+
+**The idiom answers it.** `RppIndexed` (genarray underneath) restores O(1)
+access. Same searches, hits asserted equal, minima of three:
+
+```
+                     plain list    RppIndexed
+  desktop              178 ms         22 ms      8.1x
+  Infinix (arm64)      657 ms        131 ms      5.0x
+```
+
+Against Lua on the device, binary search moves from **105× behind to 21×**
+— no longer a mystery, and the residue is ordinary per-iteration
+interpreter cost on a loop whose every pass calls `floor()` and compares
+twice. With this, every anomaly the cross-VM campaign surfaced is either
+fixed or mechanistically explained: byte scan (F-40 × F-41), binary search
+(this finding). The suite carries the pair as `binsearch` /
+`binsearch-rpp` so a regression in either direction fails loudly.
+
+**The rule of thumb it yields.** Sequential loops over Ring lists are fine
+— the cursor moves one step. Any algorithm whose *access pattern jumps* —
+binary search, heaps, hash-style probing — is running on the wrong data
+representation unless the list is behind `RppIndexed` (and stays unmutated
+while it is, F-10).
+
+### F-41. `for i = 1 to len(s)` is O(n²): the loop header is re-evaluated every iteration, and each evaluation copies the whole string into len()
+
+Measured 2026-08-27 on Ring 1.27, both architectures. Found by asking why a
+byte scan was still 87% `memcpy` *after* F-40 removed the allocator tax —
+the loop body copies nothing, so the copies had to be coming from somewhere
+nobody reads twice: the header.
+
+**The scaling test that proves it.** Same body, 20,000 iterations, only the
+string size changes:
+
+```
+                       10 KB      1 MB       growth for 100x size
+  bound hoisted         1 ms       4 ms       ~flat
+  for i = 1 to len(s)   2 ms     701 ms       350x     <- O(n^2)
+  while i <= len(s)     ~          5 194 ms   worse still (~260 us/pass)
+```
+
+Ring re-evaluates the `to` bound and the `while` condition on **every**
+pass, and a string argument is copied onto the VM stack before `len()` sees
+it — F-1's asymmetry, hidden in the header. Three neighbouring shapes are
+fine and were checked, not assumed: `for c in s` walks without copying,
+`for i = 1 to len(aList)` is cheap because lists pass by reference, and
+`s[i]` itself is O(1) in every context tested (assignment, call argument,
+arithmetic — flat from 10 KB to 1 MB).
+
+**What it had been costing this project.** The benchmark suite's own
+`ByteScan` used the trap, so the "byte access" row was measuring header
+copies: 80,000 iterations × one 80 KB copy each = 6.4 GB of `memcpy`
+presented as slow indexing. Hoisting one variable — same arithmetic, CHECK
+values byte-identical — moved byte scan **123 → 13 ms on the desktop** and
+**518 → 77 ms on the phone**. Combined with F-40, the phone's byte scan went
+3 653 → 77 ms in two findings: **47×, without touching Ring**. The suite's
+`StrSum` checksum had been silently moving ~40 GB per run the same way.
+And the Lua comparison was structurally unfair on this row: Lua's numeric
+`for` evaluates its bound **once** by language rule, so Ring was paying
+80,000 string copies in a loop Lua enters with none. Post-fix, Ring's byte
+scan sits 6.4× behind Lua — inside the normal interpreter band — and the
+311× "outlier" of F-39 is fully decomposed: allocator (7.1×, F-40) ×
+header trap (6.7×, this finding).
+
+**The checker now catches it.** `rpp/len-in-loop-header` fires on `len()`
+in a `for`-bound or `while`/`do..again` condition — `.perf`, because for a
+list the hoist merely deletes a needless call, so the advice is never
+wrong. `ringpp why rpp/len-in-loop-header` explains it. First corpus sweep:
+**149 hits across Softanza**, handed to that project rather than fixed from
+here. The library's one occurrence (`IsPlainName`, harmless on short
+identifiers) is hoisted anyway, so nobody copies the trap out of Ring++
+itself.
+
+**What stays open.** The binary-search outlier (F-39) is *not* this: its
+loop bounds are numbers. Four dead hypotheses now — dispatch, scope size,
+allocator, header copies.
+
 ### F-40. The 22–29× mobile string tax was musl's allocator, not ARM — profiled to `mmap`/`munmap` under `malloc`, fixed by linking mimalloc, string workloads 3.6–7.7× faster with zero Ring changes
 
 Measured 2026-08-27 on the same Infinix X6817. This finding overturns the

@@ -125,6 +125,27 @@ fn nameFromArg(n: ts.Node) ?[]const u8 {
     return null;
 }
 
+/// True when `n` sits in a loop's HEADER — the `to`/`step` bound of a for,
+/// or the condition of a while / do..again — as opposed to its body. The
+/// grammar wraps every body expression in `expression_statement`, so the
+/// first `*_statement` ancestor of a header expression is the loop node
+/// itself, and anything in the body meets another statement kind first.
+fn inLoopHeader(n: ts.Node) bool {
+    var cur = n.parent();
+    var depth: u32 = 0;
+    while (!cur.isNull() and depth < 64) : (depth += 1) {
+        const k = cur.kind();
+        if (std.mem.endsWith(u8, k, "_statement")) {
+            return std.mem.eql(u8, k, "for_statement") or
+                std.mem.eql(u8, k, "while_statement") or
+                std.mem.eql(u8, k, "do_again_statement");
+        }
+        if (std.mem.eql(u8, k, "source_file")) return false;
+        cur = cur.parent();
+    }
+    return false;
+}
+
 fn insideLoop(n: ts.Node) bool {
     var cur = n.parent();
     var depth: u32 = 0;
@@ -281,6 +302,16 @@ const Walker = struct {
 
             if (eqIgnoreCase(callee, "ringvm_genarray") and insideLoop(n)) {
                 try self.report.add(self.gpa, self.file, n, .note, "rpp/genarray-in-loop", "ringvm_genarray() inside a loop", .{}, "Worth it only when random reads outnumber mutations by roughly 10-20x; below that it costs up to 16x. One append frees the array, so it is rebuilt every round. See FINDINGS F-9 and F-10.");
+            }
+
+            // FINDINGS F-41: a loop header is re-evaluated on EVERY
+            // iteration, and a string argument to len() is copied whole each
+            // time -- `for i = 1 to len(s)` is O(n^2) in len(s) while
+            // reading as O(n). Fires on any identifier: for a string the
+            // hoist is a 9-47x measured win, for a list it merely deletes a
+            // needless call per iteration, so the advice is never wrong.
+            if (eqIgnoreCase(callee, "len") and inLoopHeader(n)) {
+                try self.report.add(self.gpa, self.file, n, .perf, "rpp/len-in-loop-header", "len() in a loop header is re-evaluated every iteration", .{}, "Ring evaluates the for-bound / while-condition on every pass, and a STRING argument is copied whole into each len() call: `for i = 1 to len(s)` on a 1 MB string costs 35 us per iteration -- O(n^2) that reads as O(n). Hoist it: nLen = len(s) before the loop. Measured 9-47x on real code. See FINDINGS F-41.");
             }
 
             if (eqIgnoreCase(callee, "substr") and insideLoop(n)) {

@@ -231,7 +231,7 @@ milliseconds:
 | recursive fib | 22 | 163 | 7.4× slower |
 | mergesort | 110 | 569 | 5.2× slower |
 | binary search | 176 | 653 | 3.7× slower |
-| byte scan over a string | 123 | 518 | 4.2× slower |
+| byte scan over a string | 13 | 77 | 5.9× slower |
 | patching a buffer, raw Ring | 86 | 541 | 6.3× slower |
 | reading slices, raw Ring | 108 | 573 | 5.3× slower |
 | `substr(s,i,1)` in a loop | 96 | 387 | 4.0× slower |
@@ -267,11 +267,14 @@ checked, and it is what makes the timings comparable at all.
 | fib | 163.47 | 13.38 | 1.39 |
 | mergesort | 569.37 | 49.54 | 5.19 |
 | binary search | 653.23 | 6.22 | 0.60 |
-| byte scan | 518.16 | 12.03 | 0.76 |
+| byte scan | 76.93 | 12.03 | 0.76 |
 
-(The Ring column is the fixed runtime of [F-40](FINDINGS.md). Before the
-allocator fix its byte-scan entry read 3 740 ms — 311× behind Lua — and
-that gap is what led to the profile that found the bug.)
+(The Ring column is the runtime after two findings. Byte scan read
+3 740 ms — 311× behind Lua — when first measured; [F-40](FINDINGS.md)
+(the musl allocator) took it to 515, and [F-41](FINDINGS.md) (the
+`for i = 1 to len(s)` header trap, which Lua never pays because its `for`
+evaluates the bound once) took it to 77. The impossible-looking gap is what
+led to the profiles that found both bugs.)
 
 **Read these two columns differently.**
 
@@ -288,21 +291,24 @@ someone asks how Ring compares to other small languages.
 
 Two entries sit outside that band:
 
-- **byte scan, ~43× behind Lua.** Was 311× — the allocator bug — and its
-  investigation is F-40. What remains is structural: Ring's `s[i]` builds a
-  one-character string where Lua's `string.byte` returns a number, so every
-  character costs an allocation and a copy.
-- **binary search, ~106× behind Lua** — and the allocator fix moved it
-  barely at all (663 → 661 ms), which eliminates allocation as its cause.
-  Isolating the inner loop's parts on the phone — empty loop 0.26 µs,
-  plus `floor()` 0.16 µs, plus one list index 0.14 µs — accounts for
-  roughly 1.5 µs of the measured 6.4 µs per iteration. **The remaining
-  5 µs is not explained.** Two hypotheses are already dead: scope size
-  (24 locals cost the same as 4) and the allocator (this finding).
+- **byte scan is no longer an outlier.** 311× behind Lua decomposed into
+  the musl allocator (7.1×, F-40) times the for-header trap (6.7×, F-41);
+  what remains is 6.4× — inside the normal band. The residue is
+  structural: Ring's `s[i]` builds a one-character string where Lua's
+  `string.byte` returns a number.
+- **binary search is solved too** ([F-42](FINDINGS.md)): Ring reaches a
+  list element by walking from a cursor at the last accessed position, so a
+  random access costs O(distance) — and binary search's first probe jumps
+  half the list. The algorithm was O(n) per query while reading as
+  O(log n). `RppIndexed` (Ring's own `ringvm_genarray` underneath)
+  restores O(1) access: 657 → 131 ms on the device, same hits, and the
+  gap to Lua falls from 105× to 21× — ordinary interpreter cost, not a
+  mystery. The suite now carries `binsearch-rpp` beside `binsearch`.
 
-The one still open is recorded as a measurement without a cause. Publishing
-a plausible mechanism we have not demonstrated is how a wrong number gets
-quoted back for years.
+Every anomaly this campaign surfaced is now fixed or mechanistically
+explained — which took five findings, four refuted hypotheses, and a
+profiler, in that order. The rule that survives the exercise: publish the
+measurement immediately, and the mechanism only after it is demonstrated.
 
 ---
 

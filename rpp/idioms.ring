@@ -199,8 +199,13 @@ class RppSandbox
 	### surface it declares, and ascii() is already on that list.
 	func IsPlainName cName
 		if not isstring(cName) return FALSE ok
-		if len(cName) = 0 return FALSE ok
-		for i = 1 to len(cName)
+		nRppNameLen = len(cName)
+		if nRppNameLen = 0 return FALSE ok
+		### Hoisted, never in the header: `for i = 1 to len(s)` re-evaluates
+		### len(s) EVERY iteration and each evaluation copies the whole
+		### string to the call (F-41). Harmless on an identifier this short;
+		### hoisted anyway so no reader copies the trap out of this library.
+		for i = 1 to nRppNameLen
 			n = ascii(cName[i])
 			if (n >= 65 and n <= 90) or (n >= 97 and n <= 122) or n = 95
 				loop

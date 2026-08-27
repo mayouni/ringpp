@@ -45,3 +45,13 @@ func SlowScan cBig
         nAcc += len(substr(cBig, i, 4))
     next
     return nAcc
+
+func HeaderTrapPath cText
+    # rpp/len-in-loop-header: the bound is re-evaluated on EVERY iteration
+    # and the string is copied whole into each len() call -- O(n^2) that
+    # reads as O(n). See FINDINGS F-41.
+    nCount = 0
+    for i = 1 to len(cText)
+        nCount++
+    next
+    return nCount

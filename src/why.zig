@@ -162,6 +162,27 @@ pub const catalog = [_]Entry{
         .upstream = "Deliberately not sent. Language design, not a defect.",
     },
     .{
+        .rule = "rpp/len-in-loop-header",
+        .findings = &.{"F-41"},
+        .title = "len() in a loop header runs on every iteration — and copies a string whole each time",
+        .symptom = "A loop over a string whose cost grows with the SQUARE of the string: " ++
+            "20,000 passes over 10 KB take 2 ms, the same 20,000 passes over 1 MB take 701 ms. " ++
+            "On a phone this hid inside a benchmark as a 47x slowdown that looked like slow indexing.",
+        .cause = "Ring re-evaluates the for-bound and the while-condition on every pass, and a " ++
+            "string argument is copied onto the VM stack before len() sees it — the same F-1 " ++
+            "asymmetry, hidden in the loop HEADER where nobody reads code twice. " ++
+            "`while i <= len(s)` is worse still: ~260 us per pass on 1 MB.",
+        .fix = "Hoist it: nLen = len(s) once, then `for i = 1 to nLen`. Same answer, byte-identical, " ++
+            "measured 9.5x on an 80 KB scan (desktop) and 6.7x on the phone. For a LIST the copy " ++
+            "does not happen — lists pass by reference — so there the hoist merely removes one " ++
+            "call per iteration; the advice is never wrong, which is why the rule fires on both.",
+        .evidence = "android/bench/algorithms.ring B5 — the trap and the hoist timed side by side, " ++
+            "asserted equal before any number prints; scaling table in FINDINGS F-41",
+        .hurts = "Nothing. This is the rare rule with no counter-case: hoisting a loop-invariant " ++
+            "bound is free correctness-preserving speed. The rule stays .perf because the LIST " ++
+            "case is only tidiness, not a defect.",
+    },
+    .{
         .rule = "rpp/substr-in-loop",
         .findings = &.{ "F-6", "F-8" },
         .title = "substr() copies the whole string before taking the slice",

@@ -98,6 +98,25 @@ for r = 1 to nReps
 next
 Report("binsearch", nBest, nV)
 
+### A5b. binary search through RppIndexed --------------------------
+# F-42: Ring reaches a list element by walking from a cached cursor, so a
+# random access costs O(distance) -- and binary search's first probe jumps
+# half the list. On a Ring list the algorithm is O(n) per query while
+# reading as O(log n). RppIndexed (ringvm_genarray) restores O(1) access;
+# same searches, same hits, asserted equal.
+oBs = RppIndexed(aS)
+nBest = -1
+for r = 1 to nReps
+    nT = clock() nV2 = BinSearchAll(aS, 6000 * nScale) nMs = Ms(nT)
+    if nBest < 0 or nMs < nBest nBest = nMs ok
+next
+oBs.Release(aS)
+if nV2 != nV
+    raise("indexed binsearch disagrees with plain (" + nV2 + " vs " + nV + ")")
+ok
+? "TIME  binsearch-rpp " + Fmt(nBest)
+TimerFloor("binsearch-rpp", nBest)
+
 ### A6. byte scan ---------------------------------------------------
 cBig = ""
 for i = 1 to 4000 * nScale cBig += "the quick brown fox " next
@@ -234,6 +253,36 @@ ok
 ? "TIME  substrtrap-index " + Fmt(nIdxMs)
 TimerFloor("substrtrap-substr", nSubMs) TimerFloor("substrtrap-index", nIdxMs)
 
+### B5. the for-header trap, priced on THIS machine ---------------
+# `for i = 1 to len(s)` re-evaluates len(s) EVERY iteration, and every
+# evaluation copies the whole string to the call. The loop is O(n^2) in
+# the string size while looking O(n). Same body, same answer, one hoisted
+# variable apart -- which is why it gets a timed pair rather than a
+# comment: the number is the argument.
+cTrap = copy("x", 60000 * nScale)
+
+nBest = -1
+for r = 1 to nReps
+    nT = clock() nA = HeaderLen(cTrap) nMs = Ms(nT)
+    if nBest < 0 or nMs < nBest nBest = nMs ok
+next
+nTrapMs = nBest
+
+nBest = -1
+for r = 1 to nReps
+    nT = clock() nB = HoistedLen(cTrap) nMs = Ms(nT)
+    if nBest < 0 or nMs < nBest nBest = nMs ok
+next
+nHoistMs = nBest
+
+if nA != nB
+    raise("for-header trap: the two paths disagree")
+ok
+? "CHECK forheader " + nA
+? "TIME  forheader-trap " + Fmt(nTrapMs)
+? "TIME  forheader-hoisted " + Fmt(nHoistMs)
+TimerFloor("forheader-hoisted", nHoistMs)
+
 ? ""
 ? "SUITE OK"
 
@@ -277,7 +326,12 @@ func Sum32 aList
 
 func StrSum cStr
     nH = 0
-    for i = 1 to len(cStr)
+    # len() hoisted out of the header (F-41): `for i = 1 to len(s)`
+    # re-evaluates len(s) every iteration, and each evaluation copies the
+    # WHOLE string to the call. On the 200 KB patch string this checksum
+    # was silently moving ~40 GB before the fix.
+    nL = len(cStr)
+    for i = 1 to nL
         nH = (nH * 131 + ascii(cStr[i])) % 1000000007
     next
     return nH
@@ -367,7 +421,13 @@ func BinSearchAll aSorted, nQueries
 
 func ByteScan cStr
     nH = 0
-    for i = 1 to len(cStr)
+    # len() hoisted (F-41). Before this fix the benchmark measured the
+    # for-header trap, not byte access: 80,000 iterations each copying an
+    # 80 KB string is 6.4 GB of memcpy that LOOKED like slow indexing --
+    # and it is also the shape Lua never pays, because Lua's numeric for
+    # evaluates its bound once. The trap now has its own timed pair (B5).
+    nL = len(cStr)
+    for i = 1 to nL
         nH = (nH * 131 + ascii(cStr[i])) % 1000000007
     next
     return nH
@@ -428,5 +488,20 @@ func RawReads aList, nReads
     for i = 1 to nReads
         nIdx = ((i * 7919) % nN) + 1
         nH = (nH + aList[nIdx]) % 1000000007
+    next
+    return nH
+
+func HeaderLen cStr
+    nH = 0
+    for i = 1 to len(cStr)
+        nH += 1
+    next
+    return nH
+
+func HoistedLen cStr
+    nH = 0
+    nL = len(cStr)
+    for i = 1 to nL
+        nH += 1
     next
     return nH

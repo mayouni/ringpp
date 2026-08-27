@@ -86,8 +86,9 @@ if (-not $ringpp) {
 $chk = & $ringpp check "tests\fixtures\lint_bad.ring" 2>&1 | Out-String
 $ok = ($chk -match "rpp/varptr-unknown-name") -and
       ($chk -match "rpp/empty-catch") -and
-      ($chk -match "rpp/substr-in-loop")
-"{0} {1,-16} {2}" -f $(if ($ok) { "PASS" } else { "FAIL" }), "T1 check gate", "3 rules fire on the local fixture"
+      ($chk -match "rpp/substr-in-loop") -and
+      ($chk -match "rpp/len-in-loop-header")
+"{0} {1,-16} {2}" -f $(if ($ok) { "PASS" } else { "FAIL" }), "T1 check gate", "4 rules fire on the local fixture"
 if (-not $ok) { $fail++ }
 
 # OPTIONAL: the same checker over a large real corpus, when one happens to be
