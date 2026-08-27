@@ -3,11 +3,11 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>The loops that lie about their cost — Ring++</title>
+<title>The loops that cost more than they read — Ring++</title>
 <meta name="description" content="A benchmark on a phone looked impossible, and chasing it uncovered two Ring loop patterns that cost far more than they read. Both are measured, both have one-line fixes, and the Ring++ checker now finds them for you.">
 <meta property="og:type" content="article">
-<meta property="og:url" content="https://mayouni.github.io/ringpp/blog-loops-that-lie.html">
-<meta property="og:title" content="The loops that lie about their cost">
+<meta property="og:url" content="https://mayouni.github.io/ringpp/blog-loops-that-cost.html">
+<meta property="og:title" content="The loops that cost more than they read">
 <meta property="og:description" content="Two ordinary-looking Ring loop patterns cost far more than they read — one is quadratic. Measured, explained, fixed in one line each, and now caught by the checker.">
 <meta property="og:image" content="https://mayouni.github.io/ringpp/social-card.png">
 <meta property="og:image:width" content="1280">
@@ -34,8 +34,8 @@
 
 <header class="wrap narrow" style="padding-top:2.6rem">
   <p style="margin:0 0 .5rem"><a href="blog.html" style="color:var(--accent); text-decoration:none">&larr; Blog</a></p>
-  <h1 style="font-size:clamp(1.9rem, 5vw, 2.5rem)">The loops that <em>lie</em>
-  about their cost</h1>
+  <h1 style="font-size:clamp(1.9rem, 5vw, 2.5rem)">The loops that cost
+  <em>more than they read</em></h1>
   <p style="color:var(--muted); font-size:var(--floor); margin:.4rem 0 0">27 August 2026 &middot; Mansour Ayouni</p>
 </header>
 
@@ -64,7 +64,7 @@
   told elsewhere</a>. The second is about Ring code — <em>your</em> code,
   possibly — and that is this post.</p>
 
-  <h2>Lie number one: the loop header that copies your string</h2>
+  <h2>The first one: the loop header that copies your string</h2>
 
   <p class="lead">Here is the loop every programmer has written. Read it
   and estimate its cost:</p>
@@ -133,7 +133,7 @@ next</pre>
   hiding in real code: our first sweep of a large Ring codebase found
   <b>149</b> occurrences.</p>
 
-  <h2>Lie number two: the binary search that was never O(log n)</h2>
+  <h2>The second: the binary search that was never O(log n)</h2>
 
   <p class="lead">Second impossible number, same campaign: binary search
   over a sorted list, <b>105&times; behind Lua</b>. The arithmetic of the
@@ -206,9 +206,9 @@ next</pre>
   binary search, heaps, anything probing — want <code>RppIndexed</code>
   around them, and the list must not change size while it is applied.</p>
 
-  <h2>Lie number three, the small one: for-in</h2>
+  <h2>The third, and the smallest: for-in</h2>
 
-  <p class="lead">This one Mansour had noticed by feel long before we
+  <p class="lead">This one had been a suspicion here long before anyone
   measured it, and the measurement agrees: <code>for x in aList</code>
   costs about <b>2&times;</b> the same loop written with an index — on
   lists and strings, reading and writing alike. Two times nanoseconds is
