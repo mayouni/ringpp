@@ -47,11 +47,37 @@ Push-Location $RingSrc
 $srcs = (Get-ChildItem *.c | Where-Object { $_.Name -ne "ringw.c" }).Name
 $fail = 0
 
+# Two build-time upgrades, neither touching a line of Ring's source:
+#
+#   computed goto   Ring SHIPS this fast dispatch behind RING_VM_COMPUTEDGOTO
+#                   (vm.c:688, build/vmcgoto/) -- Mahmoud's own door, opened
+#                   with a -D. Every target gets it; zig cc is clang, so the
+#                   &&label extension it needs is always there. Measured
+#                   ~5-8% on the device suite; answers byte-identical.
+#
+#   mimalloc        MUSL TARGETS ONLY. musl's allocator serves large blocks
+#                   with a fresh mmap and frees them with munmap, so every
+#                   large-string copy Ring makes became two syscalls plus a
+#                   page-fault storm -- profiled on a real phone at ~60% of
+#                   all cycles with the interpreter itself at 0.44%
+#                   (FINDINGS F-40). Linking mimalloc made string workloads
+#                   3.6-7.7x faster and cut total cycles 5.7x. Windows and
+#                   macOS stubs keep their platform allocator, which does
+#                   not have this behaviour. See vendor/mimalloc/NOTES.md.
+$cgoto  = Join-Path $RingSrc "..\build\vmcgoto\vmcgoto.c"
+$miDir  = Join-Path $PSScriptRoot "..\vendor\mimalloc"
+$miSrc  = Join-Path $miDir "src\static.c"
+$miInc  = Join-Path $miDir "include"
+
 foreach ($t in $targets) {
     $dir = Join-Path $OutDir $t.Plat
     New-Item -ItemType Directory -Force $dir | Out-Null
     $out = Join-Path $dir $t.Out
-    & zig cc -target $t.Triple -O2 -w -I $RingInc $srcs -o $out -lm 2>&1 | Out-Null
+    $extra = @("-DRING_VM_COMPUTEDGOTO=1", $cgoto)
+    if ($t.Triple -like "*-musl" -and (Test-Path $miSrc)) {
+        $extra += @("-DMI_MALLOC_OVERRIDE=1", "-I", $miInc, $miSrc)
+    }
+    & zig cc -target $t.Triple -O2 -w -I $RingInc $srcs @extra -o $out -lm 2>&1 | Out-Null
     if (-not (Test-Path $out)) {
         "FAIL b2 runtimes     $($t.Plat): zig cc did not produce $($t.Out)"
         $fail++; continue

@@ -366,6 +366,25 @@ foreach ($a in $arrays) {
 if ($binBad.Count) { $fail++; $binBad | Select-Object -Unique | ForEach-Object { "       $_" } }
 Pop-Location
 
+# OPTIONAL: the whole library, its gates and the algorithm suite on a real
+# arm64 phone. Same policy as the corpus gate above -- no device attached is
+# a named SKIP, never a failure, because most machines running this suite
+# have no phone plugged into them. When a device IS there it is the strongest
+# check in this file: the same sources, on a different instruction set,
+# required to compute byte-identical answers.
+$andOut = & powershell -File (Join-Path $PSScriptRoot 'android_campaign.ps1') 2>&1 | Out-String
+if ($andOut -match 'SKIP android campaign -- (.+)') {
+    "SKIP {0,-16} {1}" -f "android device", ("optional: " + $Matches[1].Trim())
+} elseif ($andOut -match 'ANDROID CAMPAIGN PASSED') {
+    $nGates = ([regex]::Matches($andOut, 'PASS gate ')).Count
+    $nIdent = if ($andOut -match 'PASS (\d+) computed results byte-identical') { $Matches[1] } else { '?' }
+    "{0} {1,-16} {2}" -f "PASS", "android device", "$nGates gates on arm64; $nIdent results byte-identical with x64"
+} else {
+    "{0} {1,-16} {2}" -f "FAIL", "android device", "campaign failed -- run tests\android_campaign.ps1"
+    $andOut -split "`n" | Where-Object { $_ -match '^\s+FAIL' } | ForEach-Object { "       " + $_.Trim() }
+    $fail++
+}
+
 ""
 if ($fail -eq 0) { "ALL GATES PASSED" } else { "$fail GATE(S) FAILED" }
 exit $fail

@@ -50,3 +50,8 @@ WHATS-NEXT.md
 # and so is the behaviour that produced the file.
 android/out/
 android/app.ringo
+
+# The original phone photograph. The site ships the 94 KB jpg derivative;
+# this 1.7 MB source stays local so the Pages branch does not carry weight
+# no page references.
+site/ringpp-on-android.png

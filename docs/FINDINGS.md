@@ -1236,6 +1236,190 @@ combination the fuzz reached by luck after ~13,000 operations. Luck is
 not a regression test, so the shape is now a named case that runs before
 any random one.
 
+### F-40. The 22–29× mobile string tax was musl's allocator, not ARM — profiled to `mmap`/`munmap` under `malloc`, fixed by linking mimalloc, string workloads 3.6–7.7× faster with zero Ring changes
+
+Measured 2026-08-27 on the same Infinix X6817. This finding overturns the
+*explanation* in F-38 while keeping its measurements: the numbers were
+right, the word "phone" in them was wrong.
+
+**The suspicion.** F-38/F-39 left ~5 µs per binary-search iteration and a
+311× byte-scan gap to Lua unexplained. Two candidate causes were tested
+first and killed:
+
+- **Dispatch.** Ring ships a computed-goto interpreter loop behind
+  `RING_VM_COMPUTEDGOTO` (`vm.c:688`, `build/vmcgoto/`) that our stubs were
+  not enabling. Enabled — Mahmoud's own door, opened with a `-D` and one
+  extra translation unit, no source touched — it is worth a real but small
+  **5–8%**. Dispatch is not where interpreters' reputations die.
+- **Scope size.** Already refuted in F-39: 24 locals cost the same as 4.
+
+**The profile.** `simpleperf` ships on the device (`/system/bin/simpleperf`,
+API 31). Recording the byte-scan workload under the shipped stub:
+
+```
+  20.97%  [kernel]            60%+ of ALL cycles in kernel symbols
+  20.45%  memcpy
+   0.44%  ring_vm_execute     <-- the interpreter, nearly idle
+   0.25%  __libc_malloc_impl
+   0.21%  __mmap
+   0.16%  __munmap
+```
+
+An interpreter running a string loop was spending less than half a percent
+of the machine interpreting. `__mmap` and `__munmap` directly under musl's
+`__libc_malloc_impl` is the mechanism: **musl's allocator (mallocng) serves
+large allocations with a fresh `mmap` and returns them with `munmap`** —
+chosen upstream for hardening, not speed, and it has no
+`MALLOC_MMAP_THRESHOLD_` style knob to move. Every large-string copy Ring
+makes (F-1: strings copy at every call boundary) therefore became two
+syscalls plus a page-fault storm as `memcpy` walked freshly mapped, cold,
+zero-on-demand pages. The desktop never pays this — MSVC's CRT recycles
+those blocks in user space — which is why the same workloads sat at 4–8×
+there and 22–29× on the phone. The tax was never ARM's.
+
+**The fix.** Link mimalloc (v2.1.7, vendored with provenance in
+`vendor/mimalloc/`, MIT) into the two musl stubs via `-DMI_MALLOC_OVERRIDE`
+and its single-file `src/static.c`. Not one line of Ring source changes;
+the user still receives one static binary. Cost: the stub grows 3.0 → 3.9 MB.
+
+**Same device, same file, before → after:**
+
+```
+  byte scan            3 653 ms  ->    515 ms    7.1x
+  substr(s,i,1) loop   2 945 ms  ->    383 ms    7.7x
+  slice reads, raw     2 506 ms  ->    520 ms    4.8x
+  patch buffer, raw    2 246 ms  ->    626 ms    3.6x
+  sieve/matmul/fib     ~unchanged            (allocator was never their cost)
+```
+
+Total cycles for the profiled workload fell **5.7×** (322 → 56 G), kernel
+time vanished from the profile, and what remains is 87% `memcpy` — the
+actual copies, i.e. exactly the cost `RING_VM_STACK_PUSHCVAR` predicts and
+exactly what the Ring++ library exists to avoid. Every CHECK value stayed
+byte-identical through all of it, on both architectures, which is what made
+the swap safe to ship the same day.
+
+**The phone table is now uniform** — 2.0–7.4× across all fourteen rows, no
+string outlier (the full table lives in `docs/ANDROID.md` §4). Against Lua
+on the device, byte scan went from 311× behind to ~43× behind; the residue
+is Ring's copy semantics and per-op interpreter work, not the platform.
+Windows was checked for the same disease and does not have it: the win64
+stub tracks the official MSVC build within 10–60% on compute and shows no
+allocator pathology.
+
+**The general lesson.** When an interpreter benchmark looks impossible,
+profile before theorising — the interpreter was 0.44% of the problem. And a
+"portability" choice (static musl) silently carries an allocator policy
+with it; the carrier of the platform win (F-36) was also the carrier of the
+platform tax.
+
+### F-38. A phone is 4–8× slower than the desktop on compute and 22–29× slower on string copying — so Ring++'s wins roughly quadruple on mobile
+
+> **Superseded in part by F-40 (2026-08-27):** the 22–29× string rows were
+> musl's allocator, not the phone. With mimalloc in the stub the string tax
+> falls to 4.0–6.3× — in line with compute — and the "wins quadruple on
+> mobile" claim shrinks back to roughly desktop ratios. The measurements
+> below were correct; the attribution to mobile hardware was not.
+
+Measured 2026-08-26. Infinix X6817, `arm64-v8a`, Android 12 (API 31), against
+this machine's x64 Windows build. Same source file both sides, minimum of
+three runs. Reproduce with `tests\android_campaign.ps1`.
+
+```
+                            x64        arm64     phone is
+  sieve of primes            84 ms      651 ms     7.8x slower
+  matrix multiply            64 ms      460 ms     7.2x
+  recursive fib              22 ms      176 ms     8.0x
+  mergesort                 111 ms      562 ms     5.1x
+  binary search             174 ms      655 ms     3.8x
+  ------------------------------------------------------------
+  byte scan over a string   128 ms    3 519 ms    27.5x slower
+  patch a buffer, raw Ring  103 ms    2 256 ms    21.9x
+  read slices, raw Ring     109 ms    2 902 ms    26.6x
+  substr(s,i,1) in a loop    94 ms    2 705 ms    28.8x
+```
+
+**The two groups are not the same workload wearing different names.** The
+first five are arithmetic, control flow and list indexing. The last four all
+copy strings. The phone's CPU is a handful of times behind the desktop's; its
+memory subsystem is four times further behind than that.
+
+This project exists because of one fact — a Ring string is copied every time
+it crosses a call boundary (`RING_VM_STACK_PUSHCVAR`) — and that turns out to
+be exactly the axis a phone is worst on. The library's measured wins grow
+accordingly:
+
+```
+                                     desktop     phone
+  buffer patching -> RppBuffer         12.9x       49x
+  slice reads     -> Peek              15.6x       66x
+  substr(s,i,1)   -> s[i]              15.7x       61x
+```
+
+**And one goes the other way, which is why the rest are believable.**
+`RppIndexed` is *worse* on the phone: 8.8× on the desktop, **2.8×** on ARM.
+Raw list indexing is only 2.0× slower there — it is cache-friendly and copies
+nothing — while the idiom's own overhead still pays the phone's general ~6×
+tax. The technique that avoids **copying** wins bigger on mobile; the
+technique that avoids **pointer chasing** wins smaller. A rule derived from
+desktop numbers alone would have got this one backwards.
+
+### F-39. Ring, Lua and Android's ART agree on every answer — and Ring is 9–16× behind Lua, with two outliers nobody has explained
+
+> **Partially resolved by F-40 (2026-08-27):** the byte-scan outlier was
+> mostly musl's allocator — 311× behind Lua collapsed to ~43× with mimalloc
+> in the stub. The binary-search outlier survives the allocator fix almost
+> untouched (~654 ms) and remains measured-but-unexplained.
+
+Measured 2026-08-26 on the same phone, in the same session, six identical
+algorithms, minimum of three runs.
+
+```
+                    Ring 1.27      Lua 5.4    ART (dalvikvm)
+  sieve              636.92 ms     71.08 ms      2.48 ms
+  matmul             463.93        28.37         1.86
+  fib                182.68        13.38         1.39
+  mergesort          572.19        49.54         5.19
+  binary search      662.96         6.22         0.60
+  byte scan        3 740.14        12.03         0.76
+```
+
+**All three produce identical results for all six**, and that is asserted by
+the campaign rather than assumed — a neighbour that computes something else
+makes its timings meaningless.
+
+**The two columns answer different questions.** ART is an optimising compiler
+with a JIT; beating a plain interpreter by 110–250× on compute is the
+expected outcome, not a discovery. It is in the table because it is what the
+device already runs, so it marks the ceiling of that hardware. **Lua is the
+fair peer** — small, dynamically typed, register-based bytecode, no JIT,
+1-indexed, embedded rather than hosted, same size class. Against Lua, Ring is
+**9–16× behind on ordinary compute**. That is the honest number for "how does
+Ring compare to other small languages", and it is a gap in interpreter
+engineering rather than in language design.
+
+**Two entries are far outside that band, and this file does not claim to know
+why.**
+
+- **byte scan: 311× behind Lua.** Ring's `s[i]` costs disproportionately more
+  than Lua's `string.byte`, and the gap widens on ARM specifically (F-38).
+- **binary search: 107× behind Lua.** The inner loop's parts were isolated on
+  the device — an empty loop is 0.26 µs per iteration, `floor()` adds
+  ~0.16 µs, one list index adds ~0.14 µs — which accounts for roughly 1.5 µs
+  of a measured **6.41 µs** per iteration (77,347 iterations, 495.81 ms).
+  **The remaining ~5 µs is unaccounted for.**
+
+One hypothesis was formed and **refuted**: that Ring resolves variables by
+name and pays for the number of them in scope. A function with 24 locals ran
+the identical loop no slower than one with 4 (ratio 0.72, i.e. slightly
+faster — noise). So it is not scope-lookup cost, and the guess is recorded
+here as dead rather than left lying around to be rediscovered.
+
+These stay as measurements without a mechanism. Publishing a plausible cause
+that has not been demonstrated is how a wrong number gets quoted back for
+years — and this file has already had to correct two conclusions (F-35, F-36)
+that were reached exactly that way.
+
 ### F-37. `ring file.ring -go` compiles the program **and then runs it** — `ringpp build` was executing everything it packaged
 
 Measured 2026-08-26 on Ring 1.27.

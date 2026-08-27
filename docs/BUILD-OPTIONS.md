@@ -178,6 +178,9 @@ no JNI and no C compiler** — the VM inside the APK is byte-identical to the
 Android insists on. When the SDK or JDK is absent the command says so and
 refuses; it never produces a half-package.
 
+A tutorial, the full option reference, and what three runtimes measured on
+one phone are in **[ANDROID.md](ANDROID.md)**.
+
 **The debt this section used to carry is paid.** The earlier version of this
 document owed two things before the claim could be made publicly: arm64 on
 physical hardware rather than emulator translation, and an actual `.apk`.

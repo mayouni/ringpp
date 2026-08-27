@@ -94,6 +94,8 @@ deployment is a repository setting only the owner can flip.
 | **[site/reference.html](site/reference.html)** | The library, one page — every `RppBuffer`, `RppView`, `RppIndexed` and `RppSandbox` method, with a real example for each. |
 | **[docs/CLI.md](docs/CLI.md)** | `ringpp` — every command, real captured output, no compiler needed for any of it. |
 | **[docs/CASE-TYPE-SAFETY.md](docs/CASE-TYPE-SAFETY.md)** | **What the checker actually found** — two dead functions in Ring's own standard library, two live bugs in Softanza, and the three false positives it produced along the way. |
+| **[docs/ANDROID.md](docs/ANDROID.md)** | Ring on a phone: a tutorial, the `--target android` reference, why no NDK is needed, and what three runtimes measured on the same device. |
+| **[docs/BUILD-OPTIONS.md](docs/BUILD-OPTIONS.md)** | The three Ring packaging tools compared from each one's own source, and which sibling project owns which target so nobody duplicates work. |
 | **[docs/VM-CONTRACT.md](docs/VM-CONTRACT.md)** | The abstract interface: exactly what Ring++ needs from the VM, as observable behaviours, probe-checked on every load — and a proposed contract both parties could agree on. |
 | **[docs/FINDINGS.md](docs/FINDINGS.md)** | What the Ring VM actually does, measured. Read this first — two of its numbers killed the design I set out to write. |
 | **[docs/DESIGN.md](docs/DESIGN.md)** | The library half: what Ring++ is, the layer map, the surface, safety, upgrades, `myctiger`, Softanza, and the risks. |
@@ -165,6 +167,35 @@ crashed with **no diagnostic at all**, because that DLL itself links
 roughly 75 further Qt libraries no `.ring` source ever names — on top of
 Qt's own dual licence being a real business risk for anything shipped to
 customers, decided against before Ring++ existed.
+
+### And it reaches a phone
+
+```
+ringpp build app.ring --target android
+```
+
+One command, one signed `.apk`. **No NDK, no Qt, no Qt Creator, no Gradle,
+no JNI, no C compiler** — the VM inside the APK is byte-identical to the
+`linux-arm64` stub every other build ships, because Ring's VM has no JIT and
+so never asks Android for the executable memory its seccomp filter refuses
+([F-36](docs/FINDINGS.md)). The property that costs Ring speed is the one
+that bought it the platform. Android is the single target that needs a
+toolchain at all — an Android SDK and a JDK, since only Google's `aapt2`
+writes a binary manifest — and the command says so and refuses rather than
+half-packaging.
+
+Verified on hardware, an Infinix X6817 (arm64, Android 12): all six of the
+library's own gates pass on ARM, and ten computed results are byte-identical
+with the x64 build. Benchmarking on the device then caught a bug in our own
+runtime: string workloads ran 22–29× slower than desktop while compute ran
+4–8×, and a profile put the interpreter at 0.44% of cycles — musl's
+allocator was round-tripping every large-string copy through `mmap`/`munmap`.
+The musl stubs now link mimalloc and enable Ring's own shipped computed-goto
+dispatch, with not one line of Ring source changed: string workloads got
+**3.6–7.7× faster** on the phone, and the device now tracks the desktop at a
+uniform 2–7× everywhere ([F-40](docs/FINDINGS.md)).
+[docs/ANDROID.md](docs/ANDROID.md) has the full tables, including where the
+library wins less on mobile and the one gap still unexplained.
 
 ## Research annex: the measured native headroom
 
