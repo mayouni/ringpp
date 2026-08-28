@@ -93,6 +93,13 @@ pub const FileInfo = struct {
     /// function is only reportable when no file's main scope could have
     /// supplied the name.
     globalnames: [][]const u8 = &.{},
+    /// Class names ONLY, lower-cased, anywhere in the file (packages
+    /// included). `new X` and `from X` accept nothing else -- verified on
+    /// 1.27: a FUNCTION named X raises R11, a VARIABLE holding "X" raises
+    /// R11 on the variable's own name -- so this narrower set is the
+    /// semantically correct suppression for rpp/unknown-class, where the
+    /// generous defnames would silence real errors.
+    classnames: [][]const u8 = &.{},
 };
 
 /// Case-insensitive substring probe for the three calls that can create
@@ -147,6 +154,9 @@ pub fn scanFile(
     var gn = std.ArrayList([]const u8){};
     try collectGlobalNames(arena, tree.root(), &gn);
     info.globalnames = try gn.toOwnedSlice(arena);
+    var cn = std.ArrayList([]const u8){};
+    try collectClassNames(arena, tree.root(), &cn);
+    info.classnames = try cn.toOwnedSlice(arena);
 
     const dir = dirOf(path);
     var loads = std.ArrayList([]const u8){};
@@ -204,6 +214,21 @@ fn collectGlobalNames(arena: std.mem.Allocator, n: ts.Node, out: *std.ArrayList(
     }
     var i: u32 = 0;
     while (i < n.childCount()) : (i += 1) try collectGlobalNames(arena, n.child(i), out);
+}
+
+/// class_definition names only, at any depth (packages nest them).
+fn collectClassNames(arena: std.mem.Allocator, n: ts.Node, out: *std.ArrayList([]const u8)) !void {
+    if (std.mem.eql(u8, n.kind(), "class_definition")) {
+        const nm = n.field("name");
+        if (!nm.isNull()) {
+            const t = nm.text();
+            const buf = try arena.alloc(u8, t.len);
+            for (t, 0..) |ch3, ix3| buf[ix3] = std.ascii.toLower(ch3);
+            try out.append(arena, buf);
+        }
+    }
+    var i: u32 = 0;
+    while (i < n.childCount()) : (i += 1) try collectClassNames(arena, n.child(i), out);
 }
 
 fn collectLoads(

@@ -162,6 +162,31 @@ pub const catalog = [_]Entry{
         .upstream = "Deliberately not sent. Language design, not a defect.",
     },
     .{
+        .rule = "rpp/unknown-class",
+        .codes = &.{ "R11", "R15" },
+        .findings = &.{ "F-48", "F-18" },
+        .title = "new over a name that is no class, and from over a parent that does not exist",
+        .symptom = "Error (R11) at the `new`; or the quieter one — Error (R15) from a class " ++
+            "whose file loaded and ran fine for months, the first time anything instantiates it.",
+        .cause = "`new X` accepts exactly one thing: a class named X. A FUNCTION of that name " ++
+            "still raises R11, and a variable holding a class name is looked up as its OWN " ++
+            "name and raises R11 too — both verified on 1.27. And `class A from Missing` " ++
+            "LOADS AND RUNS: R15 fires only at the first `new A`, which may sit in the one " ++
+            "branch tests never take.",
+        .fix = "Fix the spelling against the class that exists — with case-insensitive " ++
+            "identifiers (F-18) the difference is usually one letter. Package-qualified names " ++
+            "(`new P.X`) are never checked; package resolution is runtime business.",
+        .evidence = "First sweep found 17 false positives in ring127/applications — Qt classes " ++
+            "used in FRAGMENT files that never load guilib themselves (the main app does, and " ++
+            "load edges point the wrong way). That moved the loadlib/eval/unresolved gates " ++
+            "from per-closure to SET-GLOBAL for every absence-based rule; after it: zero " ++
+            "findings across eleven corpora, seeded typos still caught.",
+        .hurts = "The set-global gates are the price of certainty: one loadlib, one eval or " ++
+            "one unresolved load anywhere in the checked tree silences this rule (and R3 and " ++
+            "R24) everywhere in it. A clean self-contained project keeps full coverage; a GUI " ++
+            "project gets silence rather than seventeen wrong accusations.",
+    },
+    .{
         .rule = "rpp/uninitialized-variable",
         .codes = &.{"R24"},
         .findings = &.{ "F-47", "F-18" },

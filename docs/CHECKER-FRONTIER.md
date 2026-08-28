@@ -127,6 +127,7 @@ Triage of all 55, grouped by answer:
 | R10 / R23 exit/loop depth (literals) | `exit-bad-depth` (F-45) |
 | R3 call without definition | `undefined-function` (F-46) |
 | R24 uninitialised variable | `uninitialized-variable` (F-47) |
+| R11 / R15 unknown class / parent | `unknown-class` (F-48) |
 
 ### Ring already catches at compile time — no rule needed (verified, not assumed)
 
@@ -138,7 +139,7 @@ any that Ring's compiler already rejects is dropped.
 
 | error | shape | tier | machinery |
 |---|---|---|---|
-| R11 / R15 unknown class / parent | `new X` / `from X` with no `class X` in graph | `warn` | class table — same walker that does C22 |
+| R25 unknown package | `import X` with no `package X` in the set | `err` | classnames machinery, one more collector — verified R25 at runtime already |
 | R7 letter = multi-char literal | `s[i] = "xy"` where `s` is stringish | `warn` | `stringish` ✅; needs list-exclusion to reach zero-FP |
 | R26 / R27 private access | `o.method()` against a class layout where it is private | `note` | class layout parse |
 | R52 return inside call args | syntactic | `err` | trivial |
@@ -155,10 +156,13 @@ narrow coverage — is now the template every "statically guaranteed" row
 above inherits, and **R24 was the first to inherit it (2026-08-28)**: same
 universe gates, plus two of its own — methods excluded by ROW (the grammar
 leaves post-class functions at root level; Ring makes them methods, F-21),
-and `new X { ... }` bodies excluded as object scope. Its pre-ship sweep
-caught two false-positive classes, one in this project's own library and
-one in Ring's shipped samples; both died before the rule shipped, which is
-the order these things must happen in. R11/R15 next.
+and `new X { ... }` bodies excluded as object scope. **R11/R15 followed
+the same day** (`unknown-class`, F-48) and paid the template forward: its
+17 fragment-file false positives in ring127/applications moved the
+loadlib/eval/unresolved gates from per-closure to SET-GLOBAL for every
+absence-based rule. Four rules, four pre-ship saves. R25 (unknown
+package) is the next trivial member of the family; R7/R52/R28/R29 remain
+queued above.
 
 ### Fundamentally dynamic — the honest wall (most of the catalog)
 

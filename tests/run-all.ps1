@@ -117,6 +117,14 @@ $r24ok = ($r24 -match "rpp/uninitialized-variable") -and
 "{0} {1,-16} {2}" -f $(if ($r24ok) { "PASS" } else { "FAIL" }), "T1 R24 gate", "the typo fires, the six look-alikes stay silent"
 if (-not $r24ok) { $fail++ }
 
+# R11/R15 at check time: the class typo and the function-as-class fire, the
+# missing-parent fires as the QUIET R15, and the two legal shapes stay
+# silent (exactly 3 errors, no more).
+$r11 = & $ringpp check "tests\fixtures\unknown_class.ring" 2>&1 | Out-String
+$r11ok = ($r11 -match "R11") -and ($r11 -match "R15") -and ($r11 -match "3 error")
+"{0} {1,-16} {2}" -f $(if ($r11ok) { "PASS" } else { "FAIL" }), "T1 R11 gate", "new-typo, new-over-func and from-typo fire; look-alikes silent"
+if (-not $r11ok) { $fail++ }
+
 # The advice layer, both directions. Advice must be INVISIBLE by default --
 # an "adv" line in plain `check` output means opportunities are being
 # presented as defects -- and must appear, both rules, under --advise.

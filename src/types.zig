@@ -72,6 +72,11 @@ pub const Ctx = struct {
     /// Null under the same universe rules as all_defined.
     all_globals: ?*const std.StringHashMap(void) = null,
 
+    /// Class names only, whole set -- the suppression for
+    /// rpp/unknown-class. See FileInfo.classnames for why defnames is the
+    /// wrong set there. Null under the same universe rules.
+    all_classes: ?*const std.StringHashMap(void) = null,
+
     /// Cross-file signatures visible from THIS file through its load graph
     /// (src/project.zig). A name here has exactly one definition across the
     /// closure — Ring's C22 guarantees no second live one (FINDINGS F-26) —
@@ -458,8 +463,17 @@ const Walker = struct {
             return;
         }
         // `new Thing(args) { body }` — same rule: the class name and the
+        // FINDINGS F-48 -- `class A from B` with no class B anywhere LOADS
+        // AND RUNS fine; R15 fires only when A is first instantiated. So
+        // the `from` site is a latent bomb exactly like R9/R3/R24, and it
+        // is checked here, on the class node itself.
+        if (std.mem.eql(u8, kind, "class_definition")) {
+            try self.checkParentClass(n);
+        }
+
         // constructor arguments are caller-scope, the body is object-scope.
         if (std.mem.eql(u8, kind, "new_expression")) {
+            try self.checkNewClass(n);
             var i: u32 = 0;
             while (i < n.namedChildCount()) : (i += 1) {
                 const c = n.namedChild(i);
@@ -907,6 +921,56 @@ const Walker = struct {
         if (reported.contains(lk)) return;
         try reported.put(lk, {});
         try self.report.add(self.gpa, self.file, n, .warn, "rpp/uninitialized-variable", "{s} is read here, and nothing anywhere assigns it -- Error (R24) the moment this line runs", .{n.text()}, "A Ring local is born by assignment, and this function never assigns this name; no file main scope assigns it as a global either, no parameter carries it, and it is not one of the fifteen variables ring.exe predefines. Verified on 1.27: the read raises R24, and it ships silently in any branch tests skip. With case-insensitive identifiers (F-18) the usual cause is one typo. See FINDINGS F-47.");
+    }
+
+    /// FINDINGS F-48. `new X`: only a CLASS named X will do -- a function
+    /// of that name raises R11, and a variable holding a class name is
+    /// looked up as its OWN name and raises R11 too (both verified). A
+    /// package-qualified head (`new P.X`, more than one identifier) is
+    /// skipped: package resolution is runtime business.
+    fn checkNewClass(self: *Walker, n: ts.Node) !void {
+        if (!self.ctx.assert_undefined) return;
+        const classes = self.ctx.all_classes orelse return;
+        var head: ?ts.Node = null;
+        var i: u32 = 0;
+        while (i < n.namedChildCount()) : (i += 1) {
+            const c = n.namedChild(i);
+            if (std.mem.eql(u8, c.kind(), "qualified_identifier")) {
+                head = c;
+                break;
+            }
+        }
+        const q = head orelse return;
+        if (q.namedChildCount() != 1) return; // package-qualified: skip
+        const id = q.namedChild(0);
+        if (!std.mem.eql(u8, id.kind(), "identifier")) return;
+        const lk = lower(self.arena, id.text()) catch return;
+        if (classes.contains(lk)) return;
+        if (insideBrace(n)) return; // object scope can shadow anything
+        try self.report.add(self.gpa, self.file, id, .err, "rpp/unknown-class", "new {s} -- no class of that name exists anywhere this program can load: Error (R11) the moment this line runs", .{id.text()}, "new accepts exactly one thing: a class. A FUNCTION of this name would still raise R11, and a VARIABLE holding a class name is looked up as its own name -- both verified on Ring 1.27. Every load resolved and nothing here calls eval or loadlib, so a class this name could reach does not exist. With case-insensitive identifiers (F-18) the usual cause is one typo. See FINDINGS F-48.");
+    }
+
+    /// FINDINGS F-48. `class A from B` with B undefined loads and runs --
+    /// R15 only fires when A is first instantiated, which makes the
+    /// `from` clause a latent error no test that skips A ever sees.
+    fn checkParentClass(self: *Walker, n: ts.Node) !void {
+        if (!self.ctx.assert_undefined) return;
+        const classes = self.ctx.all_classes orelse return;
+        var i: u32 = 0;
+        while (i < n.namedChildCount()) : (i += 1) {
+            const c = n.namedChild(i);
+            if (!std.mem.eql(u8, c.kind(), "class_parent")) continue;
+            if (c.namedChildCount() != 1) return;
+            const q = c.namedChild(0);
+            if (!std.mem.eql(u8, q.kind(), "qualified_identifier")) return;
+            if (q.namedChildCount() != 1) return; // package-qualified: skip
+            const id = q.namedChild(0);
+            if (!std.mem.eql(u8, id.kind(), "identifier")) return;
+            const lk = lower(self.arena, id.text()) catch return;
+            if (classes.contains(lk)) return;
+            try self.report.add(self.gpa, self.file, id, .err, "rpp/unknown-class", "from {s} -- no class of that name exists anywhere this program can load: Error (R15) when this class is first instantiated", .{id.text()}, "A missing PARENT is quieter than a missing class: the file loads and runs normally (verified on 1.27), and R15 fires only at the first new of this class -- which may sit in the one branch tests never take. Every load resolved and nothing here calls eval or loadlib, so a class this name could reach does not exist. See FINDINGS F-48.");
+            return;
+        }
     }
 
     fn checkNearMiss(self: *Walker, at: ts.Node, t: []const u8) !void {

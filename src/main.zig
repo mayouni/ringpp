@@ -306,17 +306,29 @@ fn runCheck(gpa: std.mem.Allocator, w: anytype, path: []const u8, advise: bool) 
     defer all_defined.deinit();
     var universe_complete = true;
     for (infos.items) |info| {
-        if (!info.parsed_ok) {
+        // ALL of these are SET-GLOBAL on purpose, not per-closure. The
+        // per-closure version shipped first and produced 17 false R11s in
+        // ring127/applications: webapi.ring never loads guilib.ring -- the
+        // MAIN app does, and load edges point the wrong way for a
+        // fragment's closure to see its own runtime universe. A fragment
+        // file's world is defined by whoever loads it, which is exactly
+        // what a static pass cannot know -- so one unresolved load, one
+        // loadlib, one eval or one unparsed file ANYWHERE silences the
+        // absence-based rules (R3, R24, R11/R15) for the whole set.
+        if (!info.parsed_ok or info.has_dynamic or info.has_unresolved_load) {
             universe_complete = false;
             break;
         }
     }
     var all_globals = std.StringHashMap(void).init(gpa);
     defer all_globals.deinit();
+    var all_classes = std.StringHashMap(void).init(gpa);
+    defer all_classes.deinit();
     if (universe_complete) {
         for (infos.items) |info| {
             for (info.defnames) |dn| try all_defined.put(dn, {});
             for (info.globalnames) |gn| try all_globals.put(gn, {});
+            for (info.classnames) |cn| try all_classes.put(cn, {});
         }
     }
 
@@ -338,6 +350,7 @@ fn runCheck(gpa: std.mem.Allocator, w: anytype, path: []const u8, advise: bool) 
             .assert_undefined = view.assert_undefined,
             .all_defined = if (universe_complete) &all_defined else null,
             .all_globals = if (universe_complete) &all_globals else null,
+            .all_classes = if (universe_complete) &all_classes else null,
         });
     }
     const ms = @as(f64, @floatFromInt(timer.read())) / 1_000_000.0;

@@ -1236,6 +1236,46 @@ combination the fuzz reached by luck after ~13,000 operations. Luck is
 not a regression test, so the shape is now a named case that runs before
 any random one.
 
+### F-48. `new` accepts only classes, and a missing parent is the quiet failure — R11/R15 semantics, and the fragment-file lesson that made every absence gate set-global
+
+Measured 2026-08-28 on Ring 1.27:
+
+```
+  new Ghost  in an untaken branch      ships silently; R11 when reached
+  new X  where X is a FUNCTION         R11 — functions do not satisfy new
+  cN = "Real"  then  new cN            R11 on "cn" — the variable's OWN
+                                       name is looked up, not its value
+  class A from Missing, never used     LOADS AND RUNS, no error at all
+  new A  (first instantiation)         R15 — the parent is only resolved now
+  new P.X  (package-qualified)         resolves; never checked statically
+  import NoSuchPackage                 R25 at runtime — same family, queued
+```
+
+The fourth line is the finding worth underlining: **a class with a missing
+parent is a bomb that does not even tick.** The file loads, the program
+runs, every test that never instantiates that class passes — and the first
+`new` raises R15, possibly months later. `rpp/unknown-class` flags both
+shapes at check time, suppressed by a **class-names-only** set: the
+generous all-definitions set would silence `new X` over a function, which
+is a real R11 the narrower set catches.
+
+**The false-positive class this rule found, and what it changed for every
+rule.** First sweep: 17 hits in `ring127/applications`, all Qt classes
+(`QUrl`, `QByteArray`…) used in **fragment files** — `webapi.ring` never
+loads `guilib.ring`; the MAIN app does, and load edges point the wrong way
+for a per-closure gate to see the fragment's runtime universe. A fragment
+file's world is defined by *whoever loads it*, which is exactly what a
+static pass cannot know. So the loadlib/eval/unresolved-load gates moved
+from per-closure to **set-global**, joining the parse gate that was
+already there: one dynamic anything in the checked tree silences every
+absence-based rule (R3, R24, R11/R15) for the whole tree. After the move:
+zero findings across eleven corpora, seeded typos still caught.
+
+That is now the fourth pre-ship save in four rules — R3 (4,429), the
+len-header start position (40%), R24 (own library + Ring's samples), and
+this — and the pattern is the point: **sweep real corpora, read every hit,
+fix the mechanism, only then ship.**
+
 ### F-47. Ring locals are born by assignment and die by typo — R24's semantics, verified, and the two false-positive classes the rule ate before shipping
 
 Measured 2026-08-28 on Ring 1.27:
