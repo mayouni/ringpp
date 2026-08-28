@@ -1271,6 +1271,13 @@ already there: one dynamic anything in the checked tree silences every
 absence-based rule (R3, R24, R11/R15) for the whole tree. After the move:
 zero findings across eleven corpora, seeded typos still caught.
 
+**R25 joined the family the same day** (`rpp/unknown-package`): `import`
+of a missing package ships silently in dead code, raises inside functions
+when they run, and matches the FULL dotted name — `import Sys.Web` needs a
+package declared exactly `Sys.Web`. First sweep: zero findings across
+eight corpora, no new false-positive class — the set-global gates this
+family already paid for protect it from birth.
+
 That is now the fourth pre-ship save in four rules — R3 (4,429), the
 len-header start position (40%), R24 (own library + Ring's samples), and
 this — and the pattern is the point: **sweep real corpora, read every hit,

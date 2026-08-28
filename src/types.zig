@@ -40,6 +40,7 @@ const std = @import("std");
 const builtins = @import("builtins.zig");
 const ts = @import("ts.zig");
 const chk = @import("check.zig");
+const project = @import("project.zig");
 
 /// What the whole run knows, as opposed to this one file. A project may load
 /// typehints.ring once in an entry file and `load` the rest from there, so
@@ -76,6 +77,10 @@ pub const Ctx = struct {
     /// rpp/unknown-class. See FileInfo.classnames for why defnames is the
     /// wrong set there. Null under the same universe rules.
     all_classes: ?*const std.StringHashMap(void) = null,
+
+    /// Package names (dotted, lower-cased), whole set -- suppression for
+    /// rpp/unknown-package. Null under the same universe rules.
+    all_packages: ?*const std.StringHashMap(void) = null,
 
     /// Cross-file signatures visible from THIS file through its load graph
     /// (src/project.zig). A name here has exactly one definition across the
@@ -469,6 +474,14 @@ const Walker = struct {
         // is checked here, on the class node itself.
         if (std.mem.eql(u8, kind, "class_definition")) {
             try self.checkParentClass(n);
+        }
+
+        // FINDINGS F-48 -- `import X` with no `package X` anywhere ships
+        // silently in dead code and raises R25 when the line runs, inside
+        // functions included (verified). The import matches the FULL
+        // dotted name, so that is what is looked up.
+        if (std.mem.eql(u8, kind, "import_statement")) {
+            try self.checkImport(n);
         }
 
         // constructor arguments are caller-scope, the body is object-scope.
@@ -969,6 +982,23 @@ const Walker = struct {
             const lk = lower(self.arena, id.text()) catch return;
             if (classes.contains(lk)) return;
             try self.report.add(self.gpa, self.file, id, .err, "rpp/unknown-class", "from {s} -- no class of that name exists anywhere this program can load: Error (R15) when this class is first instantiated", .{id.text()}, "A missing PARENT is quieter than a missing class: the file loads and runs normally (verified on 1.27), and R15 fires only at the first new of this class -- which may sit in the one branch tests never take. Every load resolved and nothing here calls eval or loadlib, so a class this name could reach does not exist. See FINDINGS F-48.");
+            return;
+        }
+    }
+
+    /// FINDINGS F-48. R25 at check time: the imported dotted name must be
+    /// a package defined somewhere in the checked set, under the same
+    /// set-global universe gates as every absence rule.
+    fn checkImport(self: *Walker, n: ts.Node) !void {
+        if (!self.ctx.assert_undefined) return;
+        const packages = self.ctx.all_packages orelse return;
+        var i: u32 = 0;
+        while (i < n.namedChildCount()) : (i += 1) {
+            const q = n.namedChild(i);
+            if (!std.mem.eql(u8, q.kind(), "qualified_identifier")) continue;
+            const name = project.dottedLower(self.arena, q) catch return orelse return;
+            if (packages.contains(name)) return;
+            try self.report.add(self.gpa, self.file, q, .err, "rpp/unknown-package", "import {s} -- no package of that name exists anywhere this program can load: Error (R25) the moment this line runs", .{q.text()}, "Ring resolves the package name at RUNTIME, so a bad import ships silently in any branch tests skip -- verified on 1.27, inside functions too. The import matches the FULL dotted name. Every load resolved and nothing here calls eval or loadlib, so a package this name could reach does not exist. With case-insensitive identifiers (F-18) the usual cause is one typo. See FINDINGS F-48.");
             return;
         }
     }

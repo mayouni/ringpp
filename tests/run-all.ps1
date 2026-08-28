@@ -125,6 +125,13 @@ $r11ok = ($r11 -match "R11") -and ($r11 -match "R15") -and ($r11 -match "3 error
 "{0} {1,-16} {2}" -f $(if ($r11ok) { "PASS" } else { "FAIL" }), "T1 R11 gate", "new-typo, new-over-func and from-typo fire; look-alikes silent"
 if (-not $r11ok) { $fail++ }
 
+# R25 at check time: the dotted-typo import fires, the correct full-dotted
+# import stays silent (exactly 1 error).
+$r25 = & $ringpp check "tests\fixtures\unknown_package.ring" 2>&1 | Out-String
+$r25ok = ($r25 -match "rpp/unknown-package") -and ($r25 -match "R25") -and ($r25 -match "1 error")
+"{0} {1,-16} {2}" -f $(if ($r25ok) { "PASS" } else { "FAIL" }), "T1 R25 gate", "the import typo fires, the dotted match stays silent"
+if (-not $r25ok) { $fail++ }
+
 # The advice layer, both directions. Advice must be INVISIBLE by default --
 # an "adv" line in plain `check` output means opportunities are being
 # presented as defects -- and must appear, both rules, under --advise.

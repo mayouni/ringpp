@@ -162,6 +162,25 @@ pub const catalog = [_]Entry{
         .upstream = "Deliberately not sent. Language design, not a defect.",
     },
     .{
+        .rule = "rpp/unknown-package",
+        .codes = &.{"R25"},
+        .findings = &.{ "F-48", "F-18" },
+        .title = "import of a package that exists nowhere the program can load",
+        .symptom = "Error (R25) : Package not found — from an import that shipped silently " ++
+            "inside a branch tests skip, or inside a function nobody called until today.",
+        .cause = "Ring resolves the package name at RUNTIME (verified on 1.27: an import in " ++
+            "dead code loads and runs; inside a function it raises when the function does). " ++
+            "The import matches the FULL dotted name — `import Sys.Web` needs a package " ++
+            "declared as Sys.Web, not a Sys with a Web inside.",
+        .fix = "Fix the spelling against the package that exists; the difference is usually " ++
+            "one letter (F-18).",
+        .evidence = "Zero findings across eight corpora on the first sweep — the set-global " ++
+            "universe gates this rule inherits from F-48 already exclude every tree where a " ++
+            "package could arrive invisibly.",
+        .hurts = "Same price as every absence rule: one loadlib, eval or unresolved load " ++
+            "anywhere in the checked tree silences it everywhere in that tree.",
+    },
+    .{
         .rule = "rpp/unknown-class",
         .codes = &.{ "R11", "R15" },
         .findings = &.{ "F-48", "F-18" },

@@ -324,11 +324,14 @@ fn runCheck(gpa: std.mem.Allocator, w: anytype, path: []const u8, advise: bool) 
     defer all_globals.deinit();
     var all_classes = std.StringHashMap(void).init(gpa);
     defer all_classes.deinit();
+    var all_packages = std.StringHashMap(void).init(gpa);
+    defer all_packages.deinit();
     if (universe_complete) {
         for (infos.items) |info| {
             for (info.defnames) |dn| try all_defined.put(dn, {});
             for (info.globalnames) |gn| try all_globals.put(gn, {});
             for (info.classnames) |cn| try all_classes.put(cn, {});
+            for (info.packagenames) |pn2| try all_packages.put(pn2, {});
         }
     }
 
@@ -351,6 +354,7 @@ fn runCheck(gpa: std.mem.Allocator, w: anytype, path: []const u8, advise: bool) 
             .all_defined = if (universe_complete) &all_defined else null,
             .all_globals = if (universe_complete) &all_globals else null,
             .all_classes = if (universe_complete) &all_classes else null,
+            .all_packages = if (universe_complete) &all_packages else null,
         });
     }
     const ms = @as(f64, @floatFromInt(timer.read())) / 1_000_000.0;

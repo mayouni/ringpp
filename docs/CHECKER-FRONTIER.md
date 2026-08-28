@@ -128,6 +128,7 @@ Triage of all 55, grouped by answer:
 | R3 call without definition | `undefined-function` (F-46) |
 | R24 uninitialised variable | `uninitialized-variable` (F-47) |
 | R11 / R15 unknown class / parent | `unknown-class` (F-48) |
+| R25 unknown package | `unknown-package` (F-48) |
 
 ### Ring already catches at compile time — no rule needed (verified, not assumed)
 
@@ -139,7 +140,6 @@ any that Ring's compiler already rejects is dropped.
 
 | error | shape | tier | machinery |
 |---|---|---|---|
-| R25 unknown package | `import X` with no `package X` in the set | `err` | classnames machinery, one more collector — verified R25 at runtime already |
 | R7 letter = multi-char literal | `s[i] = "xy"` where `s` is stringish | `warn` | `stringish` ✅; needs list-exclusion to reach zero-FP |
 | R26 / R27 private access | `o.method()` against a class layout where it is private | `note` | class layout parse |
 | R52 return inside call args | syntactic | `err` | trivial |
@@ -160,8 +160,10 @@ and `new X { ... }` bodies excluded as object scope. **R11/R15 followed
 the same day** (`unknown-class`, F-48) and paid the template forward: its
 17 fragment-file false positives in ring127/applications moved the
 loadlib/eval/unresolved gates from per-closure to SET-GLOBAL for every
-absence-based rule. Four rules, four pre-ship saves. R25 (unknown
-package) is the next trivial member of the family; R7/R52/R28/R29 remain
+absence-based rule. Four rules, four pre-ship saves — and R25
+followed as the family's first FREE member: its sweep found no new
+false-positive class, because the set-global gates the earlier saves paid
+for protect each new absence rule from birth. R7/R52/R28/R29 remain
 queued above.
 
 ### Fundamentally dynamic — the honest wall (most of the catalog)

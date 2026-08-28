@@ -100,6 +100,10 @@ pub const FileInfo = struct {
     /// semantically correct suppression for rpp/unknown-class, where the
     /// generous defnames would silence real errors.
     classnames: [][]const u8 = &.{},
+    /// Package names, lower-cased, dotted parts joined ("sys.web") -- an
+    /// `import` matches the FULL dotted name (verified on 1.27). The
+    /// suppression set for rpp/unknown-package.
+    packagenames: [][]const u8 = &.{},
 };
 
 /// Case-insensitive substring probe for the three calls that can create
@@ -157,6 +161,9 @@ pub fn scanFile(
     var cn = std.ArrayList([]const u8){};
     try collectClassNames(arena, tree.root(), &cn);
     info.classnames = try cn.toOwnedSlice(arena);
+    var pn = std.ArrayList([]const u8){};
+    try collectPackageNames(arena, tree.root(), &pn);
+    info.packagenames = try pn.toOwnedSlice(arena);
 
     const dir = dirOf(path);
     var loads = std.ArrayList([]const u8){};
@@ -229,6 +236,36 @@ fn collectClassNames(arena: std.mem.Allocator, n: ts.Node, out: *std.ArrayList([
     }
     var i: u32 = 0;
     while (i < n.childCount()) : (i += 1) try collectClassNames(arena, n.child(i), out);
+}
+
+/// package_definition names, dotted parts joined and lower-cased.
+fn collectPackageNames(arena: std.mem.Allocator, n: ts.Node, out: *std.ArrayList([]const u8)) !void {
+    if (std.mem.eql(u8, n.kind(), "package_definition")) {
+        var i: u32 = 0;
+        while (i < n.namedChildCount()) : (i += 1) {
+            const q = n.namedChild(i);
+            if (std.mem.eql(u8, q.kind(), "qualified_identifier")) {
+                if (try dottedLower(arena, q)) |name| try out.append(arena, name);
+                break;
+            }
+        }
+    }
+    var i: u32 = 0;
+    while (i < n.childCount()) : (i += 1) try collectPackageNames(arena, n.child(i), out);
+}
+
+/// "Sys" "Web" -> "sys.web"; null if any part is not a plain identifier.
+pub fn dottedLower(arena: std.mem.Allocator, q: ts.Node) !?[]const u8 {
+    var buf = std.ArrayList(u8){};
+    var i: u32 = 0;
+    while (i < q.namedChildCount()) : (i += 1) {
+        const part = q.namedChild(i);
+        if (!std.mem.eql(u8, part.kind(), "identifier")) return null;
+        if (i > 0) try buf.append(arena, '.');
+        for (part.text()) |ch4| try buf.append(arena, std.ascii.toLower(ch4));
+    }
+    if (buf.items.len == 0) return null;
+    return try buf.toOwnedSlice(arena);
 }
 
 fn collectLoads(
