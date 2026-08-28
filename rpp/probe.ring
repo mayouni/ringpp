@@ -52,7 +52,7 @@ func RppProbeAll
 	_RppRow("pack-double", RPP_HARD, bytes2double(double2bytes(1.5)) = 1.5,  "double2bytes/bytes2double")
 	RPP_LITTLE_ENDIAN = (str2hex(int2bytes(1)) = "01000000")
 	_RppRow("byte-order", RPP_INFO, TRUE,
-		"" + iff(RPP_LITTLE_ENDIAN, "little", "big") + "-endian")
+		"" + _RppIff(RPP_LITTLE_ENDIAN, "little", "big") + "-endian")
 
 	# --- the list phase: genarray speeds a permuted read, and one add drops it
 	_RppRow("genarray", RPP_SOFT, _RppGenArrayOk(),
@@ -114,10 +114,10 @@ func RppReport
 		cP = "info"
 		if aRow[2] = RPP_HARD cP = "HARD" ok
 		if aRow[2] = RPP_SOFT cP = "soft" ok
-		? "  " + iff(aRow[3], "ok  ", "FAIL") + "  " +
+		? "  " + _RppIff(aRow[3], "ok  ", "FAIL") + "  " +
 		  _RppPad(aRow[1], 24) + " " + _RppPad(cP, 5) + " " + aRow[4]
 	next
-	? "  --> " + iff(RPP_OK, "supported", "NOT SUPPORTED — see the HARD rows above")
+	? "  --> " + _RppIff(RPP_OK, "supported", "NOT SUPPORTED — see the HARD rows above")
 
 func RppOk
 	return RPP_OK
@@ -135,5 +135,16 @@ func _RppPad cStr, n
 	if len(cStr) >= n return cStr ok
 	return cStr + copy(" ", n - len(cStr))
 
-func iff bCond, vThen, vElse
+### PREFIXED, AND THAT IS A BUG FIX. This was `iff` — the ONLY unprefixed
+### global in the whole library, every other name being Rpp/_Rpp. Ring
+### allows one definition of a name per program (C22), so claiming a helper
+### name that common made Ring++ UNLOADABLE beside any project that has its
+### own: `load "ringpp.ring"` next to Softanza died with
+### "Error (C22) : Function redefinition, function is already defined!"
+### before a line of either library ran.
+###
+### Found by writing docs/CASE-SOFTANZA.md — the first time the two were
+### asked to sit in one program. A dependency-free library that cannot be
+### loaded alongside the library it was built for is not dependency-free.
+func _RppIff bCond, vThen, vElse
 	if bCond return vThen else return vElse ok
