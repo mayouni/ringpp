@@ -1236,64 +1236,11 @@ combination the fuzz reached by luck after ~13,000 operations. Luck is
 not a regression test, so the shape is now a named case that runs before
 any random one.
 
-### F-44. `ringpp … | head` panicked: on Windows an MSYS pipe reports a closed reader as `IO_PENDING`, which Zig's std declares unreachable
-
-Found 2026-08-27 while piping a corpus scan into `head -2`.
-
-```
-thread 12316 panic: reached unreachable code
-D:\Zig\lib\std\os\windows.zig:699:28 in WriteFile
-            .IO_PENDING => unreachable,
-```
-
-**The mechanism.** MSYS/Git-Bash and PowerShell hand a child process an
-**overlapped** pipe handle. When the downstream reader (`head`, `grep -c`,
-`Select-Object -First`) closes its end, `kernel32.WriteFile` fails and
-`GetLastError()` returns `IO_PENDING` — which `std.os.windows.WriteFile`
-lists as `unreachable`, because a synchronous write is not supposed to see
-it. There is nothing to catch: the process aborts mid-report, printing a
-stack trace where a verdict should be. It affected every subcommand from
-the day output moved to the buffered stdout writer.
-
-**The fix**, in `src/main.zig` and touching no vendored code: a
-`PipeSafeStdout` implementing `std.Io.Writer`'s `drain` directly over
-`kernel32.WriteFile` (and `posix.write` elsewhere). Any write failure sets
-one `dead` flag; everything after is discarded and the command finishes
-with the verdict it computed. That is what a CLI should do when its reader
-leaves — `head` took what it wanted, and the rest of the output has no
-audience.
-
-**Three false gates were written before one worked, and that is the
-finding worth keeping.** The regression test must reproduce the defect, and
-the obvious constructions do not:
-
-| gate attempt | against the known-bad binary |
-|---|---|
-| .NET `RedirectStandardOutput` + close | **passed** — not an overlapped pipe |
-| PowerShell `\| Select-Object -First 1` | **passed** |
-| `cmd /c … \| findstr` | **passed** |
-| `bash -c "… \| head -2"` from PowerShell | **passed** — and for a worse reason (below) |
-| a `.sh` file run by Git Bash | **fails correctly** |
-
-The fourth is the instructive one. PowerShell mangles embedded double
-quotes when passing a command string to a native exe, so bash received the
-temp path truncated at its first space (`C:/Users/ASUS`), checked nothing,
-and the gate went green **while testing nothing at all**. Writing the
-command into a script file hands quoting back to bash and fixes it. Two
-further traps: `Get-Command bash.exe` resolves to **WSL's** bash here,
-which cannot see Windows paths; and Git is installed at `C:\Git`, so a
-hardcoded `Program Files` list would have SKIPped forever. The gate now
-derives bash from `git.exe`'s own location and prints SKIP when it truly
-cannot find one.
-
-**Every one of those false passes was verified against a binary known to
-crash.** A gate is not written until it has failed on the defect it names.
-
 ### F-44. In Ring, a local assignment costs about as much as a builtin call — so "fewer function calls" is not an optimisation on its own
 
 Measured 2026-08-28 on Ring 1.27, 5,000,000 iterations, minimum of 3,
-reproduced twice within ±1 ns (`bench/queens/unit-costs.ring`). Costs are
-per iteration, with the 16 ns empty loop subtracted:
+reproduced twice within ±1 ns (`bench/11_unit_costs.ring`). Costs are per
+iteration, with the 16 ns empty loop subtracted:
 
 ```
   y = 1                 20 ns    assignment
@@ -1306,34 +1253,27 @@ per iteration, with the 16 ns empty loop subtracted:
 
 **A `fabs()` call is ~21 ns more than the equivalent arithmetic — and an
 assignment is 20 ns.** They are the same price. That inverts the reflex
-every programmer carries in from C: hoisting a repeated call into a local
-is not free, it is a trade at par, and it *loses* whenever the call was
-already cheap or short-circuited away.
+carried in from C: hoisting a repeated call into a local is not free, it
+is a trade at par, and it *loses* whenever the call was already cheap or
+short-circuited away.
 
-**Found by trying it and being wrong.** Optimising the N-Queens study
-(`docs/CASE-QUEENS.md`), the inner test `x[j] = i or fabs(x[j]-i) =
-fabs(j-k)` ran 9,015,683 times — 18 million `fabs` calls. Removing *both*
-calls in favour of arithmetic, hoisting `x[j]` into a local, and carrying
-`k-j` in a counter was the obvious rewrite. Every one of those three
-changes made it **slower**:
-
-```
-  original                                  4 707 ms
-  + both fabs replaced by comparisons       5 097 ms   worse
-  + x[j] hoisted into a local               5 484 ms   worse
-  + k-j carried in a counter (nD--)         5 253 ms   worse
-  fabs(j-k) -> k-j, and NOTHING else        4 307 ms   better
-```
-
-The one change that helped removed a call and put *nothing* in its place.
-Every other change paid an assignment to save something that cost the
-same or less.
+**Found by being wrong three times.** While optimising a backtracking
+N-Queens solver whose inner test ran 9,015,683 times with two `fabs()`
+calls per pass, three textbook rewrites were tried: replace both calls
+with comparisons, hoist the repeated list read into a local, and carry the
+loop-invariant difference in a counter. **Each one made the program
+slower.** The only change that helped removed a call and put *nothing* in
+its place — `fabs(j-k)` became `k-j`, because the loop header already
+guaranteed the sign. Every other change paid an assignment to save
+something that cost the same or less.
 
 **The rule this yields.** In a Ring hot loop, delete work — do not
-relocate it. A call whose result is used once and whose argument is
-already a plain expression is not worth a variable. This is also why the
-checker has no rule for it: "hoist this" is wrong about as often as it is
-right, and a rule that is wrong half the time is worse than none.
+relocate it. A call whose result is used once, over an argument that is
+already a plain expression, is not worth a variable.
+
+**And why the checker has no rule for it.** "Hoist this out of the loop"
+is wrong about as often as it is right in Ring, and a rule that is wrong
+half the time is worse than none. This stays a finding.
 
 ### F-43. for-in costs ~2× an indexed loop — and its loop variable writes through
 

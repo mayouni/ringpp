@@ -94,7 +94,7 @@ deployment is a repository setting only the owner can flip.
 | **[site/reference.html](site/reference.html)** | The library, one page — every `RppBuffer`, `RppView`, `RppIndexed` and `RppSandbox` method, with a real example for each. |
 | **[docs/CLI.md](docs/CLI.md)** | `ringpp` — every command, real captured output, no compiler needed for any of it. |
 | **[docs/CASE-TYPE-SAFETY.md](docs/CASE-TYPE-SAFETY.md)** | **What the checker actually found** — two dead functions in Ring's own standard library, two live bugs in Softanza, and the three false positives it produced along the way. |
-| **[docs/CASE-QUEENS.md](docs/CASE-QUEENS.md)** | **A program Ring++ could not speed up** — someone else's N-Queens solver, put through the whole toolchain: the checker found nothing, and both library idioms cost more than they saved. What did make it 16× faster was plain Ring and a better algorithm. |
+| **[docs/CASE-SOFTANZA.md](docs/CASE-SOFTANZA.md)** | **A string-heavy Softanza path, measured** — a 10× regression found in real code and its mechanism, a name collision that made Ring++ unloadable beside it, and the number where Ring++ itself is the wrong tool. |
 | **[docs/ANDROID.md](docs/ANDROID.md)** | Ring on a phone: a tutorial, the `--target android` reference, why no NDK is needed, and what three runtimes measured on the same device. |
 | **[docs/BUILD-OPTIONS.md](docs/BUILD-OPTIONS.md)** | The three Ring packaging tools compared from each one's own source, and which sibling project owns which target so nobody duplicates work. |
 | **[docs/VM-CONTRACT.md](docs/VM-CONTRACT.md)** | The abstract interface: exactly what Ring++ needs from the VM, as observable behaviours, probe-checked on every load — and a proposed contract both parties could agree on. |
