@@ -93,6 +93,20 @@ $ok = ($chk -match "rpp/varptr-unknown-name") -and
 "{0} {1,-16} {2}" -f $(if ($ok) { "PASS" } else { "FAIL" }), "T1 check gate", "6 rules fire on the local fixture"
 if (-not $ok) { $fail++ }
 
+# R3 at check time, both directions. Its fixture is SEPARATE from lint_bad
+# on purpose: lint_bad loads ../../ringpp.ring, which is outside the checked
+# set when the gate checks it alone -- an unresolved load, so the rule
+# correctly refuses to speak there. undefined_fn.ring loads nothing.
+# Both halves matter: the seeded typo must fire, and the three shapes that
+# LOOK undefined (new on a class, a brace call, the F-21 method) must not.
+$r3 = & $ringpp check "tests\fixtures\undefined_fn.ring" 2>&1 | Out-String
+$r3ok = ($r3 -match "rpp/undefined-function") -and
+        ($r3 -match "ProccessOrder") -and
+        ($r3 -match "1 error") -and
+        ($r3 -notmatch "helper\(\)")
+"{0} {1,-16} {2}" -f $(if ($r3ok) { "PASS" } else { "FAIL" }), "T1 R3 gate", "the typo fires, the three look-alikes stay silent"
+if (-not $r3ok) { $fail++ }
+
 # The advice layer, both directions. Advice must be INVISIBLE by default --
 # an "adv" line in plain `check` output means opportunities are being
 # presented as defects -- and must appear, both rules, under --advise.

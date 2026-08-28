@@ -1236,6 +1236,59 @@ combination the fuzz reached by luck after ~13,000 operations. Luck is
 not a regression test, so the shape is now a named case that runs before
 any random one.
 
+### F-46. Only functions are bare-callable in Ring — five resolution facts, verified, and what it took to turn them into a zero-false-positive R3 rule
+
+Measured 2026-08-28 on Ring 1.27, before any rule was written:
+
+```
+  noSuchFn() in an untaken branch      ships silently; R3 only when reached
+  f = func {...}  then  f()            R3 — a variable is not callable;
+                                       Ring wants `call f()`
+  p = Point()  with class Point        R3 — a class name is not callable;
+                                       Ring wants `new Point`
+  helper() where func helper sits
+  AFTER a class definition             R3 — F-21 quietly made it a method
+  o { hello() }                        RESOLVES — a bare call inside a
+                                       brace block reaches the OBJECT's
+                                       methods at runtime
+```
+
+So Ring's bare-call namespace is exactly: top-level functions reachable in
+the running program, plus the 258 builtins `ring.exe` registers
+(`vendor`-independent; extracted from `RING_API_REGISTER` and snapshotted
+in `src/builtins.zig`). Everything else raises R3 — including four shapes
+that *look* callable.
+
+**The rule, and the three humilities that made it honest.** The first
+sweep of `rpp/undefined-function` produced **4,429 false positives in
+Softanza alone**. The mechanism is worth naming because it is a general
+truth about Ring libraries: *a library file's calls resolve at runtime
+through whoever loads it, not through its own `load` lines.*
+`stzString.ring` calls `StzRaise()` 421 times and never loads its
+definition — the aggregator does. Per-closure absence proves nothing. The
+shipped rule therefore speaks only when:
+
+1. **the whole checked set parsed** — one unparsed file hides an unknown
+   number of definitions, so any hole silences the rule everywhere;
+2. **every `load` in the file's closure resolved and nothing in reach
+   calls `loadlib`/`loadlibfile`/`eval`** — each can create callables the
+   static view cannot see;
+3. **the name is absent from every definition of any form in the entire
+   set** — functions, methods, classes, load-reachable or not.
+
+After the three gates: **zero findings across stzlib (6,020 files), Ring's
+samples (1,605) and this repository** — each silenced by its own unparsed
+files, which is the honesty gate doing its job — and on clean trees the
+rule runs and catches seeded one-letter typos that F-18's case-insensitive
+identifiers make invisible to review.
+
+**The coverage deliberately given up, priced:** F-21 victims (a function
+that became a method) go unreported, because their names exist as methods
+and the suppression set is generous on purpose. One eval() in a closure
+silences that closure. This is the standing trade: the front page says
+0 false positives, and this rule keeps it true by saying nothing wherever
+it cannot prove everything.
+
 ### F-45. Ring validates `exit` and `loop` placement only at runtime — so R9/R22/R10 ship silently in dead code, and `exit` never crosses a call
 
 Measured 2026-08-28 on Ring 1.27, four behaviours pinned before any rule

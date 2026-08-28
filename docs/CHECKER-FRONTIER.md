@@ -125,6 +125,7 @@ Triage of all 55, grouped by answer:
 | R19 / R20 arity | `type-arity` + cross-file layer |
 | R9 / R22 exit/loop outside loop | `exit-outside-loop` (F-45) |
 | R10 / R23 exit/loop depth (literals) | `exit-bad-depth` (F-45) |
+| R3 call without definition | `undefined-function` (F-46) |
 
 ### Ring already catches at compile time — no rule needed (verified, not assumed)
 
@@ -136,7 +137,6 @@ any that Ring's compiler already rejects is dropped.
 
 | error | shape | tier | machinery |
 |---|---|---|---|
-| R3 call to undefined function | name called, defined nowhere in load graph, not a builtin | `warn` (dynamic loading exists) | load graph ✅ + a builtin catalog (~250 names, one-time) |
 | R11 / R15 unknown class / parent | `new X` / `from X` with no `class X` in graph | `warn` | class table — same walker that does C22 |
 | R24 uninitialised variable | local read before any assignment on every path | `warn` | per-function, assignments-first pass; humility about `eval`/braces |
 | R7 letter = multi-char literal | `s[i] = "xy"` where `s` is stringish | `warn` | `stringish` ✅; needs list-exclusion to reach zero-FP |
@@ -144,11 +144,16 @@ any that Ring's compiler already rejects is dropped.
 | R52 return inside call args | syntactic | `err` | trivial |
 | R28 / R29 for/step bad literal type | `for i = "a" to ...` | `err` | trivial, literals only |
 
-R3 is the crown: it is the *typo detector* — with case-insensitive
-identifiers (F-18), a misspelled call is unfindable by eye and guaranteed
-R3 at runtime. The load-graph machinery and the C22 experience (99 call
-sites checked across 6,012 files, 0 FP) say it is buildable to this
-project's standard.
+**R3 shipped (2026-08-28), and building it sharpened the map.** The first
+sweep produced 4,429 false positives in Softanza, all one mechanism: *a
+library file's calls resolve at runtime through whoever loads it, not
+through its own `load` lines* — per-closure absence proves nothing. The
+shipped rule speaks only over a whole-set definition universe with no
+holes: every file parsed, every load resolved, no loadlib/eval in reach,
+name absent in every form. That trade — err-tier certainty bought with
+narrow coverage — is now the template every "statically guaranteed" row
+above inherits: R24's flow analysis and R11/R15's class table will each
+need their own version of the same three gates before they may speak.
 
 ### Fundamentally dynamic — the honest wall (most of the catalog)
 
@@ -172,8 +177,9 @@ exist, both long-game:
 
 ## 4. The order of work
 
-1. **R3 undefined-function** — highest value per effort, machinery mostly
-   exists, and it is the rule a bank's review team feels immediately.
+1. ~~**R3 undefined-function**~~ — **shipped** as `rpp/undefined-function`
+   (F-46), with the three-gate humility its first 4,429 false positives
+   demanded.
 2. **String-arg-in-loop advice** — the checker finally pointing at F-1
    itself. `adv` tier, `stringish` exists.
 3. **R11/R15 unknown class** — same walker as C22, small.

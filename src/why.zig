@@ -162,6 +162,32 @@ pub const catalog = [_]Entry{
         .upstream = "Deliberately not sent. Language design, not a defect.",
     },
     .{
+        .rule = "rpp/undefined-function",
+        .codes = &.{"R3"},
+        .findings = &.{ "F-46", "F-18", "F-21" },
+        .title = "a bare call to a name defined nowhere is R3 in every execution that reaches it",
+        .symptom = "Error (R3) : Calling Function without definition — from a line that " ++
+            "survived every test run, or from an error handler the tests never took. With " ++
+            "case-insensitive identifiers (F-18) the usual cause is one typo no eye catches.",
+        .cause = "Ring resolves a bare call to a FUNCTION and nothing else — verified on 1.27: " ++
+            "not a class name (R3; needs `new`), not a variable holding an anonymous function " ++
+            "(R3; needs `call f()`), not a method from outside its class, and not a `func` " ++
+            "that slid behind a class definition (F-21 made it a method). Placement is only " ++
+            "checked at RUNTIME, so the call ships silently in any branch tests skip.",
+        .fix = "Usually: fix the spelling against the definition the message could not find. " ++
+            "For an anonymous function use `call f(...)`; for a class use `new`.",
+        .evidence = "The rule speaks only when absence is PROOF: every load in the closure " ++
+            "resolved, every file in the checked set parsed, no loadlib/loadlibfile/eval " ++
+            "anywhere in reach, and the name absent from every definition of any form in the " ++
+            "entire set. First honest sweep: silent on stzlib, Ring's samples and this " ++
+            "repository (each gated by its own unparsed files), firing on seeded typos only.",
+        .hurts = "Coverage is deliberately narrow three ways, recorded in F-46: one unparsed " ++
+            "file silences the rule for the whole set; one eval() silences a whole closure; " ++
+            "and a name that exists only as a METHOD suppresses bare calls to it, so F-21 " ++
+            "victims go unreported — the price of the 4,429 false positives the generous " ++
+            "suppression set prevented in Softanza.",
+    },
+    .{
         .rule = "rpp/exit-outside-loop",
         .codes = &.{ "R9", "R22" },
         .findings = &.{"F-45"},

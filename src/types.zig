@@ -37,6 +37,7 @@
 //! at each site.
 
 const std = @import("std");
+const builtins = @import("builtins.zig");
 const ts = @import("ts.zig");
 const chk = @import("check.zig");
 
@@ -45,6 +46,23 @@ const chk = @import("check.zig");
 /// "this file does not load it" is not on its own a verdict.
 pub const Ctx = struct {
     typehints_loaded_in_scan: bool = false,
+
+    /// May a bare call with no visible definition be reported as R3?
+    /// Granted by the project layer only when the file's WHOLE definition
+    /// universe is visible (View.assert_undefined): every load resolved,
+    /// every closure file parsed, no loadlib/loadlibfile/eval anywhere in
+    /// reach. Defaults false, so a bare `checkSource` (tests, single-file
+    /// callers that skip the project pass) never asserts it.
+    assert_undefined: bool = false,
+
+    /// Every name defined in ANY form across the ENTIRE checked set —
+    /// functions, methods, classes — regardless of load reachability. A
+    /// library file's calls resolve at runtime through whoever loads it,
+    /// not through its own load lines, so per-closure absence proves
+    /// nothing (4,429 false positives in Softanza proved that). Null when
+    /// the universe has holes (some file failed to parse); the rule stays
+    /// silent then.
+    all_defined: ?*const std.StringHashMap(void) = null,
 
     /// Cross-file signatures visible from THIS file through its load graph
     /// (src/project.zig). A name here has exactly one definition across the
@@ -564,7 +582,13 @@ const Walker = struct {
             const cls = self.current_class orelse return;
             const r = self.resolveInClass(cls, key) orelse return;
             const sig: Collected, const from: []const u8 = switch (r) {
-                .none, .conflicted => return,
+                .none => {
+                    // The whole method chain was visible and empty, globals
+                    // and builtins likewise: this is R3 with certainty.
+                    try self.reportUndefined(n, callee, key);
+                    return;
+                },
+                .conflicted => return,
                 .local => |s| .{ s, "" },
                 .remote => |x| .{ x.sig, x.file },
             };
@@ -582,7 +606,11 @@ const Walker = struct {
         }
 
         const sig: Collected, const from: []const u8 = switch (self.resolve(key)) {
-            .none, .conflicted => return,
+            .none => {
+                try self.reportUndefined(n, callee, key);
+                return;
+            },
+            .conflicted => return,
             .local => |s| .{ s, "" },
             .remote => |x| .{ x.sig, x.file },
         };
@@ -639,6 +667,29 @@ const Walker = struct {
                 }
             }
         }
+    }
+
+    /// FINDINGS F-46 — a bare call to a name with no reachable definition
+    /// is Error (R3) in EVERY execution that reaches it, because nothing
+    /// else is bare-callable: not a variable holding an anonymous function
+    /// (R3 — needs `call f()`), not a class name (R3 — needs `new`), not a
+    /// method from outside its class, and not a function that slid behind
+    /// a class definition (F-21 makes it a method, so the bare call is R3).
+    /// All five verified on Ring 1.27 before this was written.
+    ///
+    /// Guarded three deep before it may speak: ctx.assert_undefined only
+    /// comes true when the whole definition universe is visible; the name
+    /// must not be one of the 258 functions ring.exe itself registers; and
+    /// a call inside a brace block is skipped, because `o { hello() }`
+    /// resolves hello against o's class at RUNTIME (verified) and o's type
+    /// is exactly what a static pass does not know.
+    fn reportUndefined(self: *Walker, n: ts.Node, callee: []const u8, key: []const u8) !void {
+        if (!self.ctx.assert_undefined) return;
+        const all = self.ctx.all_defined orelse return;
+        if (all.contains(key)) return;
+        if (builtins.isBuiltin(key)) return;
+        if (insideBrace(n)) return;
+        try self.report.add(self.gpa, self.file, n, .err, "rpp/undefined-function", "{s}() is not defined anywhere this file can reach — Error (R3) the moment this line runs", .{callee}, "Ring resolves a bare call to a FUNCTION and nothing else: not a class name (that needs `new`), not a variable holding an anonymous function (that needs `call f()`), not a method from outside its class, and not a `func` that slid behind a class definition (F-21 made it a method). This name is defined in NONE of those forms anywhere in the checked set, every load resolved, nothing calls loadlib or eval — absence is proof. With identifiers being case-insensitive (F-18), the usual cause is one typo. See FINDINGS F-46.");
     }
 
     fn checkNearMiss(self: *Walker, at: ts.Node, t: []const u8) !void {
@@ -798,6 +849,22 @@ fn argAt(call: ts.Node, i: u32) ?ts.Node {
         }
     }
     return null;
+}
+
+/// Any ancestor brace_expression means the call may resolve against the
+/// braced OBJECT's methods at runtime — outside static reach.
+fn insideBrace(n: ts.Node) bool {
+    var cur = n.parent();
+    var hops: u32 = 0;
+    while (!cur.isNull() and hops < 128) : (hops += 1) {
+        const k = cur.kind();
+        if (std.mem.eql(u8, k, "brace_expression")) return true;
+        if (std.mem.eql(u8, k, "function_definition") or
+            std.mem.eql(u8, k, "class_definition") or
+            std.mem.eql(u8, k, "source_file")) return false;
+        cur = cur.parent();
+    }
+    return false;
 }
 
 fn lower(arena: std.mem.Allocator, s: []const u8) ![]const u8 {

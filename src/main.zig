@@ -297,6 +297,26 @@ fn runCheck(gpa: std.mem.Allocator, w: anytype, path: []const u8, advise: bool) 
     var proj = try project.Project.build(parena, infos.items);
 
     // PASS 2 — the checks, per file, with that file's load-graph view.
+    // The suppression set for rpp/undefined-function: every name defined in
+    // any form anywhere in the checked set. Built ONLY when every file
+    // parsed — one unparsed file hides an unknown number of definitions,
+    // and a rule that says "R3 the moment this line runs" may not speak
+    // over a universe with holes in it. NO VERDICT beats a wrong one.
+    var all_defined = std.StringHashMap(void).init(gpa);
+    defer all_defined.deinit();
+    var universe_complete = true;
+    for (infos.items) |info| {
+        if (!info.parsed_ok) {
+            universe_complete = false;
+            break;
+        }
+    }
+    if (universe_complete) {
+        for (infos.items) |info| {
+            for (info.defnames) |dn| try all_defined.put(dn, {});
+        }
+    }
+
     for (files.items, 0..) |f, i| {
         const src = std.fs.cwd().readFileAlloc(gpa, f, 64 * 1024 * 1024) catch continue;
         defer gpa.free(src);
@@ -312,6 +332,8 @@ fn runCheck(gpa: std.mem.Allocator, w: anytype, path: []const u8, advise: bool) 
             .extern_sigs = &view.extern_sigs,
             .conflicted = &view.conflicted,
             .duplicates = view.duplicates,
+            .assert_undefined = view.assert_undefined,
+            .all_defined = if (universe_complete) &all_defined else null,
         });
     }
     const ms = @as(f64, @floatFromInt(timer.read())) / 1_000_000.0;

@@ -64,7 +64,48 @@ pub const FileInfo = struct {
     /// The cost is real and is accepted: genuine findings in unparsed files
     /// are lost. A false positive in a clean file costs more.
     parsed_ok: bool,
+    /// Does this file call loadlib()/loadlibfile() or eval() anywhere?
+    /// Either one can add callable functions the static view cannot see —
+    /// loadlib registers native functions at runtime, eval can define Ring
+    /// ones — so their presence anywhere in a file's closure silences the
+    /// undefined-function rule for that file. Softanza measures the cost of
+    /// gating on eval: 26 eval() calls in base/string alone.
+    has_dynamic: bool = false,
+    /// Set by Project.build: some `load` target was NOT found in the checked
+    /// set. Whatever that file defines is invisible here, so absence of a
+    /// definition proves nothing.
+    has_unresolved_load: bool = false,
+    /// EVERY name this file defines in any form — top-level functions,
+    /// methods inside classes, class names — lower-cased. This is the
+    /// suppression set for rpp/undefined-function, and it is deliberately
+    /// broader than what a bare call can legally reach: a library file's
+    /// calls resolve at runtime through whoever loaded it, not through its
+    /// own load lines, so the first sweep without this produced 4,429
+    /// false positives in Softanza alone (StzRaise() etc., defined in
+    /// sibling files the AGGREGATOR loads). Absence across the whole
+    /// checked set is the only absence that proves anything.
+    defnames: [][]const u8 = &.{},
 };
+
+/// Case-insensitive substring probe for the three calls that can create
+/// functions invisibly (see FileInfo.has_dynamic). Textual on purpose: a
+/// match inside a comment or string suppresses a rule (coverage lost), it
+/// never asserts anything (no false positive possible from over-matching).
+fn hasDynamicCall(src: []const u8) bool {
+    for ([_][]const u8{ "loadlib", "loadlibfile", "eval" }) |needle| {
+        var i: usize = 0;
+        while (i + needle.len < src.len) : (i += 1) {
+            if (std.ascii.eqlIgnoreCase(src[i .. i + needle.len], needle)) {
+                // require it to look like a CALL: next non-space is '('
+                var j = i + needle.len;
+                while (j < src.len and (src[j] == ' ' or src[j] == 9)) j += 1;
+                if (j < src.len and src[j] == '(') return true;
+                i = j;
+            }
+        }
+    }
+    return false;
+}
 
 /// Parse one file, extract what the project layer needs, FREE the tree.
 /// Constant memory over the scan: the price is parsing twice (once here,
@@ -90,13 +131,34 @@ pub fn scanFile(
 
     if (tree.root().hasError()) return info; // no signatures, no edges
     info.parsed_ok = true;
+    info.has_dynamic = hasDynamicCall(src);
     info.sigs = try types.collectTopSigs(arena, tree.root());
+    var dn = std.ArrayList([]const u8){};
+    try collectDefNames(arena, tree.root(), &dn);
+    info.defnames = try dn.toOwnedSlice(arena);
 
     const dir = dirOf(path);
     var loads = std.ArrayList([]const u8){};
     try collectLoads(arena, tree.root(), dir, &loads);
     info.loads = try loads.toOwnedSlice(arena);
     return info;
+}
+
+/// Every function_definition and class_definition name in the tree,
+/// lower-cased — see FileInfo.defnames for why this is the generous set.
+fn collectDefNames(arena: std.mem.Allocator, n: ts.Node, out: *std.ArrayList([]const u8)) !void {
+    const k = n.kind();
+    if (std.mem.eql(u8, k, "function_definition") or std.mem.eql(u8, k, "class_definition")) {
+        const nm = n.field("name");
+        if (!nm.isNull()) {
+            const t = nm.text();
+            const buf = try arena.alloc(u8, t.len);
+            for (t, 0..) |c, i| buf[i] = std.ascii.toLower(c);
+            try out.append(arena, buf);
+        }
+    }
+    var i: u32 = 0;
+    while (i < n.childCount()) : (i += 1) try collectDefNames(arena, n.child(i), out);
 }
 
 fn collectLoads(
@@ -201,6 +263,11 @@ pub const Project = struct {
             for (f.loads) |t| {
                 if (index.get(t)) |j| {
                     if (j != i) try e.append(arena, j);
+                } else {
+                    // A load whose target is outside the checked set: its
+                    // definitions are invisible, so nothing downstream may
+                    // claim a name is undefined (see View.assert_undefined).
+                    files[i].has_unresolved_load = true;
                 }
             }
             edges[i] = try e.toOwnedSlice(arena);
@@ -267,6 +334,14 @@ pub const Project = struct {
         extern_sigs: std.StringHashMap(types.ExternSig),
         conflicted: std.StringHashMap(void),
         duplicates: []types.DupNote,
+        /// True only when this file's WHOLE definition universe is visible:
+        /// every `load` in its closure resolved into the checked set, and
+        /// no file in the closure calls loadlib()/loadlibfile()/eval().
+        /// Only then may a bare call with no definition be reported as the
+        /// guaranteed R3 it is — anything less and the honest answer is
+        /// silence, on the same NO VERDICT principle the CLI already
+        /// applies to files it could not read.
+        assert_undefined: bool = false,
     };
 
     /// What file `i`'s check pass may rely on. Allocates into `scratch`,
@@ -333,10 +408,30 @@ pub const Project = struct {
             });
         }
 
+        // The whole definition universe must be visible before absence
+        // proves anything: the file itself and every file its loads reach,
+        // each fully parsed, each load resolved, none of them calling
+        // loadlib/loadlibfile/eval.
+        var can_assert = self.files[i].parsed_ok and
+            !self.files[i].has_dynamic and
+            !self.files[i].has_unresolved_load;
+        if (can_assert) {
+            for (self.closures[i]) |j| {
+                if (!self.files[j].parsed_ok or
+                    self.files[j].has_dynamic or
+                    self.files[j].has_unresolved_load)
+                {
+                    can_assert = false;
+                    break;
+                }
+            }
+        }
+
         return .{
             .extern_sigs = extern_sigs,
             .conflicted = conflicted,
             .duplicates = try dups.toOwnedSlice(scratch),
+            .assert_undefined = can_assert,
         };
     }
 
