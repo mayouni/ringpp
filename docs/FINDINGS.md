@@ -1389,13 +1389,29 @@ scan sits 6.4× behind Lua — inside the normal interpreter band — and the
 header trap (6.7×, this finding).
 
 **The checker now catches it.** `rpp/len-in-loop-header` fires on `len()`
-in a `for`-bound or `while`/`do..again` condition — `.perf`, because for a
-list the hoist merely deletes a needless call, so the advice is never
-wrong. `ringpp why rpp/len-in-loop-header` explains it. First corpus sweep:
-**149 hits across Softanza**, handed to that project rather than fixed from
-here. The library's one occurrence (`IsPlainName`, harmless on short
-identifiers) is hoisted anyway, so nobody copies the trap out of Ring++
-itself.
+in a `for`-BOUND or a `while`/`do..again` condition — `.perf`, because for a
+list the hoist merely deletes a needless call, so the advice is never wrong.
+`ringpp why rpp/len-in-loop-header` explains it. The library's one
+occurrence (`IsPlainName`, harmless on short identifiers) is hoisted anyway,
+so nobody copies the trap out of Ring++ itself.
+
+**Two corrections to this entry, both 2026-08-28.**
+
+*The rule was too broad.* It first fired on `len()` anywhere in a `for`
+header, including the START: `for i = len(s) to 1 step -1`. Ring evaluates
+the start ONCE — measured at **1 ms** against **4,725 ms** for the
+ascending `for i = 1 to len(s)` over the same 1 MB string. That was a false
+positive, and it was 12 of the 30 hits (40%) in Softanza's string library.
+The rule now compares byte offsets against the `to` token and fires only
+past it. Found by reading the sites before telling their author to change
+them.
+
+*The corpus number was wrong.* This entry first said "149 hits across
+Softanza". That count came from a run piped into `grep`, taken before the
+broken-pipe defect was fixed — the process aborted partway and the count
+was of a truncated report. Re-measured to a file, with the narrowed rule:
+**675 across 6,020 files**, 633 of them outside archived copies. A number
+read through a crashing pipe is not a measurement.
 
 **What stays open.** The binary-search outlier (F-39) is *not* this: its
 loop bounds are numbers. Four dead hypotheses now — dispatch, scope size,

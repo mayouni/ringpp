@@ -40,6 +40,10 @@ pub const Node = struct {
         return c.ts_node_has_error(self.raw);
     }
 
+    pub fn startByte(self: Node) u32 {
+        return c.ts_node_start_byte(self.raw);
+    }
+
     pub fn start(self: Node) Point {
         const p = c.ts_node_start_point(self.raw);
         return .{ .row = p.row, .col = p.column };

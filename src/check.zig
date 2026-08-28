@@ -132,21 +132,45 @@ fn nameFromArg(n: ts.Node) ?[]const u8 {
     return null;
 }
 
-/// True when `n` sits in a loop's HEADER — the `to`/`step` bound of a for,
-/// or the condition of a while / do..again — as opposed to its body. The
-/// grammar wraps every body expression in `expression_statement`, so the
-/// first `*_statement` ancestor of a header expression is the loop node
-/// itself, and anything in the body meets another statement kind first.
+/// True when `n` sits somewhere a loop RE-EVALUATES on every pass:
+///
+///   for i = 1 to <HERE>        the bound, re-read each iteration
+///   while <HERE>               the condition, likewise
+///   do ... again <HERE>
+///
+/// and false for the loop's START expression, which Ring evaluates once:
+///
+///   for i = <not here> to n
+///
+/// THAT DISTINCTION IS THE RULE'S CORRECTNESS. `for i = len(s) to 1 step -1`
+/// walks a string backwards and is FINE -- measured at 1 ms where the
+/// ascending `for i = 1 to len(s)` over the same 1 MB string takes 4,725 ms.
+/// Firing on it was a false positive, found by reading the sites this rule
+/// reported in Softanza before telling anyone to change them: three of the
+/// thirty were this shape.
+///
+/// The grammar wraps every body expression in `expression_statement`, so the
+/// first `*_statement` ancestor of a header expression is the loop itself;
+/// anything in the body meets another statement kind first.
 fn inLoopHeader(n: ts.Node) bool {
     var cur = n.parent();
     var depth: u32 = 0;
     while (!cur.isNull() and depth < 64) : (depth += 1) {
         const k = cur.kind();
-        if (std.mem.endsWith(u8, k, "_statement")) {
-            return std.mem.eql(u8, k, "for_statement") or
-                std.mem.eql(u8, k, "while_statement") or
-                std.mem.eql(u8, k, "do_again_statement");
+        if (std.mem.eql(u8, k, "while_statement") or
+            std.mem.eql(u8, k, "do_again_statement")) return true;
+        if (std.mem.eql(u8, k, "for_statement")) {
+            // Fire only past the `to` token. `for x in list` has no `to`
+            // at all and never re-reads its subject, so it stays silent.
+            var i: u32 = 0;
+            while (i < cur.childCount()) : (i += 1) {
+                const ch = cur.child(i);
+                if (std.mem.eql(u8, ch.kind(), "to"))
+                    return n.startByte() > ch.startByte();
+            }
+            return false;
         }
+        if (std.mem.endsWith(u8, k, "_statement")) return false;
         if (std.mem.eql(u8, k, "source_file")) return false;
         cur = cur.parent();
     }

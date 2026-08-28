@@ -130,8 +130,8 @@ next</pre>
   Hoisting one variable took it from 123 to 13&nbsp;ms on the desktop and
   from 518 to 77&nbsp;ms on the phone — same answer, byte-identical,
   asserted before any number was printed. If it hid in our benchmark, it is
-  hiding in real code: our first sweep of a large Ring codebase found
-  <b>149</b> occurrences.</p>
+  hiding in real code: a sweep of a large Ring
+  codebase found <b>675</b> occurrences across 6,020 files.</p>
 
   <h2>The second: the binary search that was never O(log n)</h2>
 
@@ -247,8 +247,8 @@ next</pre>
   </div>
 
   <p class="lead" style="margin-top:1.6rem">On its first run over a large
-  real codebase, the advice pass found <b>985</b> places where a measured
-  idiom was faster, alongside the 149 quadratic headers. None of them is a
+  real codebase, the advice pass found <b>1,009</b> places where a measured
+  idiom was faster, alongside <b>675</b> quadratic headers. None of them is a
   bug. All of them are minutes to fix, now that something points at
   them.</p>
 
