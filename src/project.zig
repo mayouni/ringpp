@@ -85,6 +85,14 @@ pub const FileInfo = struct {
     /// sibling files the AGGREGATOR loads). Absence across the whole
     /// checked set is the only absence that proves anything.
     defnames: [][]const u8 = &.{},
+    /// Names assigned at the TOP LEVEL of this file — main-scope code,
+    /// outside any function or class. In Ring those are GLOBALS, visible
+    /// inside every function of every file the running program loaded
+    /// (verified cross-file on 1.27). Lower-cased. This is the
+    /// suppression set for rpp/uninitialized-variable: a read inside a
+    /// function is only reportable when no file's main scope could have
+    /// supplied the name.
+    globalnames: [][]const u8 = &.{},
 };
 
 /// Case-insensitive substring probe for the three calls that can create
@@ -136,6 +144,9 @@ pub fn scanFile(
     var dn = std.ArrayList([]const u8){};
     try collectDefNames(arena, tree.root(), &dn);
     info.defnames = try dn.toOwnedSlice(arena);
+    var gn = std.ArrayList([]const u8){};
+    try collectGlobalNames(arena, tree.root(), &gn);
+    info.globalnames = try gn.toOwnedSlice(arena);
 
     const dir = dirOf(path);
     var loads = std.ArrayList([]const u8){};
@@ -159,6 +170,40 @@ fn collectDefNames(arena: std.mem.Allocator, n: ts.Node, out: *std.ArrayList([]c
     }
     var i: u32 = 0;
     while (i < n.childCount()) : (i += 1) try collectDefNames(arena, n.child(i), out);
+}
+
+/// Top-level write targets: assignment LHS identifiers, for-variables and
+/// give-targets, WITHOUT descending into functions, classes, anonymous
+/// functions or brace blocks — those are other scopes.
+fn collectGlobalNames(arena: std.mem.Allocator, n: ts.Node, out: *std.ArrayList([]const u8)) !void {
+    const k = n.kind();
+    if (std.mem.eql(u8, k, "function_definition") or
+        std.mem.eql(u8, k, "class_definition") or
+        std.mem.eql(u8, k, "anonymous_function") or
+        std.mem.eql(u8, k, "brace_expression")) return;
+    var target: ?ts.Node = null;
+    if (std.mem.eql(u8, k, "assignment_expression") or
+        std.mem.eql(u8, k, "for_statement") or
+        std.mem.eql(u8, k, "give_statement"))
+    {
+        var i: u32 = 0;
+        while (i < n.namedChildCount()) : (i += 1) {
+            const c = n.namedChild(i);
+            if (std.mem.eql(u8, c.kind(), "identifier")) {
+                target = c;
+                break;
+            }
+            break; // member/subscript target: not a plain name
+        }
+    }
+    if (target) |t| {
+        const txt = t.text();
+        const buf = try arena.alloc(u8, txt.len);
+        for (txt, 0..) |ch2, ix2| buf[ix2] = std.ascii.toLower(ch2);
+        try out.append(arena, buf);
+    }
+    var i: u32 = 0;
+    while (i < n.childCount()) : (i += 1) try collectGlobalNames(arena, n.child(i), out);
 }
 
 fn collectLoads(

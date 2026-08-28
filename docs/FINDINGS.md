@@ -1236,6 +1236,52 @@ combination the fuzz reached by luck after ~13,000 operations. Luck is
 not a regression test, so the shape is now a named case that runs before
 any random one.
 
+### F-47. Ring locals are born by assignment and die by typo — R24's semantics, verified, and the two false-positive classes the rule ate before shipping
+
+Measured 2026-08-28 on Ring 1.27:
+
+```
+  ? x            never assigned                    R24, ships in dead code
+  x += 1         compound assignment               R24 — the += READS first
+  aL[1] = 5      subscript store, aL unassigned    R24 — the BASE is a read
+  x++                                              R21, not R24
+  v = myFn       a function name as a value        R24 — functions are not values
+  g = 7 in MAIN SCOPE, read inside a func          fine — main scope is global
+  g assigned in a LOADED file's main scope         fine — globals cross files
+  read in a function, assigned LATER in it         R24 when the read runs first
+```
+
+The last two lines shape the rule (`rpp/uninitialized-variable`, `warn`).
+Cross-file globals mean absence must be proven across the **whole checked
+set's** main scopes, under the same universe gates as R3 (F-46). And
+read-before-later-assign, though genuinely R24, is deliberately **not**
+reported: the rule fires only when *no assignment to the name exists
+anywhere in the function*, because branch-order guessing is where the
+false positives live.
+
+**Two false-positive classes were found by sweeping and killed before the
+rule shipped — both are documented grammar/scope facts now:**
+
+1. **The vendored grammar does not reliably nest post-class functions.**
+   `rpp/idioms.ring`'s `func Applied` — a method by Ring's F-21 rule —
+   sits at ROOT level in the tree, so the in-class flag missed it and the
+   rule flagged its attribute reads. The fix is positional, exactly as
+   `collectTopSigs` already does it: only functions whose row precedes
+   the file's first `class` are checked. Two false positives in this
+   project's own library, gone by construction.
+
+2. **`new X { ... }` brace bodies are object scope.** Ring's shipped
+   `arrayvector2.ring` writes `Sum Vectors` inside `new Vectors { ... }`,
+   and `Sum` resolves against the object at runtime. One false positive
+   in Ring's own samples, gone by construction — only the constructor
+   *arguments* of a `new` expression are caller-scope reads.
+
+After both fixes: **zero findings across six corpora** (four Ring sample
+trees, this repository, and the probe suite), with the seeded typo still
+caught. The fifteen variables `ring.exe` predefines (`vmvars.c`: `this`,
+`true`, `false`, `nl`, `null`, `sysargv`, `stdin/stdout/stderr`, `tab`,
+`cr`, `ccatcherror`, …) are suppressed by name.
+
 ### F-46. Only functions are bare-callable in Ring — five resolution facts, verified, and what it took to turn them into a zero-false-positive R3 rule
 
 Measured 2026-08-28 on Ring 1.27, before any rule was written:

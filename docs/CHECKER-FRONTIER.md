@@ -126,6 +126,7 @@ Triage of all 55, grouped by answer:
 | R9 / R22 exit/loop outside loop | `exit-outside-loop` (F-45) |
 | R10 / R23 exit/loop depth (literals) | `exit-bad-depth` (F-45) |
 | R3 call without definition | `undefined-function` (F-46) |
+| R24 uninitialised variable | `uninitialized-variable` (F-47) |
 
 ### Ring already catches at compile time — no rule needed (verified, not assumed)
 
@@ -138,7 +139,6 @@ any that Ring's compiler already rejects is dropped.
 | error | shape | tier | machinery |
 |---|---|---|---|
 | R11 / R15 unknown class / parent | `new X` / `from X` with no `class X` in graph | `warn` | class table — same walker that does C22 |
-| R24 uninitialised variable | local read before any assignment on every path | `warn` | per-function, assignments-first pass; humility about `eval`/braces |
 | R7 letter = multi-char literal | `s[i] = "xy"` where `s` is stringish | `warn` | `stringish` ✅; needs list-exclusion to reach zero-FP |
 | R26 / R27 private access | `o.method()` against a class layout where it is private | `note` | class layout parse |
 | R52 return inside call args | syntactic | `err` | trivial |
@@ -152,8 +152,13 @@ shipped rule speaks only over a whole-set definition universe with no
 holes: every file parsed, every load resolved, no loadlib/eval in reach,
 name absent in every form. That trade — err-tier certainty bought with
 narrow coverage — is now the template every "statically guaranteed" row
-above inherits: R24's flow analysis and R11/R15's class table will each
-need their own version of the same three gates before they may speak.
+above inherits, and **R24 was the first to inherit it (2026-08-28)**: same
+universe gates, plus two of its own — methods excluded by ROW (the grammar
+leaves post-class functions at root level; Ring makes them methods, F-21),
+and `new X { ... }` bodies excluded as object scope. Its pre-ship sweep
+caught two false-positive classes, one in this project's own library and
+one in Ring's shipped samples; both died before the rule shipped, which is
+the order these things must happen in. R11/R15 next.
 
 ### Fundamentally dynamic — the honest wall (most of the catalog)
 

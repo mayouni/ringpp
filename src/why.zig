@@ -162,6 +162,32 @@ pub const catalog = [_]Entry{
         .upstream = "Deliberately not sent. Language design, not a defect.",
     },
     .{
+        .rule = "rpp/uninitialized-variable",
+        .codes = &.{"R24"},
+        .findings = &.{ "F-47", "F-18" },
+        .title = "a read of a name that nothing could have assigned is R24 when the line runs",
+        .symptom = "Error (R24) : Using uninitialized variable — often from an error branch " ++
+            "or a rarely-taken path, because Ring only discovers it at runtime and it ships " ++
+            "silently until then. Usually one typo of a nearby name (F-18).",
+        .cause = "A Ring local is born by assignment; reading first raises R24 — verified on " ++
+            "1.27, including through `x += 1` (a read) and `aL[1] = 5` (the BASE is a read). " ++
+            "Main-scope assignments are globals visible in every function of every loaded " ++
+            "file, so absence has to be proven set-wide, not per file.",
+        .fix = "Almost always: fix the spelling against the name that IS assigned. If the " ++
+            "global truly lives in another program that loads this file, the rule already " ++
+            "stayed silent — it only speaks over a complete universe.",
+        .evidence = "Zero findings across six corpora after two false-positive classes were " ++
+            "fixed pre-ship: post-class functions the GRAMMAR leaves at root level (Ring makes " ++
+            "them methods, F-21 — caught in this project's own rpp/idioms.ring), and " ++
+            "`new X { ... }` brace bodies, which are OBJECT scope (caught in Ring's shipped " ++
+            "arrayvector2.ring). Both are now excluded by construction.",
+        .hurts = "The humility costs real coverage, all of it recorded in F-47: methods are " ++
+            "not checked at all; ANY assignment to the name anywhere in the function " ++
+            "suppresses, so a read-BEFORE-assign bug (genuinely R24) is missed rather than " ++
+            "risk branch-order guessing; and the same universe gates as R3 apply — one " ++
+            "unparsed file or one eval() and the rule stays silent.",
+    },
+    .{
         .rule = "rpp/undefined-function",
         .codes = &.{"R3"},
         .findings = &.{ "F-46", "F-18", "F-21" },

@@ -107,6 +107,16 @@ $r3ok = ($r3 -match "rpp/undefined-function") -and
 "{0} {1,-16} {2}" -f $(if ($r3ok) { "PASS" } else { "FAIL" }), "T1 R3 gate", "the typo fires, the three look-alikes stay silent"
 if (-not $r3ok) { $fail++ }
 
+# R24 at check time, both directions: the seeded typo fires, and the six
+# shapes that LOOK unassigned (global, predefined, loop var, object-scope
+# brace body...) stay silent.
+$r24 = & $ringpp check "tests\fixtures\uninit_var.ring" 2>&1 | Out-String
+$r24ok = ($r24 -match "rpp/uninitialized-variable") -and
+         ($r24 -match "nTotl") -and
+         ($r24 -match "1 warn")
+"{0} {1,-16} {2}" -f $(if ($r24ok) { "PASS" } else { "FAIL" }), "T1 R24 gate", "the typo fires, the six look-alikes stay silent"
+if (-not $r24ok) { $fail++ }
+
 # The advice layer, both directions. Advice must be INVISIBLE by default --
 # an "adv" line in plain `check` output means opportunities are being
 # presented as defects -- and must appear, both rules, under --advise.

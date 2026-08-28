@@ -311,9 +311,12 @@ fn runCheck(gpa: std.mem.Allocator, w: anytype, path: []const u8, advise: bool) 
             break;
         }
     }
+    var all_globals = std.StringHashMap(void).init(gpa);
+    defer all_globals.deinit();
     if (universe_complete) {
         for (infos.items) |info| {
             for (info.defnames) |dn| try all_defined.put(dn, {});
+            for (info.globalnames) |gn| try all_globals.put(gn, {});
         }
     }
 
@@ -334,6 +337,7 @@ fn runCheck(gpa: std.mem.Allocator, w: anytype, path: []const u8, advise: bool) 
             .duplicates = view.duplicates,
             .assert_undefined = view.assert_undefined,
             .all_defined = if (universe_complete) &all_defined else null,
+            .all_globals = if (universe_complete) &all_globals else null,
         });
     }
     const ms = @as(f64, @floatFromInt(timer.read())) / 1_000_000.0;

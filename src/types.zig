@@ -64,6 +64,14 @@ pub const Ctx = struct {
     /// silent then.
     all_defined: ?*const std.StringHashMap(void) = null,
 
+    /// Every name assigned at the TOP LEVEL of any file in the checked
+    /// set. Ring main-scope assignments are globals visible inside every
+    /// function of the running program — including functions in OTHER
+    /// files (verified cross-file on 1.27) — so a read is only reportable
+    /// as R24 when no file's main scope could have supplied the name.
+    /// Null under the same universe rules as all_defined.
+    all_globals: ?*const std.StringHashMap(void) = null,
+
     /// Cross-file signatures visible from THIS file through its load graph
     /// (src/project.zig). A name here has exactly one definition across the
     /// closure — Ring's C22 guarantees no second live one (FINDINGS F-26) —
@@ -337,11 +345,23 @@ pub fn check(
         if (!classes.contains(c.lower)) try classes.put(c.lower, c);
     }
 
+    var first_class_row: u32 = std.math.maxInt(u32);
+    {
+        var ri: u32 = 0;
+        while (ri < root.namedChildCount()) : (ri += 1) {
+            const rc = root.namedChild(ri);
+            if (isClass(rc)) {
+                first_class_row = @min(first_class_row, rc.start().row);
+            }
+        }
+    }
+
     var w = Walker{
         .gpa = gpa,
         .arena = arena,
         .report = report,
         .file = file,
+        .first_class_row = first_class_row,
         .sigs = &sigs,
         .classes = &classes,
         .loads_hints = loads_hints,
@@ -355,6 +375,15 @@ const Walker = struct {
     arena: std.mem.Allocator,
     report: *chk.Report,
     file: []const u8,
+    /// Row of the first class_definition among the ROOT's children, or
+    /// maxInt when there is none. The vendored grammar does NOT reliably
+    /// nest post-class functions inside the class node (rpp/idioms.ring
+    /// showed func Applied as a root-level sibling), but Ring's own rule
+    /// is positional: every func after the first class is a METHOD
+    /// (F-21). So "is this a real function" is answered by ROW, exactly
+    /// as collectTopSigs already answers it — the in_class flag alone
+    /// produced two false positives in this repository's own library.
+    first_class_row: u32 = std.math.maxInt(u32),
     sigs: *std.StringHashMap(Collected),
     /// every class in this file, by lower-case name -- the parent chain is
     /// walked through this, and an absent link means we refuse to guess
@@ -387,6 +416,18 @@ const Walker = struct {
     fn visit(self: *Walker, n: ts.Node, in_class: bool) !void {
         const kind = n.kind();
         const now_in_class = in_class or isClass(n);
+
+        // FINDINGS F-47 -- R24 for functions OUTSIDE classes only: methods
+        // read attributes and inherited state that this pass does not
+        // model, and a rule that guesses there is a false positive
+        // waiting. Functions AFTER a class definition sit inside the
+        // class node in this grammar, so they are excluded automatically --
+        // which matches Ring, where F-21 made them methods anyway.
+        if (!in_class and std.mem.eql(u8, kind, "function_definition") and
+            n.start().row < self.first_class_row)
+        {
+            try self.checkUninit(n);
+        }
 
         // The grammar nests class_definition nodes, so entering one both
         // sets the current class AND must restore the previous on the way
@@ -692,6 +733,182 @@ const Walker = struct {
         try self.report.add(self.gpa, self.file, n, .err, "rpp/undefined-function", "{s}() is not defined anywhere this file can reach — Error (R3) the moment this line runs", .{callee}, "Ring resolves a bare call to a FUNCTION and nothing else: not a class name (that needs `new`), not a variable holding an anonymous function (that needs `call f()`), not a method from outside its class, and not a `func` that slid behind a class definition (F-21 made it a method). This name is defined in NONE of those forms anywhere in the checked set, every load resolved, nothing calls loadlib or eval — absence is proof. With identifiers being case-insensitive (F-18), the usual cause is one typo. See FINDINGS F-46.");
     }
 
+    /// FINDINGS F-47 -- a read of a name that nothing could have assigned
+    /// is Error (R24) when the line runs. "Nothing could have" is earned,
+    /// not assumed, with the same three-gate humility as R3 (F-46), plus
+    /// two of its own: methods are out entirely, and ANY assignment to the
+    /// name anywhere in the function suppresses -- no flow or order
+    /// analysis, so a read-before-later-assign bug (verified R24 on 1.27)
+    /// is deliberately missed rather than risk a branch-order guess.
+    fn checkUninit(self: *Walker, fn_node: ts.Node) !void {
+        if (!self.ctx.assert_undefined) return;
+        const globals = self.ctx.all_globals orelse return;
+        const defined = self.ctx.all_defined orelse return;
+
+        var suppress = std.StringHashMap(void).init(self.arena);
+        const params = paramsOf(self.arena, fn_node) catch return;
+        for (params) |pp| {
+            const lp = lower(self.arena, pp.name) catch continue;
+            suppress.put(lp, {}) catch return;
+        }
+        self.collectWrites(fn_node, &suppress);
+
+        var reported = std.StringHashMap(void).init(self.arena);
+        try self.walkReads(fn_node, &suppress, globals, defined, &reported);
+    }
+
+    /// Every name this function assigns in any form: assignment targets,
+    /// for-variables, give-targets, and ++/-- operands (those raise R21,
+    /// not R24, so they are suppression rather than findings). Skips other
+    /// scopes: anonymous functions, brace blocks, nested definitions.
+    fn collectWrites(self: *Walker, n: ts.Node, suppress: *std.StringHashMap(void)) void {
+        var i: u32 = 0;
+        while (i < n.childCount()) : (i += 1) {
+            const c = n.child(i);
+            const k = c.kind();
+            if (std.mem.eql(u8, k, "anonymous_function") or
+                std.mem.eql(u8, k, "brace_expression") or
+                std.mem.eql(u8, k, "class_definition") or
+                std.mem.eql(u8, k, "function_definition")) continue;
+            if (std.mem.eql(u8, k, "assignment_expression") or
+                std.mem.eql(u8, k, "for_statement") or
+                std.mem.eql(u8, k, "give_statement") or
+                std.mem.eql(u8, k, "postfix_expression"))
+            {
+                var j: u32 = 0;
+                while (j < c.namedChildCount()) : (j += 1) {
+                    const t = c.namedChild(j);
+                    if (std.mem.eql(u8, t.kind(), "identifier")) {
+                        if (lower(self.arena, t.text())) |lk| {
+                            suppress.put(lk, {}) catch {};
+                        } else |_| {}
+                    }
+                    break; // FIRST named child only -- the target position
+                }
+            }
+            self.collectWrites(c, suppress);
+        }
+    }
+
+    fn walkReads(
+        self: *Walker,
+        n: ts.Node,
+        suppress: *const std.StringHashMap(void),
+        globals: *const std.StringHashMap(void),
+        defined: *const std.StringHashMap(void),
+        reported: *std.StringHashMap(void),
+    ) !void {
+        var i: u32 = 0;
+        while (i < n.childCount()) : (i += 1) {
+            const c = n.child(i);
+            const k = c.kind();
+            // other scopes, and positions that are not variable reads
+            if (std.mem.eql(u8, k, "anonymous_function") or
+                std.mem.eql(u8, k, "brace_expression") or
+                std.mem.eql(u8, k, "class_definition") or
+                std.mem.eql(u8, k, "function_definition") or
+                std.mem.eql(u8, k, "param_list") or
+                std.mem.eql(u8, k, "qualified_identifier") or
+                std.mem.eql(u8, k, "symbol")) continue;
+            if (std.mem.eql(u8, k, "call_expression")) {
+                // child 0 is the callee -- rpp/undefined-function territory.
+                // Arguments are ordinary reads.
+                var j: u32 = 1;
+                while (j < c.childCount()) : (j += 1) {
+                    try self.walkReads(c.child(j), suppress, globals, defined, reported);
+                }
+                continue;
+            }
+            if (std.mem.eql(u8, k, "new_expression")) {
+                // `new X { ... }`: the head is a class name and the brace
+                // body is OBJECT scope -- Sum Vectors in a shipped sample
+                // resolves against the Vectors object, and treating it as
+                // caller scope was this rule's first corpus false positive.
+                // Only the constructor ARGUMENTS are caller-scope reads,
+                // exactly as visit() itself already models.
+                var j: u32 = 0;
+                while (j < c.namedChildCount()) : (j += 1) {
+                    const nc = c.namedChild(j);
+                    if (std.mem.eql(u8, nc.kind(), "arguments")) {
+                        try self.walkReads(nc, suppress, globals, defined, reported);
+                    }
+                }
+                continue;
+            }
+            if (std.mem.eql(u8, k, "member_expression")) {
+                // a.b: `a` is a read, `b` is an attribute name on a
+                if (c.childCount() > 0) {
+                    const head = c.child(0);
+                    if (std.mem.eql(u8, head.kind(), "identifier")) {
+                        try self.considerRead(head, suppress, globals, defined, reported);
+                    } else {
+                        try self.walkReads(head, suppress, globals, defined, reported);
+                    }
+                }
+                continue;
+            }
+            if (std.mem.eql(u8, k, "assignment_expression") or
+                std.mem.eql(u8, k, "for_statement") or
+                std.mem.eql(u8, k, "give_statement") or
+                std.mem.eql(u8, k, "postfix_expression"))
+            {
+                // skip the write target (the first identifier); everything
+                // else -- bounds, the iterated list, the right-hand side, a
+                // subscript target's own base -- reads
+                var j: u32 = 0;
+                var skipped_target = false;
+                while (j < c.childCount()) : (j += 1) {
+                    const ch = c.child(j);
+                    if (!skipped_target and std.mem.eql(u8, ch.kind(), "identifier")) {
+                        skipped_target = true;
+                        continue;
+                    }
+                    if (!skipped_target and (std.mem.eql(u8, ch.kind(), "member_expression") or
+                        std.mem.eql(u8, ch.kind(), "subscript_expression")))
+                    {
+                        // q[1] = 6 and a.b = 5: the BASE is a read (verified
+                        // R24 on an unassigned q), the rest of the target too
+                        skipped_target = true;
+                        try self.walkReads(ch, suppress, globals, defined, reported);
+                        if (std.mem.eql(u8, ch.kind(), "subscript_expression") and ch.childCount() > 0) {
+                            const base = ch.child(0);
+                            if (std.mem.eql(u8, base.kind(), "identifier")) {
+                                try self.considerRead(base, suppress, globals, defined, reported);
+                            }
+                        }
+                        continue;
+                    }
+                    try self.walkReads(ch, suppress, globals, defined, reported);
+                }
+                continue;
+            }
+            if (std.mem.eql(u8, k, "identifier")) {
+                try self.considerRead(c, suppress, globals, defined, reported);
+                continue;
+            }
+            try self.walkReads(c, suppress, globals, defined, reported);
+        }
+    }
+
+    fn considerRead(
+        self: *Walker,
+        n: ts.Node,
+        suppress: *const std.StringHashMap(void),
+        globals: *const std.StringHashMap(void),
+        defined: *const std.StringHashMap(void),
+        reported: *std.StringHashMap(void),
+    ) !void {
+        const lk = lower(self.arena, n.text()) catch return;
+        if (suppress.contains(lk)) return;
+        if (globals.contains(lk)) return;
+        if (defined.contains(lk)) return;
+        if (isPredefinedVar(lk)) return;
+        if (builtins.isBuiltin(lk)) return;
+        if (reported.contains(lk)) return;
+        try reported.put(lk, {});
+        try self.report.add(self.gpa, self.file, n, .warn, "rpp/uninitialized-variable", "{s} is read here, and nothing anywhere assigns it -- Error (R24) the moment this line runs", .{n.text()}, "A Ring local is born by assignment, and this function never assigns this name; no file main scope assigns it as a global either, no parameter carries it, and it is not one of the fifteen variables ring.exe predefines. Verified on 1.27: the read raises R24, and it ships silently in any branch tests skip. With case-insensitive identifiers (F-18) the usual cause is one typo. See FINDINGS F-47.");
+    }
+
     fn checkNearMiss(self: *Walker, at: ts.Node, t: []const u8) !void {
         if (isHintType(t)) return;
         for (near_misses) |m| {
@@ -853,6 +1070,20 @@ fn argAt(call: ts.Node, i: u32) ?ts.Node {
 
 /// Any ancestor brace_expression means the call may resolve against the
 /// braced OBJECT's methods at runtime — outside static reach.
+/// The variables ring.exe itself creates before the first user line runs —
+/// extracted from ring_vm_addglobalvariables (vmvars.c) on 1.27, plus
+/// `this`, which the same function registers first.
+const predefined_vars = [_][]const u8{
+    "this",   "true", "false",  "nl",     "null",   "sysargv",
+    "stdin",  "stdout", "stderr", "tab",  "cr",     "ccatcherror",
+    "ring_gettemp_var", "ring_settemp_var", "ringoptionalfunctions",
+};
+
+fn isPredefinedVar(lowname: []const u8) bool {
+    for (predefined_vars) |v| if (std.mem.eql(u8, v, lowname)) return true;
+    return false;
+}
+
 fn insideBrace(n: ts.Node) bool {
     var cur = n.parent();
     var hops: u32 = 0;
