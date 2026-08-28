@@ -162,6 +162,42 @@ pub const catalog = [_]Entry{
         .upstream = "Deliberately not sent. Language design, not a defect.",
     },
     .{
+        .rule = "rpp/exit-outside-loop",
+        .codes = &.{ "R9", "R22" },
+        .findings = &.{"F-45"},
+        .title = "exit / loop outside any loop is a guaranteed runtime error Ring's compiler never sees",
+        .symptom = "Error (R9) or (R22) from a branch that had survived every test run -- " ++
+            "typically an error handler, which is exactly the branch tests skip.",
+        .cause = "Ring validates exit/loop placement at RUNTIME only, and neither crosses a " ++
+            "call: a function whose body is a bare `exit` raises R9 even when its caller is " ++
+            "mid-loop (verified on 1.27). So the check is purely lexical, and a flagged line " ++
+            "raises in EVERY execution that reaches it.",
+        .fix = "To leave the program, `shutdown(n)` -- the C habit of exit(1) is the common " ++
+            "way this is written. To leave a loop from a helper, return a flag; exit cannot " ++
+            "do it from inside a call.",
+        .evidence = "First corpus run: one hit in Ring's own shipped samples " ++
+            "(breath_first_search.ring, exit(1) on queue underflow -- the error path itself " ++
+            "errors), zero false positives across 7,625 files of stzlib + samples.",
+        .hurts = "Nothing. This is the rare err-tier rule with no counter-case: there is no " ++
+            "execution in which the flagged statement does not raise.",
+    },
+    .{
+        .rule = "rpp/exit-bad-depth",
+        .codes = &.{ "R10", "R23" },
+        .findings = &.{"F-45"},
+        .title = "exit N / loop N with more levels than the loops that enclose it",
+        .symptom = "Error (R10) or (R23) from a branch that had survived every test run.",
+        .cause = "The literal names how many enclosing loops to leave; the nesting depth is " ++
+            "countable at the statement, and N outside 1..depth raises in every execution " ++
+            "that reaches it. Counted lexically -- exit cannot leave a caller's loops.",
+        .fix = "Count the loops between the statement and its function header; a computed " ++
+            "N is left alone, its value is the program's business.",
+        .evidence = "`exit 9` one loop deep and `exit 0` verified to ship silently in dead " ++
+            "code and raise when reached; `exit 2` two loops deep verified legal (Ring 1.27).",
+        .hurts = "Nothing on literals. It deliberately says nothing about computed depths, " ++
+            "which is most of what it cannot see.",
+    },
+    .{
         .rule = "rpp/advise-forin",
         .findings = &.{"F-43"},
         .title = "for-in is ~2x an indexed for — and its loop variable is a live reference",

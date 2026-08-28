@@ -97,6 +97,7 @@ deployment is a repository setting only the owner can flip.
 | **[docs/CASE-SOFTANZA.md](docs/CASE-SOFTANZA.md)** | **A string-heavy Softanza path, measured** — a 10× regression found in real code and its mechanism, a name collision that made Ring++ unloadable beside it, and the number where Ring++ itself is the wrong tool. |
 | **[docs/ANDROID.md](docs/ANDROID.md)** | Ring on a phone: a tutorial, the `--target android` reference, why no NDK is needed, and what three runtimes measured on the same device. |
 | **[docs/BUILD-OPTIONS.md](docs/BUILD-OPTIONS.md)** | The three Ring packaging tools compared from each one's own source, and which sibling project owns which target so nobody duplicates work. |
+| **[docs/CHECKER-FRONTIER.md](docs/CHECKER-FRONTIER.md)** | **Where the checker goes next** — Ring's 55 runtime errors triaged for compile-time catchability, the four cost mechanisms behind every perf rule, and the rules that stay out on purpose. |
 | **[docs/VM-CONTRACT.md](docs/VM-CONTRACT.md)** | The abstract interface: exactly what Ring++ needs from the VM, as observable behaviours, probe-checked on every load — and a proposed contract both parties could agree on. |
 | **[docs/FINDINGS.md](docs/FINDINGS.md)** | What the Ring VM actually does, measured. Read this first — two of its numbers killed the design I set out to write. |
 | **[docs/DESIGN.md](docs/DESIGN.md)** | The library half: what Ring++ is, the layer map, the surface, safety, upgrades, `myctiger`, Softanza, and the risks. |

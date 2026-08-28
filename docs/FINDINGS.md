@@ -1236,6 +1236,47 @@ combination the fuzz reached by luck after ~13,000 operations. Luck is
 not a regression test, so the shape is now a named case that runs before
 any random one.
 
+### F-45. Ring validates `exit` and `loop` placement only at runtime — so R9/R22/R10 ship silently in dead code, and `exit` never crosses a call
+
+Measured 2026-08-28 on Ring 1.27, four behaviours pinned before any rule
+was written:
+
+```
+  exit  in an untaken branch, no loop      runs clean; R9 only when reached
+  loop  in an untaken branch, no loop      runs clean; R22 only when reached
+  exit 9  one loop deep, untaken           runs clean; R10 only when reached
+  exit 2  two loops deep                   LEGAL — depth must be counted
+  class A from A                           caught at COMPILE time (C24) —
+                                           Ring already owns this one; no
+                                           checker rule needed
+```
+
+**And the boundary question that decides whether a rule is even sound:**
+`exit` inside a function whose *caller* is looping still raises R9 — the
+loop context is the executing function's own, not the dynamic caller's.
+That makes the check purely lexical, which makes it the rare rule that can
+promise **zero false positives**: a flagged statement raises in every
+execution that reaches it.
+
+Two rules shipped from this: `rpp/exit-outside-loop` (R9/R22) and
+`rpp/exit-bad-depth` (literal N outside 1..depth, R10/R23), the depth
+counted up to the enclosing function/anonymous-function/class boundary.
+
+**First corpus run: one real bug, zero noise.** Across 7,625 files of
+stzlib and Ring's own samples, one hit —
+`samples/Algorithms/breath_first_search.ring`, `exit(1)` on queue
+underflow. The C habit: the author meant "terminate the program"
+(`shutdown(1)` in Ring). The one branch written to handle failure is the
+one that will crash with the wrong error when failure finally happens —
+and it is exactly the branch no test ever takes, which is why it shipped.
+
+The general point is the template for a whole family: Ring's R-catalog
+(`vm.h:573` — 55 numbered runtime errors) is a checklist of everything the
+VM can refuse at runtime, and each entry can be asked one question: *is
+there a syntactic shape that guarantees this error?* Where yes, a
+zero-false-positive compile-time rule exists that Ring itself does not
+perform. See docs/CHECKER-FRONTIER.md for the full triage.
+
 ### F-44. In Ring, a local assignment costs about as much as a builtin call — so "fewer function calls" is not an optimisation on its own
 
 Measured 2026-08-28 on Ring 1.27, 5,000,000 iterations, minimum of 3,

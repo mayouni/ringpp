@@ -190,6 +190,33 @@ fn isForIn(for_stmt: ts.Node) bool {
     return false;
 }
 
+/// How many loops enclose `n` WITHIN its own function body.
+///
+/// The boundary matters and was verified before this was written: `exit`
+/// does not cross a call even at runtime. A function whose body is a bare
+/// `exit`, called from inside a caller's loop, still dies with R9 — the
+/// loop context is the executing function's own, not the dynamic caller's.
+/// So the climb stops at function_definition, anonymous_function and
+/// class_definition, and an `exit` inside an anonymous function defined
+/// INSIDE a loop is correctly depth 0: it will raise wherever it is called.
+fn loopDepthHere(n: ts.Node) u32 {
+    var depth: u32 = 0;
+    var cur = n.parent();
+    var hops: u32 = 0;
+    while (!cur.isNull() and hops < 128) : (hops += 1) {
+        const k = cur.kind();
+        if (std.mem.eql(u8, k, "for_statement") or
+            std.mem.eql(u8, k, "while_statement") or
+            std.mem.eql(u8, k, "do_again_statement")) depth += 1;
+        if (std.mem.eql(u8, k, "function_definition") or
+            std.mem.eql(u8, k, "anonymous_function") or
+            std.mem.eql(u8, k, "class_definition") or
+            std.mem.eql(u8, k, "source_file")) break;
+        cur = cur.parent();
+    }
+    return depth;
+}
+
 fn insideLoop(n: ts.Node) bool {
     var cur = n.parent();
     var depth: u32 = 0;
@@ -409,6 +436,39 @@ const Walker = struct {
         if (std.mem.eql(u8, kind, "binary_expression") and insideLoop(n)) {
             if (self.patchPatternAt(n)) {
                 try self.report.add(self.gpa, self.file, n, .adv, "rpp/advise-patch-rebuild", "rebuilding a string to patch it — RppBuffer.Poke writes in place", .{}, "left(s,o) + patch + substr(s,...) builds a WHOLE new string per patch: one 8-byte write into a 500 KB buffer copies 500 KB. RppBuffer.Poke is O(patch): measured 12.9x on the desktop and 49x on a phone (examples/01, F-38/F-40). The output is asserted byte-identical in example 01.");
+            }
+        }
+
+        // FINDINGS F-45: `exit` and `loop` outside a loop are RUNTIME errors
+        // (R9/R22) that Ring's compiler does not see — verified to ship
+        // silently inside an untaken branch. Purely syntactic here, so the
+        // one class of rule that can honestly claim zero false positives:
+        // there is no execution in which this statement does not raise.
+        if (std.mem.eql(u8, kind, "exit_statement") or std.mem.eql(u8, kind, "loop_statement")) {
+            const is_exit = kind[0] == 'e';
+            const depth = loopDepthHere(n);
+            if (depth == 0) {
+                if (is_exit) {
+                    try self.report.add(self.gpa, self.file, n, .err, "rpp/exit-outside-loop", "exit outside any loop — Error (R9) the moment this line runs", .{}, "Ring only checks this at RUNTIME, so it ships silently inside a branch that tests never take. `exit` does not cross a call boundary either: a function containing a bare exit raises R9 even when its caller is looping. See FINDINGS F-45.");
+                } else {
+                    try self.report.add(self.gpa, self.file, n, .err, "rpp/exit-outside-loop", "loop outside any loop — Error (R22) the moment this line runs", .{}, "Ring only checks this at RUNTIME, so it ships silently inside a branch that tests never take. `loop` does not cross a call boundary either — the loop context is the executing function's own. See FINDINGS F-45.");
+                }
+            } else {
+                // `exit N` / `loop N` with a literal N: the nesting depth is
+                // countable right here, so N outside 1..depth is R10/R23 with
+                // certainty. A non-literal argument is skipped — its value is
+                // the program's business.
+                var ci: u32 = 0;
+                while (ci < n.childCount()) : (ci += 1) {
+                    const ch = n.child(ci);
+                    if (std.mem.eql(u8, ch.kind(), "number")) {
+                        const v = std.fmt.parseInt(i64, std.mem.trim(u8, ch.text(), " \t"), 10) catch break;
+                        if (v < 1 or v > depth) {
+                            try self.report.add(self.gpa, self.file, ch, .err, "rpp/exit-bad-depth", "{s} {d} inside {d} loop(s) — Error ({s}) the moment this line runs", .{ if (is_exit) @as([]const u8, "exit") else "loop", v, depth, if (is_exit) @as([]const u8, "R10") else "R23" }, "The number names how many enclosing loops to leave, and there are not that many here. Ring checks the range only at RUNTIME, so this ships silently in an untaken branch. Counted lexically — `exit` cannot leave loops that live in a caller. See FINDINGS F-45.");
+                        }
+                        break;
+                    }
+                }
             }
         }
 

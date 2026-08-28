@@ -68,3 +68,15 @@ func AdvisablePaths aItems, cBuf
         cBuf = left(cBuf, i) + "ZZ" + substr(cBuf, i + 3)
     next
     return nSum + len(cBuf)
+
+func DeadLoopControls
+    # rpp/exit-outside-loop: R9 at runtime, invisible to Ring's compiler.
+    # The branch is untaken on purpose -- that is how these ship (F-45).
+    if 1 = 2
+        exit
+    ok
+    # rpp/exit-bad-depth: one loop deep, asks to leave nine (R10).
+    for i = 1 to 3
+        if i = 5 exit 9 ok
+    next
+    return 0
