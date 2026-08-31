@@ -393,12 +393,20 @@ module.exports = grammar({
 				),
 			),
 
+		// `on 1, 2, 3` matches ANY of the values. Ring accepts the syntax
+		// and matches only the FIRST, silently routing the rest to
+		// `other` -- verified on 1.27. The values are their own rule so
+		// the commas bind to them rather than to the statement list,
+		// which shares the same separator.
 		case_clause: ($) =>
 			seq(
 				choice(keyword("on"), keyword("case")),
-				$._expression,
+				field("values", $.case_values),
 				repeat($._statement),
 			),
+
+		case_values: ($) =>
+			prec.left(seq($._expression, repeat(seq(",", $._expression)))),
 
 		other_clause: ($) =>
 			seq(choice(keyword("other"), keyword("else")), repeat($._statement)),
@@ -409,14 +417,33 @@ module.exports = grammar({
 					keyword("try"),
 					optional("{"),
 					repeat($._statement),
-					$.catch_clause,
+					// Ring requires a catch. Ring++ also allows finally
+					// alone, because cleanup without recovery is a real
+					// shape and the error path is exactly where cleanup
+					// must be guaranteed (§2.17).
+					choice(
+						seq($.catch_clause, optional($.finally_clause)),
+						$.finally_clause,
+					),
 					choice(keyword("done"), keyword("end"), keyword("endtry"), "}"),
 				),
 			),
 
+		// `catch` alone, as Ring has it, or `catch(e)` binding the caught
+		// value. The parentheses are deliberate: `catch e` would be
+		// ambiguous with a catch body whose first statement begins with an
+		// identifier, and fighting that ambiguity buys nothing a reader
+		// wants -- every neighbouring language spells it this way.
 		catch_clause: ($) =>
-			seq(
+			prec(2, seq(
 				keyword("catch"),
+				optional(seq("(", field("binding", $.identifier), ")")),
+				repeat($._statement),
+			)),
+
+		finally_clause: ($) =>
+			seq(
+				keyword("finally"),
 				repeat($._statement),
 			),
 
