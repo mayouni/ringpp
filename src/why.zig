@@ -347,6 +347,31 @@ pub const catalog = [_]Entry{
             "case is only tidiness, not a defect.",
     },
     .{
+        .rule = "rpp/keyed-read-inserts",
+        .findings = &.{"F-49"},
+        .title = "A keyed read of a hash list INSERTS a missing key — and Ring++ does not",
+        .symptom = "aH = [ :name = \"ali\" ]  then  v = aH[:missing]  leaves len(aH) at 2, not 1: " ++
+            "the read created the entry. An existence test is a write, a typo in a key name " ++
+            "silently grows the data, and the second read of the same wrong key 'succeeds'. " ++
+            "It inserts on a plain list too: [1,2,3][\"k\"] makes it four long.",
+        .cause = "Ring keeps a hash index beside a list used as a hash and, on a miss, appends " ++
+            "the key with an empty value rather than answering absent. Raised on the Ring group " ++
+            "years ago and answered: it stands by design, so the only fix is at this layer. " ++
+            "The same index is not updated by a positional write — after h[3] = [\"zz\", 99] the " ++
+            "old key still answers, with the NEW pair's value, unverified.",
+        .fix = "Under Ring++ a read never writes: a missing key is \"\" and the list is untouched " ++
+            "(registered divergence map:M10). This rule names EVERY keyed read — a subscript with " ++
+            "a symbol or string-literal index that is not an assignment target — because the " ++
+            "charter makes naming the sites a precondition of changing their meaning. Where absence " ++
+            "is possible, guard with HasKey() or find() and the code means the same on both.",
+        .evidence = "scratchpad probes hash.ring and stale.ring on 1.27; rnx-spike bench/map.ring " ++
+            "A/B, 11 of 13 agree and the two that differ are registered; FINDINGS F-49",
+        .hurts = "It is broad on purpose. A static pass cannot know whether the key is present, so " ++
+            "it fires on reads that are perfectly safe — 7,474 sites across the whole Softanza " ++
+            "tree on the first sweep. That is why it is a .note and not a .warn: it is a map of " ++
+            "where meaning changes, not an accusation.",
+    },
+    .{
         .rule = "rpp/substr-in-loop",
         .findings = &.{ "F-6", "F-8" },
         .title = "substr() copies the whole string before taking the slice",

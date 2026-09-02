@@ -2093,3 +2093,64 @@ only knows numbers 1–3 will ship a regression.
 - Ring's `clock()` has **1 ms resolution** here, so any measurement
   under ~20 ms per repetition is a floor, not a value. Say "below the
   timer floor" rather than "0".
+
+### F-49. A keyed read inserts, and a positional write leaves Ring's key index stale — the two hash-list defects the map type was built against
+
+Measured 2026-09-02 on Ring 1.27 (`scratchpad/hash.ring`, `scratchpad/stale.ring`):
+
+```
+  h = [ :name = "ali" ]
+  v = h[:missing]                 returns "", and len 1 -> 2: the READ INSERTED
+  h7 = [ 1, 2, 3 ];  w = h7["k"]  "" and len 3 -> 4: it inserts on a PLAIN list too
+
+  h = twelve pairs k1..k12
+  h[3] = [ "zz", 99 ]             positional write of a pair
+  h["zz"]                         ""   -- the NEW key is invisible: the index is stale
+  h["k3"]                         99   -- the OLD key answers with the NEW pair's value,
+                                         unverified: the index maps k3 -> slot 3 and
+                                         returns whatever slot 3 now holds
+  len(h)                          13   -- and the failed read of "zz" inserted a pair
+```
+
+Two defects, one mechanism. Ring keeps a hash index beside a list used as
+a hash (`HashTable`/`HashItem` in Mahmoud's own structure table — this is
+why keyed lookup is flat at 0.15 µs from 10 to 5,000 entries, F-earlier).
+The index is keyed by position and is **not touched by a positional
+write**, so after `h[3] = [...]` the old key still points at slot 3 and
+the new key points nowhere. The read of the nowhere key then **inserts**,
+which is §2.2's insert-on-read: an existence test is a write, a typo grows
+the data, and the second read of the same wrong key "succeeds".
+
+**What Ring++ does instead** (charter §6.7, commit e89d14f in rnx-spike):
+the hash list stays a vector of pairs — `m[i][1]` and `m[i][2]` keep
+working for the 3,429 positional sites — with an open-addressing index
+beside it that is **dropped by any positional write or delete** and
+**re-checks the key on every hit**, so a stale slot can only miss. And a
+read never writes: a missing key is `""` and the list is left alone. Both
+differences are registered in `bench/ab-known.txt` as `map:M10` and
+`map:M11`, not hidden.
+
+**Measured against the charter's own gates, same probe on both sides:**
+
+```
+                                 Ring 1.27      Ring++
+  build 200,000 pairs             140 ms        18 ms
+  memory, build only             96.3 MB      32.7 MB    target < 20, withdraw > 40
+  lookup-only loop, 1M           1.08 µs      0.32 µs    target < 0.10
+```
+
+Memory: 2.9× less than Ring, under the withdrawal line, over the target —
+the claim stands as measured and the target is missed. Lookup: 3.4×
+faster and the 0.10 µs target is missed; the loop still carries an indexed
+read and two arithmetic operations per iteration and the pure lookup was
+not isolated, so **the speed claim is dropped rather than defended**, as
+the charter said it would be.
+
+**The rule.** `rpp/keyed-read-inserts` (`note`) names every keyed read —
+a subscript with a symbol or string-literal index that is not an
+assignment target — because the charter makes naming the sites a
+precondition of changing their meaning. It is deliberately broad: it
+cannot know whether the key is present, and says so. First sweep of the
+whole Softanza tree: **7,474 sites**. The charter's earlier figure of 592
+counted reads of keys that *may be absent*; this counts every keyed read,
+which is the honest scope for a rule that cannot see presence.

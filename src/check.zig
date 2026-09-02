@@ -364,6 +364,26 @@ const Walker = struct {
             try self.report.add(self.gpa, self.file, n, .note, "rpp/unparsed", "could not parse from here — no rules were applied to this file", .{}, "Either the file is not valid Ring, or the vendored grammar is behind Ring. Run `ring <file> -norun` to find out which. If Ring accepts it, that is a grammar bug for us to fix, not a problem with your code.");
         }
 
+        // FINDINGS F-49 / charter 6.7: on Ring 1.27 a keyed READ of a hash
+        // list INSERTS a missing key -- len 1 becomes 2, the read returns "",
+        // and the next read of the same wrong key "succeeds". Ring++ does
+        // not insert: a read never writes. The charter makes naming every
+        // such site a PRECONDITION of the map type, so the change of meaning
+        // is known before it happens rather than discovered after. A site
+        // is any subscript with a symbol or string-literal index that is
+        // not itself the target of an assignment. Deliberately broad: it
+        // cannot know whether the key is present, and says so.
+        if (std.mem.eql(u8, kind, "subscript_expression") and n.namedChildCount() >= 2) {
+            if (nameFromArg(n.namedChild(1))) |key| {
+                const par = n.parent();
+                const is_target = std.mem.eql(u8, par.kind(), "assignment_expression") and
+                    par.childCount() > 0 and par.child(0).startByte() == n.startByte();
+                if (!is_target) {
+                    try self.report.add(self.gpa, self.file, n, .note, "rpp/keyed-read-inserts", "keyed read of '{s}' -- on Ring 1.27 a MISSING key is inserted by this read", .{key}, "Reading a[:key] when the key is absent grows the list (len 1 -> 2), returns \"\", and makes the next read of the same wrong key succeed. Ring++ does not insert: a read never writes (charter 6.7). This site is named so the change of meaning is known before it happens; guard with HasKey() or find() where absence is possible. See FINDINGS F-49.");
+                }
+            }
+        }
+
         if (std.mem.eql(u8, kind, "call_expression")) {
             const callee = calleeName(n);
 
