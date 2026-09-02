@@ -9,3 +9,4 @@
 load "rpp/probe.ring"
 load "rpp/core.ring"
 load "rpp/idioms.ring"
+load "rpp/tui.ring"
