@@ -28,13 +28,23 @@ of this repository's own tests define a `func Check` assertion helper,
 and Ring refuses a second definition outright.
 
 Built widgets: `Window` `Label` `Entry` `Button` `Checkbox` `Radio`
-`Choice` `Table`. The **§9 open question is now answered**: `Table` draws
+`Choice` `Table` `Menu` `Status`. Every list-like widget — table, radio,
+choice, menu — navigates with the arrow keys under one rule, falling
+through to the neighbouring widget at its edges, with a digit still
+jumping straight to an item. The **§9 open question is now answered**: `Table` draws
 a minimal ASCII table in `rpp/tui.ring`, because commitment #1 forbids the
 library depending on Softanza — so `Show()` does *not* become the
 terminal renderer's `Table`. `Show()` remains the rich artist, reached
 through a Softanza-backed renderer, which is a different renderer on the
-same tree. Not yet built: `Text`, `Menu`, `Status`, `Row`, the callback
-form of `Run` (§4), and the browser renderer.
+same tree. Not yet built: `Text`, `Row`, the callback form of `Run`
+(§4), and the browser renderer.
+
+**RingPad's shell exists** (`examples/12-the-ringpad-shell`): a file list,
+an editor placeholder, a menu and a status line, looping — choose a
+command, the program acts, the next screen is drawn. It needs no callback:
+`Run` returns when a menu item is activated, so the loop is the
+application. What it does not have is the editing surface, and building
+the shell first is what now names precisely what `Text` must do.
 
 ## 1. What it is, in one sentence
 

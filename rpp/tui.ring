@@ -65,6 +65,19 @@ func Radio(cName, aOptions)
 func Choice(cName, aItems)
 	return [ :kind = "choice", :name = cName, :options = aItems ]
 
+### Menu: a list of commands. The model holds the chosen item's TEXT, and
+### choosing one ENDS the screen -- :change, :click and :submit, in that
+### order -- so the program can act on it and draw the next screen. That is
+### what makes a shell possible without the callback form of Run (§4).
+func Menu(cName, aItems)
+	return [ :kind = "menu", :name = cName, :options = aItems ]
+
+### Status: a line at the foot of the window, showing text the program
+### passes in. Not focusable and not in the model -- it is presentation, and
+### the program rebuilds the tree with new text when it has news.
+func Status(cText)
+	return [ :kind = "status", :text = cText ]
+
 ### Table: columns and rows, the model holding the SELECTED ROW number
 ### (0 = none). A digit selects a row in both renderers, so a line "2" and
 ### a key "2" leave the same model. Minimal by design: Softanza's Show()
@@ -124,6 +137,15 @@ func Run(oTree)
 			RppTuiPickRow(aModel, cName, nRows, cLine)
 			$RppEvents + [ :change, cName, aModel[cName] ]
 			RppTuiDraw(oTree, aModel)
+		but cKind = "menu"
+			cName = oKid[:name]
+			aOpts = oKid[:options]
+			cLine = RppTuiRead(cName + " [1-" + len(aOpts) + "]> ")
+			RppTuiPick(aModel, cName, aOpts, cLine)
+			$RppEvents + [ :change, cName, aModel[cName] ]
+			$RppEvents + [ :click, aModel[cName], "" ]
+			$RppEvents + [ :submit, "", "" ]
+			return aModel
 		but cKind = "button"
 			cLine = RppTuiRead("[" + oKid[:text] + "] Enter> ")
 			$RppEvents + [ :click, oKid[:text], "" ]
@@ -148,6 +170,8 @@ func RppTuiModel(aKids)
 			aModel + [ aKids[i][:name], 0 ]
 		but cKind = "table"
 			aModel + [ aKids[i][:name], 1 ]
+		but cKind = "menu"
+			aModel + [ aKids[i][:name], aKids[i][:options][1] ]
 		ok
 	next
 	return aModel
@@ -169,6 +193,43 @@ func RppTuiPick(aModel, cName, aOpts, c)
 	nSel = number(c)
 	if nSel >= 1 and nSel <= len(aOpts)
 		aModel[cName] = aOpts[nSel]
+	ok
+
+### The list-like widgets: a table, a radio group, a choice list, a menu.
+### They differ in what the model holds -- a row NUMBER for a table, the
+### item's TEXT for the rest -- so these three say "how long", "which one"
+### and "choose that one" without the callers caring which kind it is.
+func RppTuiIsList(cKind)
+	if cKind = "table" or cKind = "radio" or cKind = "choice" or cKind = "menu"
+		return 1
+	ok
+	return 0
+
+func RppTuiListLen(oKid)
+	if oKid[:kind] = "table"
+		return len(oKid[:rows])
+	ok
+	return len(oKid[:options])
+
+func RppTuiSelIndex(oKid, aModel)
+	if oKid[:kind] = "table"
+		return aModel[oKid[:name]]
+	ok
+	aOpts = oKid[:options]
+	cNow = aModel[oKid[:name]]
+	nOpts = len(aOpts)
+	for i = 1 to nOpts
+		if aOpts[i] = cNow
+			return i
+		ok
+	next
+	return 0
+
+func RppTuiSetSel(oKid, aModel, nIdx)
+	if oKid[:kind] = "table"
+		aModel[oKid[:name]] = nIdx
+	else
+		aModel[oKid[:name]] = oKid[:options][nIdx]
 	ok
 
 ### A digit selects a ROW by number; the model holds the number, not the
@@ -265,6 +326,9 @@ func RppTuiOptsLine(oKid, aModel)
 	if oKid[:kind] = "choice"
 		cOn = "[*] "
 		cOff = "[ ] "
+	but oKid[:kind] = "menu"
+		cOn = "> "
+		cOff = "  "
 	ok
 	cLine = oKid[:name] + ": "
 	nOpts = len(aOpts)
@@ -317,6 +381,10 @@ func RppTuiDraw(oTree, aModel)
 			see "  " + RppTuiOptsLine(oKid, aModel) + nl
 		but cKind = "table"
 			RppTuiTableShow(oKid, aModel, 0)
+		but cKind = "menu"
+			see "  " + RppTuiOptsLine(oKid, aModel) + nl
+		but cKind = "status"
+			see "  [ " + oKid[:text] + " ]" + nl
 		but cKind = "button"
 			see "  ( " + oKid[:text] + " )" + nl
 		ok
@@ -384,7 +452,7 @@ func RunKeys(oTree)
 	aModel = RppTuiModel(aKids)
 	aFocus = []
 	for i = 1 to nKids
-		if aKids[i][:kind] != "label"
+		if aKids[i][:kind] != "label" and aKids[i][:kind] != "status"
 			aFocus + i
 		ok
 	next
@@ -410,6 +478,11 @@ func RunKeys(oTree)
 					$RppEvents + [ :submit, "", "" ]
 					exit
 				ok
+			but cKind = "menu"
+				RppTuiLeave(oKid, aModel)
+				$RppEvents + [ :click, aModel[oKid[:name]], "" ]
+				$RppEvents + [ :submit, "", "" ]
+				exit
 			else
 				RppTuiLeave(oKid, aModel)
 				if nFocus < nF
@@ -417,8 +490,8 @@ func RunKeys(oTree)
 				ok
 			ok
 		but k = "<down>"
-			if cKind = "table" and aModel[oKid[:name]] < len(oKid[:rows])
-				aModel[oKid[:name]] = aModel[oKid[:name]] + 1
+			if RppTuiIsList(cKind) = 1 and RppTuiSelIndex(oKid, aModel) < RppTuiListLen(oKid)
+				RppTuiSetSel(oKid, aModel, RppTuiSelIndex(oKid, aModel) + 1)
 			else
 				RppTuiLeave(oKid, aModel)
 				if nFocus < nF
@@ -426,8 +499,8 @@ func RunKeys(oTree)
 				ok
 			ok
 		but k = "<up>"
-			if cKind = "table" and aModel[oKid[:name]] > 1
-				aModel[oKid[:name]] = aModel[oKid[:name]] - 1
+			if RppTuiIsList(cKind) = 1 and RppTuiSelIndex(oKid, aModel) > 1
+				RppTuiSetSel(oKid, aModel, RppTuiSelIndex(oKid, aModel) - 1)
 			else
 				RppTuiLeave(oKid, aModel)
 				if nFocus > 1
@@ -459,6 +532,8 @@ func RunKeys(oTree)
 				RppTuiPick(aModel, oKid[:name], oKid[:options], k)
 			but cKind = "table"
 				RppTuiPickRow(aModel, oKid[:name], len(oKid[:rows]), k)
+			but cKind = "menu"
+				RppTuiPick(aModel, oKid[:name], oKid[:options], k)
 			ok
 		ok
 		if $RppPlain = 0
@@ -531,6 +606,10 @@ func RppTuiDrawK(oTree, aModel, aFocus, nFocus)
 			ok
 			RppTuiTableShow(oKid, aModel, bF)
 			loop
+		but cKind = "menu"
+			see cMark + RppTuiOptsLine(oKid, aModel)
+		but cKind = "status"
+			see cMark + "[ " + oKid[:text] + " ]"
 		but cKind = "button"
 			see cMark + "( " + oKid[:text] + " )"
 		ok
