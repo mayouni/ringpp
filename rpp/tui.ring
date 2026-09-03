@@ -34,6 +34,9 @@ $RppEsc    = char(27)    # ANSI escape, cached: char() is a C call (F-4)
 $RppPlain  = 0           # 1 while scripted: no escape bytes in the output
 $RppTextRows = 6         # the terminal renderer's Text viewport (contract 6.2)
 $RppBsN    = char(92) + "n"   # a literal backslash-n, for one-line transcripts (6.1)
+$RppFocus  = ""          # the widget to focus first, by name; "" = the first one
+$RppScreenRow = 0        # the keystroke frame counts the lines it draws ...
+$RppCursorAt = []        # ... to put the console's cursor at [row, col], live only
 
 ### ---------------------------------------------------------- the tree
 
@@ -44,7 +47,14 @@ func Label(cText)
 	return [ :kind = "label", :text = cText ]
 
 func Entry(cName)
-	return [ :kind = "entry", :name = cName ]
+	return [ :kind = "entry", :name = cName, :value = "" ]
+
+### With(node, value): the node with its starting value -- what a previous
+### screen left, so a choice or a field carries across screens. Every value
+### widget sets :value in its constructor, so this only ever overwrites.
+func With(oNode, v)
+	oNode[:value] = v
+	return oNode
 
 func Button(cText, cEvent)
 	return [ :kind = "button", :text = cText, :event = cEvent ]
@@ -59,20 +69,20 @@ func Button(cText, cEvent)
 ### user function replaces a builtin process-wide, so -- like Entry for
 ### Input -- the library cannot take the name. Choice it is.
 func Checkbox(cName, cLabel)
-	return [ :kind = "check", :name = cName, :label = cLabel ]
+	return [ :kind = "check", :name = cName, :label = cLabel, :value = 0 ]
 
 func Radio(cName, aOptions)
-	return [ :kind = "radio", :name = cName, :options = aOptions ]
+	return [ :kind = "radio", :name = cName, :options = aOptions, :value = "" ]
 
 func Choice(cName, aItems)
-	return [ :kind = "choice", :name = cName, :options = aItems ]
+	return [ :kind = "choice", :name = cName, :options = aItems, :value = "" ]
 
 ### Menu: a list of commands. The model holds the chosen item's TEXT, and
 ### choosing one ENDS the screen -- :change, :click and :submit, in that
 ### order -- so the program can act on it and draw the next screen. That is
 ### what makes a shell possible without the callback form of Run (§4).
 func Menu(cName, aItems)
-	return [ :kind = "menu", :name = cName, :options = aItems ]
+	return [ :kind = "menu", :name = cName, :options = aItems, :value = aItems[1] ]
 
 ### Status: a line at the foot of the window, showing text the program
 ### passes in. Not focusable and not in the model -- it is presentation, and
@@ -110,7 +120,7 @@ func TextWith(cName, aDoc)
 ### Softanza-backed renderer -- a different renderer on the same tree, not
 ### this dependency-free foundation, which cannot load Softanza.
 func Table(cName, aColumns, aRows)
-	return [ :kind = "table", :name = cName, :columns = aColumns, :rows = aRows ]
+	return [ :kind = "table", :name = cName, :columns = aColumns, :rows = aRows, :value = 1 ]
 
 ### ---------------------------------------------------------- the renderer
 
@@ -218,15 +228,7 @@ func RppTuiModel(aKids)
 	nKids = len(aKids)
 	for i = 1 to nKids
 		cKind = aKids[i][:kind]
-		if cKind = "entry" or cKind = "radio" or cKind = "choice"
-			aModel + [ aKids[i][:name], "" ]
-		but cKind = "check"
-			aModel + [ aKids[i][:name], 0 ]
-		but cKind = "table"
-			aModel + [ aKids[i][:name], 1 ]
-		but cKind = "menu"
-			aModel + [ aKids[i][:name], aKids[i][:options][1] ]
-		but cKind = "text"
+		if cKind != "label" and cKind != "button" and cKind != "status"
 			aModel + [ aKids[i][:name], aKids[i][:value] ]
 		ok
 	next
@@ -356,6 +358,7 @@ func RppTuiTableShow(oKid, aModel, bFocus)
 	RppTuiTableLine("    " + cSep)
 
 func RppTuiTableLine(cStr)
+	$RppScreenRow = $RppScreenRow + 1   # not ++: Ring++ refuses $global++ today
 	see cStr
 	if $RppPlain = 0
 		see $RppEsc + "[K"
@@ -538,6 +541,14 @@ func RunKeys(oTree)
 	next
 	nFocus = 1
 	nF = len(aFocus)
+	if $RppFocus != ""
+		for j = 1 to nF
+			oF = aKids[ aFocus[j] ]
+			if oF[:kind] != "button" and oF[:name] = $RppFocus
+				nFocus = j
+			ok
+		next
+	ok
 
 	RppTuiDrawK(oTree, aModel, aFocus, nFocus)
 	while 1
@@ -597,6 +608,8 @@ func RunKeys(oTree)
 			RppTuiLeave(oKid, aModel)
 			if nFocus < nF
 				nFocus++
+			else
+				nFocus = 1
 			ok
 		but k = "<left>" or k = "<right>" or k = "<home>" or k = "<end>" or k = "<delete>"
 			if cKind = "text"
@@ -611,7 +624,7 @@ func RunKeys(oTree)
 					aModel[oKid[:name]] = left(cV, len(cV) - 1)
 				ok
 			ok
-		but len(k) = 1
+		but len(k) = 1 and ascii(k) >= 32
 			if cKind = "text"
 				RppTuiTextKey(oKid, aModel, k)
 			but cKind = "entry"
@@ -792,7 +805,13 @@ func RppTuiTextShow(oKid, aModel, bFocus)
 	for r = nTop to nBottom
 		cLine = aLines[r]
 		if r = nRow
-			cLine = left(cLine, nCol - 1) + "|" + RppTuiTail(cLine, nCol)
+			if bFocus = 1 and $RppPlain = 0
+				# live and focused: no glyph -- the console's own cursor is
+				# put here once the frame is drawn
+				$RppCursorAt = [ $RppScreenRow + 1, 4 + len("" + r) + 2 + nCol ]
+			else
+				cLine = left(cLine, nCol - 1) + "|" + RppTuiTail(cLine, nCol)
+			ok
 		ok
 		RppTuiTableLine("    " + r + ": " + cLine)
 	next
@@ -810,6 +829,8 @@ func RppTuiKey()
 ### cleared to its end, then everything below cleared -- no full clear,
 ### so nothing flickers. Still no geometry and no pixels (contract, 7.4).
 func RppTuiDrawK(oTree, aModel, aFocus, nFocus)
+	$RppScreenRow = 0
+	$RppCursorAt = []
 	cTitle = oTree[:title]
 	if $RppPlain = 0
 		see $RppEsc + "[H"
@@ -822,6 +843,7 @@ func RppTuiDrawK(oTree, aModel, aFocus, nFocus)
 		see $RppEsc + "[K"
 	ok
 	see nl
+	$RppScreenRow = 2
 	aKids = oTree[:children]
 	nKids = len(aKids)
 	nHere = aFocus[nFocus]
@@ -836,6 +858,9 @@ func RppTuiDrawK(oTree, aModel, aFocus, nFocus)
 			see cMark + oKid[:text]
 		but cKind = "entry"
 			see cMark + "[" + aModel[oKid[:name]] + "]"
+			if i = nHere and $RppPlain = 0
+				$RppCursorAt = [ $RppScreenRow + 1, len(aModel[oKid[:name]]) + 4 ]
+			ok
 		but cKind = "check"
 			see cMark + RppTuiBox(aModel[oKid[:name]]) + " " + oKid[:label]
 		but cKind = "radio" or cKind = "choice"
@@ -865,8 +890,14 @@ func RppTuiDrawK(oTree, aModel, aFocus, nFocus)
 			see $RppEsc + "[K"
 		ok
 		see nl
+		$RppScreenRow = $RppScreenRow + 1   # not ++: Ring++ refuses $global++ today
 	next
 	if $RppPlain = 0
 		see $RppEsc + "[J"
 	ok
 	see nl
+	# live: the console's own cursor goes where the focused field is edited,
+	# not at the foot of the frame (Mansour, on a live console, 2026-09-03)
+	if $RppPlain = 0 and len($RppCursorAt) = 2
+		see $RppEsc + "[" + $RppCursorAt[1] + ";" + $RppCursorAt[2] + "H"
+	ok

@@ -7,7 +7,9 @@
 # a menu item ACTIVATES it: Open loads the chosen file's lines, Save
 # stores yours, Undo restores the document as it was before your last
 # change -- history the program keeps, not the widget (contract 6.3) --
-# and Quit ends the session. The document carries from screen to screen.
+# and Quit ends the session. The document AND the chosen file carry from
+# screen to screen, and after the first screen the editor has the focus
+# -- Tab cycles to the file list and the menu and back.
 
 load "../../rpp/tui.ring"
 
@@ -25,15 +27,17 @@ func ShellSession()
 	cStatus = "ready"
 	aDoc = [ [ "" ], 1, 1 ]
 	aHist = []
+	cFile = ""
 	while 1
 		ui = Window("RingPad", [
 			Label("File"),
-			Choice(:file, $files),
+			With(Choice(:file, $files), cFile),
 			Label("Editor"),
 			TextWith(:doc, aDoc),
 			Menu(:cmd, [ "Open", "Save", "Undo", "Quit" ]),
 			Status(cStatus) ])
 		m = RunKeys(ui)
+		$RppFocus = :doc
 		cLog += RppSerialise(m, $RppEvents) + "#"
 		if RppTuiSerVal(m[:doc]) != RppTuiSerVal(aDoc)
 			aHist + aDoc
