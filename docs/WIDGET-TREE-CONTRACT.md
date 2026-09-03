@@ -14,6 +14,7 @@ what has been built against it since.*
 | 7.2 two renderers, one model | **PASS** — the line renderer on Ring 1.27 and the keystroke renderer on Ring++, fed the same session, serialise to byte-identical model + events (`rnx-spike bench/tui72.py`, run by its gate) |
 | 7.3 the Windows console | **measured and confirmed live** — see §7.3 |
 | 7.4 no pixel | holds — the two renderers use flow layout and ANSI only |
+| §9 Show() vs Table | **answered** — dependency-free renderer owns a minimal ASCII table; `Show()` is a Softanza-backed renderer's, a plug-in on the same tree |
 
 Built: `rpp/tui.ring` (the tree; `Run`, line-driven, Ring 1.27 and Ring++;
 `RunKeys`, keystroke-driven, Ring++ only, through the four builtins
@@ -24,8 +25,15 @@ to use itself is not one a library may take. The input widget is
 `input` and `list` are Ring builtins, and a user function replaces a
 builtin process-wide. The check box is **`Checkbox`**, not `Check` — three
 of this repository's own tests define a `func Check` assertion helper,
-and Ring refuses a second definition outright. Not yet built: `Text`,
-`Check`, `Radio`, `List`, `Table`, `Menu`, `Status`, `Row`, the callback
+and Ring refuses a second definition outright.
+
+Built widgets: `Window` `Label` `Entry` `Button` `Checkbox` `Radio`
+`Choice` `Table`. The **§9 open question is now answered**: `Table` draws
+a minimal ASCII table in `rpp/tui.ring`, because commitment #1 forbids the
+library depending on Softanza — so `Show()` does *not* become the
+terminal renderer's `Table`. `Show()` remains the rich artist, reached
+through a Softanza-backed renderer, which is a different renderer on the
+same tree. Not yet built: `Text`, `Menu`, `Status`, `Row`, the callback
 form of `Run` (§4), and the browser renderer.
 
 ## 1. What it is, in one sentence
