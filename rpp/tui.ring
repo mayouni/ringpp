@@ -35,6 +35,14 @@ $RppPlain  = 0           # 1 while scripted: no escape bytes in the output
 $RppTextRows = 6         # the terminal renderer's Text viewport (contract 6.2)
 $RppBsN    = char(92) + "n"   # a literal backslash-n, for one-line transcripts (6.1)
 $RppFocus  = ""          # the widget to focus first, by name; "" = the first one
+$RppOn     = 0           # the installed handler, when $RppHasOn = 1
+$RppHasOn  = 0           # a function value is not comparable to "", so a flag
+$RppClose  = 0           # the handler asked to close the window
+$RppModel  = []          # the live model, so a handler can read it (globals only)
+$RppLiveModel = []       # born HERE: on Ring 1.27 a $name first assigned inside
+                         # a function is a LOCAL of it (Rule A discipline)
+$RppSaid   = ""          # what RppSay() put in the status line, this run
+$RppSaidSet = 0
 $RppScreenRow = 0        # the keystroke frame counts the lines it draws ...
 $RppCursorAt = []        # ... to put the console's cursor at [row, col], live only
 
@@ -125,12 +133,14 @@ func Table(cName, aColumns, aRows)
 ### ---------------------------------------------------------- the renderer
 
 ### Run(tree) -> the model, when the submit button is pressed or the
-### children are exhausted. No callback in this first cut: Ring 1.27's
-### anonymous functions see only globals (measured, charter 4e), so a
-### handler that needs the model would need the model to be global. The
-### program reads what Run() returns, and $RppEvents for the history.
+### children are exhausted. The program reads what Run() returns, and
+### $RppEvents for the history. RunOn(tree, handler), below, is the
+### callback form: a handler that runs in place while the window is
+### still open, for when the program needs to react before the screen
+### ends rather than after.
 func Run(oTree)
 	$RppEvents = []
+	RppResetOn()
 	$RppPlain  = 0
 	if len($RppKeys) > 0
 		$RppPlain = 1
@@ -141,36 +151,41 @@ func Run(oTree)
 
 	# every widget that holds a value exists in the model BEFORE any read (F-49)
 	aModel = RppTuiModel(aKids)
+	$RppLiveModel = aModel
 
 	RppTuiDraw(oTree, aModel)
 	for i = 1 to nKids
+		if $RppClose = 1
+			exit
+		ok
 		oKid = aKids[i]
 		cKind = oKid[:kind]
+		$RppLiveModel = aModel
 		if cKind = "entry"
 			cName = oKid[:name]
 			cLine = RppTuiRead(cName + "> ")
 			aModel[cName] = cLine
-			$RppEvents + [ :change, cName, cLine ]
+			RppFire(:change, cName, cLine)
 			RppTuiDraw(oTree, aModel)
 		but cKind = "check"
 			cName = oKid[:name]
 			cLine = RppTuiRead(cName + " [y/n]> ")
 			aModel[cName] = RppTuiYes(cLine)
-			$RppEvents + [ :change, cName, aModel[cName] ]
+			RppFire(:change, cName, aModel[cName])
 			RppTuiDraw(oTree, aModel)
 		but cKind = "radio" or cKind = "choice"
 			cName = oKid[:name]
 			aOpts = oKid[:options]
 			cLine = RppTuiRead(cName + " [1-" + len(aOpts) + "]> ")
 			RppTuiPick(aModel, cName, aOpts, cLine)
-			$RppEvents + [ :change, cName, aModel[cName] ]
+			RppFire(:change, cName, aModel[cName])
 			RppTuiDraw(oTree, aModel)
 		but cKind = "table"
 			cName = oKid[:name]
 			nRows = len(oKid[:rows])
 			cLine = RppTuiRead(cName + " row [1-" + nRows + "]> ")
 			RppTuiPickRow(aModel, cName, nRows, cLine)
-			$RppEvents + [ :change, cName, aModel[cName] ]
+			RppFire(:change, cName, aModel[cName])
 			RppTuiDraw(oTree, aModel)
 		but cKind = "text"
 			# contract 6.4: the line-driven way to edit a buffer. Each line
@@ -199,28 +214,45 @@ func Run(oTree)
 				aDoc = [ aLines, nR, nC ]
 			ok
 			aModel[cName] = aDoc
-			$RppEvents + [ :change, cName, aDoc ]
+			RppFire(:change, cName, aDoc)
 			RppTuiDraw(oTree, aModel)
 		but cKind = "menu"
 			cName = oKid[:name]
 			aOpts = oKid[:options]
 			cLine = RppTuiRead(cName + " [1-" + len(aOpts) + "]> ")
 			RppTuiPick(aModel, cName, aOpts, cLine)
-			$RppEvents + [ :change, cName, aModel[cName] ]
-			$RppEvents + [ :click, aModel[cName], "" ]
-			$RppEvents + [ :submit, "", "" ]
+			RppFire(:change, cName, aModel[cName])
+			RppFire(:click, aModel[cName], "")
+			if $RppClose = 1
+				RppFire(:close, "", "")
+				return aModel
+			ok
+			RppFire(:submit, "", "")
 			return aModel
 		but cKind = "button"
 			cLine = RppTuiRead("[" + oKid[:text] + "] Enter> ")
-			$RppEvents + [ :click, oKid[:text], "" ]
+			RppFire(:click, oKid[:text], "")
+			if $RppClose = 1
+				RppFire(:close, "", "")
+				return aModel
+			ok
 			if oKid[:event] = :submit
-				$RppEvents + [ :submit, "", "" ]
+				RppFire(:submit, "", "")
 				return aModel
 			ok
 		ok
 	next
-	$RppEvents + [ :close, "", "" ]
+	RppFire(:close, "", "")
 	return aModel
+
+### Per-run handler state. The transcript is reset by the renderers; this
+### is everything else a handler touches.
+func RppResetOn()
+	$RppClose = 0
+	$RppSaid = ""
+	$RppSaidSet = 0
+	$RppModel = []
+	$RppLiveModel = []
 
 ### The model a tree starts with: "" for text and choices, 0 for a check.
 func RppTuiModel(aKids)
@@ -401,6 +433,58 @@ func RppTuiOptsLine(oKid, aModel)
 	next
 	return cLine
 
+### EVERY event passes through here: it is appended to the transcript and,
+### if a handler is installed, that handler is called with it. The handler
+### may return :close to close the window. Its arguments are the event,
+### spread -- kind, name, value -- so the same handler reads on both
+### runtimes without indexing a list.
+###
+### A HANDLER MAY USE GLOBALS AND NOTHING ELSE. Measured on both runtimes:
+### an anonymous function sees globals in each, but only Ring++ sees the
+### locals of the function that defined it -- Ring 1.27 raises R24. Writing
+### to a global is therefore the only way a handler can report anything
+### that both runtimes will run.
+func RppFire(cKind, cName, vVal)
+	$RppEvents + [ cKind, cName, vVal ]
+	if $RppHasOn = 1
+		$RppModel = $RppLiveModel
+		cAns = call $RppOn(cKind, cName, vVal)
+		if cAns = :close
+			$RppClose = 1
+		ok
+	ok
+
+### What a handler says: the status line shows this for the rest of the
+### run, in place of whatever text the Status widget was built with. It is
+### presentation and appears in no transcript, so it cannot move the gate.
+func RppSay(cText)
+	$RppSaid = cText
+	$RppSaidSet = 1
+
+### Run(tree, handler) and RunKeys(tree, handler) under their own names:
+### Ring checks parameter counts, so an optional second parameter is not
+### available to either runtime.
+func RunOn(oTree, fOn)
+	RppInstall(fOn, 1)
+	aM = Run(oTree)
+	RppInstall(0, 0)
+	return aM
+
+func RunKeysOn(oTree, fOn)
+	RppInstall(fOn, 1)
+	aM = RunKeys(oTree)
+	RppInstall(0, 0)
+	return aM
+
+### The caller says whether a handler is installed. NOT sniffed from the
+### value: measured 2026-09-03, an anonymous function on Ring 1.27 IS A
+### STRING -- type() says STRING, isstring() says 1, and its length is that
+### of a generated name -- so no predicate can tell a handler from a piece
+### of text. `call` works on it all the same, on both runtimes.
+func RppInstall(fOn, nOn)
+	$RppOn = fOn
+	$RppHasOn = nOn
+
 ### One line of input: the next scripted line if there is one, echoed so
 ### a transcript reads like a session; otherwise the keyboard.
 func RppTuiRead(cPrompt)
@@ -445,12 +529,20 @@ func RppTuiDraw(oTree, aModel)
 		but cKind = "text"
 			RppTuiTextShow(oKid, aModel, 0)
 		but cKind = "status"
-			see "  status: " + oKid[:text] + nl
+			see "  status: " + RppStatusText(oKid) + nl
 		but cKind = "button"
 			see "  ( " + oKid[:text] + " )" + nl
 		ok
 	next
 	see nl
+
+### What the status line shows: whatever a handler last said this run,
+### otherwise the text the widget was built with.
+func RppStatusText(oKid)
+	if $RppSaidSet = 1
+		return $RppSaid
+	ok
+	return oKid[:text]
 
 func RppTuiBox(nChecked)
 	if nChecked = 1
@@ -517,6 +609,7 @@ func RppTuiSerVal(v)
 ### once at the start and once at the end.
 func RunKeys(oTree)
 	$RppEvents = []
+	RppResetOn()
 	$RppPlain = 1
 	nLive = 0
 	if len($RppKeys) = 0
@@ -554,27 +647,36 @@ func RunKeys(oTree)
 	while 1
 		k = RppTuiKey()
 		if k = ""
-			$RppEvents + [ :close, "", "" ]
+			RppFire(:close, "", "")
 			exit
 		ok
 		oKid = aKids[ aFocus[nFocus] ]
 		cKind = oKid[:kind]
+		$RppLiveModel = aModel
 		if k = "<esc>"
-			$RppEvents + [ :close, "", "" ]
+			RppFire(:close, "", "")
 			exit
 		but k = "<enter>"
 			if cKind = "button"
-				$RppEvents + [ :click, oKid[:text], "" ]
+				RppFire(:click, oKid[:text], "")
+				if $RppClose = 1
+					RppFire(:close, "", "")
+					exit
+				ok
 				if oKid[:event] = :submit
-					$RppEvents + [ :submit, "", "" ]
+					RppFire(:submit, "", "")
 					exit
 				ok
 			but cKind = "text"
 				RppTuiTextKey(oKid, aModel, k)
 			but cKind = "menu"
 				RppTuiLeave(oKid, aModel)
-				$RppEvents + [ :click, aModel[oKid[:name]], "" ]
-				$RppEvents + [ :submit, "", "" ]
+				RppFire(:click, aModel[oKid[:name]], "")
+				if $RppClose = 1
+					RppFire(:close, "", "")
+					exit
+				ok
+				RppFire(:submit, "", "")
 				exit
 			else
 				RppTuiLeave(oKid, aModel)
@@ -643,6 +745,12 @@ func RunKeys(oTree)
 				RppTuiPick(aModel, oKid[:name], oKid[:options], k)
 			ok
 		ok
+		if $RppClose = 1
+			# the branches that close on a click fire :close and exit there,
+			# so reaching here means some other event closed the window
+			RppFire(:close, "", "")
+			exit
+		ok
 		if $RppPlain = 0
 			RppTuiDrawK(oTree, aModel, aFocus, nFocus)
 		ok
@@ -660,7 +768,7 @@ func RunKeys(oTree)
 ### renderer's event log byte-identical to the line renderer's.
 func RppTuiLeave(oKid, aModel)
 	if oKid[:kind] != "button"
-		$RppEvents + [ :change, oKid[:name], aModel[oKid[:name]] ]
+		RppFire(:change, oKid[:name], aModel[oKid[:name]])
 	ok
 
 ### One key applied to a Text (contract 6.4). The model value is copied
@@ -882,7 +990,7 @@ func RppTuiDrawK(oTree, aModel, aFocus, nFocus)
 			RppTuiTextShow(oKid, aModel, bF)
 			loop
 		but cKind = "status"
-			see cMark + "status: " + oKid[:text]
+			see cMark + "status: " + RppStatusText(oKid)
 		but cKind = "button"
 			see cMark + "( " + oKid[:text] + " )"
 		ok

@@ -41,8 +41,13 @@ a minimal ASCII table in `rpp/tui.ring`, because commitment #1 forbids the
 library depending on Softanza — so `Show()` does *not* become the
 terminal renderer's `Table`. `Show()` remains the rich artist, reached
 through a Softanza-backed renderer, which is a different renderer on the
-same tree. Not yet built: `Row`, the callback form of `Run` (§4), and
-the browser renderer. `Text`'s two open questions were settled in
+same tree. Gate 7.2 judges six trees, one of them the callback form
+itself (`examples/14-a-handler-in-place`): `RunOn`/`RunKeysOn` call a
+handler as each event happens, a handler may use globals and nothing
+else (Ring++ additionally sees the definer's locals; the contract takes
+the intersection, §4), and its own gate asserts the handler's log,
+the live-model read mid-run, and the early `:close`. Not yet built:
+`Row` and the browser renderer. `Text`'s two open questions were settled in
 §6.1–6.5 before any of it was written, and the widget was then built to
 them; building it put one ordinary line of Ring through the Ring++
 compiler and found two defects there (an assignment whose right side
@@ -147,19 +152,44 @@ tranche:
 | `:key` | a key the widgets did not consume | the key |
 | `:close` | the window is closing | nothing |
 
-The program handles them in one place:
+Two ways to receive them, and both are real, not one sketched and one
+built. `Run(tree)` blocks, drives the renderer, and returns the model
+when the window closes — the program handles what happened afterwards.
+`RunOn(tree, handler)` (`RunKeysOn` for the keystroke renderer) calls the
+handler **as each event happens, while the window is still open**, which
+is what lets a program answer in the status line or close the window
+mid-screen instead of only after it:
 
 ```ring
-on = func(ev) {
-    if ev[1] = :submit
-        ? "hello " + $model[:name]
+on = func cKind, cName, vVal {
+    if cKind = :click and cName = "Save"
+        RppSay("saved " + $RppModel[:file])
+        return :close
     ok
+    return ""
 }
-Run($ui, on)
+m = RunOn($ui, on)
 ```
 
-`Run` blocks, drives the renderer, and returns on `:close`. There is no
-`exec()`, no `app` object, no callbacks-as-strings.
+**Measured on both runtimes, 2026-09-03: a handler may use globals and
+nothing else.** `call` on a function value works identically on Ring
+1.27 and Ring++, and both see globals from inside the handler — but only
+Ring++ sees the *locals of the function that defined it*; Ring 1.27
+raises R24. Ring++ is the more capable runtime here, and the contract
+takes the **intersection**: a handler reads the live model through
+`$RppModel`, writes its own globals, and says what it wants shown with
+`RppSay(cText)` — never a closed-over local. Code written to that
+intersection runs identically on both; code that closes over a local
+runs on Ring++ and fails on Ring 1.27, which is a real asymmetry, stated
+here rather than discovered later.
+
+The handler's arguments are the event **spread** — kind, name, value —
+not a list, so the same handler reads on both runtimes without indexing.
+Returning `:close` ends the window immediately, wherever the screen was;
+any other return continues it. There is no `exec()`, no `app` object, no
+callbacks-as-strings, and — Ring having no way to pass a *named* function
+as a value — the handler is always a function literal assigned to a
+global, called with `call`.
 
 ## 5. The renderer interface
 
