@@ -19,7 +19,7 @@ $ui = Window("Pick a city", [
 		[ "Tunis",  "Tunisia" ],
 		[ "Niamey", "Niger" ] ]),
 	Button("OK", :submit) ])
-$RppKeys = [ "3", "<enter>", "<enter>" ]
+$RppKeys = [ "<down>", "<down>", "<enter>", "<enter>" ]
 $m = RunKeys($ui)
 ? "picked row " + $m[:city]
 ? "serial: " + RppSerialise($m, $RppEvents)

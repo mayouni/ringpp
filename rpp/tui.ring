@@ -144,8 +144,10 @@ func RppTuiModel(aKids)
 		cKind = aKids[i][:kind]
 		if cKind = "entry" or cKind = "radio" or cKind = "choice"
 			aModel + [ aKids[i][:name], "" ]
-		but cKind = "check" or cKind = "table"
+		but cKind = "check"
 			aModel + [ aKids[i][:name], 0 ]
+		but cKind = "table"
+			aModel + [ aKids[i][:name], 1 ]
 		ok
 	next
 	return aModel
@@ -185,7 +187,7 @@ func RppTuiPickRow(aModel, cName, nRows, c)
 ### line so a focused table can shift under its mark. Each line ends the
 ### way the frames do: ESC[K then nl when drawing live, nl alone when
 ### scripted.
-func RppTuiTableShow(oKid, aModel, cIndent)
+func RppTuiTableShow(oKid, aModel, bFocus)
 	aCols = oKid[:columns]
 	aRows = oKid[:rows]
 	nCols = len(aCols)
@@ -208,27 +210,33 @@ func RppTuiTableShow(oKid, aModel, cIndent)
 		cSep += copy("-", aW[j] + 2) + "+"
 	next
 
-	RppTuiTableLine(cIndent + "  " + cSep)
+	RppTuiTableLine("    " + cSep)
 	cH = "|"
 	for j = 1 to nCols
 		cH += " " + RppTuiPad("" + aCols[j], aW[j]) + " |"
 	next
-	RppTuiTableLine(cIndent + "  " + cH)
-	RppTuiTableLine(cIndent + "  " + cSep)
+	RppTuiTableLine("    " + cH)
+	RppTuiTableLine("    " + cSep)
 
+	# the selected row: "> " when this table has the focus (its arrows are
+	# live), "* " when it does not but the selection still stands.
+	cSelMark = "* "
+	if bFocus = 1
+		cSelMark = "> "
+	ok
 	nSel = aModel[oKid[:name]]
 	for r = 1 to nRows
 		cRowMark = "  "
 		if r = nSel
-			cRowMark = "> "
+			cRowMark = cSelMark
 		ok
 		cRow = "|"
 		for j = 1 to nCols
 			cRow += " " + RppTuiPad("" + aRows[r][j], aW[j]) + " |"
 		next
-		RppTuiTableLine(cIndent + cRowMark + cRow)
+		RppTuiTableLine("  " + cRowMark + cRow)
 	next
-	RppTuiTableLine(cIndent + "  " + cSep)
+	RppTuiTableLine("    " + cSep)
 
 func RppTuiTableLine(cStr)
 	see cStr
@@ -308,7 +316,7 @@ func RppTuiDraw(oTree, aModel)
 		but cKind = "radio" or cKind = "choice"
 			see "  " + RppTuiOptsLine(oKid, aModel) + nl
 		but cKind = "table"
-			RppTuiTableShow(oKid, aModel, "  ")
+			RppTuiTableShow(oKid, aModel, 0)
 		but cKind = "button"
 			see "  ( " + oKid[:text] + " )" + nl
 		ok
@@ -408,15 +416,28 @@ func RunKeys(oTree)
 					nFocus++
 				ok
 			ok
-		but k = "<tab>" or k = "<down>"
+		but k = "<down>"
+			if cKind = "table" and aModel[oKid[:name]] < len(oKid[:rows])
+				aModel[oKid[:name]] = aModel[oKid[:name]] + 1
+			else
+				RppTuiLeave(oKid, aModel)
+				if nFocus < nF
+					nFocus++
+				ok
+			ok
+		but k = "<up>"
+			if cKind = "table" and aModel[oKid[:name]] > 1
+				aModel[oKid[:name]] = aModel[oKid[:name]] - 1
+			else
+				RppTuiLeave(oKid, aModel)
+				if nFocus > 1
+					nFocus--
+				ok
+			ok
+		but k = "<tab>"
 			RppTuiLeave(oKid, aModel)
 			if nFocus < nF
 				nFocus++
-			ok
-		but k = "<up>"
-			RppTuiLeave(oKid, aModel)
-			if nFocus > 1
-				nFocus--
 			ok
 		but k = "<backspace>"
 			if cKind = "entry"
@@ -504,7 +525,11 @@ func RppTuiDrawK(oTree, aModel, aFocus, nFocus)
 		but cKind = "radio" or cKind = "choice"
 			see cMark + RppTuiOptsLine(oKid, aModel)
 		but cKind = "table"
-			RppTuiTableShow(oKid, aModel, cMark)
+			bF = 0
+			if i = nHere
+				bF = 1
+			ok
+			RppTuiTableShow(oKid, aModel, bF)
 			loop
 		but cKind = "button"
 			see cMark + "( " + oKid[:text] + " )"
