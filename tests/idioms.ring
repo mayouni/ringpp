@@ -89,7 +89,7 @@ func main
 	oM = RppIndexed(aM)
 	aM + 9999
 	Check("mutation makes Release return FALSE", oM.Release(aM) = FALSE)
-	Check("and leaves advice", len(RPP_ADVICE) = 1)
+	Check("and leaves advice", len($RPP_ADVICE) = 1)
 
 	### ---- the caveat is stated, not hidden ----
 	Check("caveat names sort()", substr(oIdx.Caveat(), "sort()") > 0)

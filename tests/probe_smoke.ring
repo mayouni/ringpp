@@ -8,7 +8,7 @@ func main
 	RppReport()
 	? ""
 	if RppOk()
-		? "PROBE OK — " + len(RPP_PROBES) + " rows on this Ring"
+		? "PROBE OK — " + len($RPP_PROBES) + " rows on this Ring"
 	else
 		? "PROBE FAILED — a HARD row did not hold; Ring++ is not supported here"
 	ok

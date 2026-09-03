@@ -9,23 +9,23 @@
 ### Getting this wrong produces "Calling Function without definition" at a
 ### call site that looks perfectly correct.
 
-RPP_ADVICE = []          # collected at runtime; RppAdvise() prints it
+$RPP_ADVICE = []          # collected at runtime; RppAdvise() prints it
 
 func RppAdviseAdd cWhere, cText
-	RPP_ADVICE + [cWhere, cText]
+	$RPP_ADVICE + [cWhere, cText]
 
 func RppAdvise
-	if len(RPP_ADVICE) = 0
+	if len($RPP_ADVICE) = 0
 		? "Ring++ advice: nothing to report."
 		return
 	ok
-	? "Ring++ advice — " + len(RPP_ADVICE) + " item(s)"
-	for aA in RPP_ADVICE
+	? "Ring++ advice — " + len($RPP_ADVICE) + " item(s)"
+	for aA in $RPP_ADVICE
 		? "  " + aA[1] + ": " + aA[2]
 	next
 
 func RppAdviceClear
-	RPP_ADVICE = []
+	$RPP_ADVICE = []
 
 func RppIndexed aList
 	return new RppIndexed(aList)
@@ -84,10 +84,10 @@ class RppIndexed
 
 	func init aList
 		nSizeAtOpen = len(aList)
-		if nSizeAtOpen < RPP_INDEX_MIN_SIZE
+		if nSizeAtOpen < $RPP_INDEX_MIN_SIZE
 			lApplied = FALSE
 			cWhy = "list has " + nSizeAtOpen + " items; below " +
-			       RPP_INDEX_MIN_SIZE + " the cursor walk is cheaper than the array"
+			       $RPP_INDEX_MIN_SIZE + " the cursor walk is cheaper than the array"
 			return
 		ok
 		ringvm_genarray(aList)

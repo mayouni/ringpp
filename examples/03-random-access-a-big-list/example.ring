@@ -103,7 +103,7 @@ ok
 ### ------------------------------------------------------ the honest half
 
 ? "Where this LOSES:"
-? "  Below " + RPP_INDEX_MIN_SIZE + " items RppIndexed REFUSES -- the walk is cheaper than"
+? "  Below " + $RPP_INDEX_MIN_SIZE + " items RppIndexed REFUSES -- the walk is cheaper than"
 ? "  the array. It tells you why rather than pretending to help."
 ? "  Worse: if you MUTATE the list during the phase, every append frees"
 ? "  the array and it is rebuilt on the next read. Write-heavy code pays"

@@ -78,7 +78,7 @@ func main
 	### ============ (b) sequential append — the LOSS ============
 	? ""
 	? "=== building 1 MB by appending, at several chunk sizes ==="
-	? "  (RPP_POKE_CROSSOVER = " + RPP_POKE_CROSSOVER + " bytes)"
+	? "  (RPP_POKE_CROSSOVER = " + $RPP_POKE_CROSSOVER + " bytes)"
 	? ""
 	? "  chunk    concat     Poke    ratio   verdict"
 
@@ -113,7 +113,7 @@ func main
 	next
 
 	? ""
-	? "  Honest reading: below " + RPP_POKE_CROSSOVER + " bytes per write, ordinary"
+	? "  Honest reading: below " + $RPP_POKE_CROSSOVER + " bytes per write, ordinary"
 	? "  Ring concatenation beats RppBuffer. Ring's string append already"
 	? "  doubles its capacity, so += is amortised O(1). RppBuffer is for"
 	? "  random-access writes and zero-copy reads, not for building strings."

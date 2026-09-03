@@ -16,14 +16,14 @@
 
 ### Two different crossovers. They are two orders of magnitude apart, and
 ### confusing them is how you ship a regression (docs/PHASE_PLAN.md P2).
-RPP_MEMCPY_CROSSOVER = 512     # RAW memcpy vs +=, chunk size (FINDINGS F-8)
-RPP_POKE_CROSSOVER   = 65536   # the CHECKED API vs +=: a method call costs
+$RPP_MEMCPY_CROSSOVER = 512     # RAW memcpy vs +=, chunk size (FINDINGS F-8)
+$RPP_POKE_CROSSOVER   = 65536   # the CHECKED API vs +=: a method call costs
                                # ~340 ns against raw memcpy's ~280 ns, so Poke
                                # only wins on very large chunks. Building a
                                # string? Use +=. Poke is for random access.
-RPP_INDEX_MIN_READS  = 20      # reads per mutation for genarray to pay (F-10)
-RPP_INDEX_MIN_SIZE   = 64      # below this the cursor walk beats the array
-RPP_NUL_BYTE         = char(0)   # cached: char() is a C call (F-4)
+$RPP_INDEX_MIN_READS  = 20      # reads per mutation for genarray to pay (F-10)
+$RPP_INDEX_MIN_SIZE   = 64      # below this the cursor walk beats the array
+$RPP_NUL_BYTE         = char(0)   # cached: char() is a C call (F-4)
 
 func RppBuffer nBytes
 	return new RppBuffer(nBytes)
@@ -81,7 +81,7 @@ class RppBuffer
 		nRppCap = nBytes
 		pRppScratch = nullptr()
 		pRppSrcPtr  = nullptr()
-		cRppNul     = RPP_NUL_BYTE
+		cRppNul     = $RPP_NUL_BYTE
 
 	func Capacity
 		return nRppCap

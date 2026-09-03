@@ -54,7 +54,7 @@ func PayloadFor nKind, nLen, i
 	on 0                                    # ordinary text
 		return left(copy("abcdefgh", nLen), nLen)
 	on 1                                    # leading zero byte -- F-14
-		return left(RPP_NUL_BYTE + copy("Z", nLen), nLen)
+		return left($RPP_NUL_BYTE + copy("Z", nLen), nLen)
 	on 2                                    # the literal "NULL"
 		if nLen >= 4 return "NULL" ok
 		return left("NULL", nLen)
@@ -63,7 +63,7 @@ func PayloadFor nKind, nLen, i
 	on 4                                    # packed double, arbitrary bytes
 		return left(double2bytes(i * 0.5), nLen)
 	on 5                                    # all zeros
-		return copy(RPP_NUL_BYTE, nLen)
+		return copy($RPP_NUL_BYTE, nLen)
 	other
 		return left(copy("0123456789", nLen), nLen)
 	off
@@ -81,13 +81,13 @@ func RegressionShapes
 	# Before the fix this killed the process outright, with no message.
 	oB = RppBuffer(16)
 	oB.Poke(0, "NULL")
-	oB.Poke(4, RPP_NUL_BYTE)
+	oB.Poke(4, $RPP_NUL_BYTE)
 	oB.Grow(33)
 	if oB.Peek(0, 4) != "NULL" nBad++ ? "  FAIL: F-31 NULL<0> then Grow" ok
 
 	# the same shape written in one call rather than assembled
 	oC = RppBuffer(32)
-	oC.Poke(0, "NULL" + RPP_NUL_BYTE + copy("x", 27))
+	oC.Poke(0, "NULL" + $RPP_NUL_BYTE + copy("x", 27))
 	if oC.Peek(0, 4) != "NULL" nBad++ ? "  FAIL: F-31 single-call NULL<0>" ok
 	if oC.Peek(5, 3) != "xxx" nBad++ ? "  FAIL: F-31 tail after NULL<0>" ok
 
@@ -100,7 +100,7 @@ func RegressionShapes
 	oE = RppBuffer(8)
 	oE.Poke(0, "NULL")
 	if oE.Peek(0, 4) != "NULL" nBad++ ? "  FAIL: literal 4-byte NULL" ok
-	oE.Poke(4, RPP_NUL_BYTE + "abc")
+	oE.Poke(4, $RPP_NUL_BYTE + "abc")
 	if ascii(oE.Peek(4, 1)) != 0 nBad++ ? "  FAIL: leading zero byte" ok
 
 	# a buffer that is nothing but zeros, grown
@@ -111,7 +111,7 @@ func RegressionShapes
 
 	# Grow must preserve every byte, including a zero in the middle
 	oG = RppBuffer(8)
-	oG.Poke(0, "ab" + RPP_NUL_BYTE + "cdefg")
+	oG.Poke(0, "ab" + $RPP_NUL_BYTE + "cdefg")
 	cBefore = oG.Peek(0, 8)
 	oG.Grow(17)
 	if oG.Peek(0, 8) != cBefore nBad++ ? "  FAIL: Grow changed the old bytes" ok
@@ -370,7 +370,7 @@ func DifferentialIndexed
 	oT = RppIndexed(aTiny)
 	if oT.Applied()
 		nBad++ ? "  FAIL: an 8-item list took the index (floor is " +
-		         RPP_INDEX_MIN_SIZE + ")"
+		         $RPP_INDEX_MIN_SIZE + ")"
 	ok
 	if len(oT.Why()) = 0 nBad++ ? "  FAIL: Why() was empty on a declined phase" ok
 	if oT.Release(aTiny)
@@ -386,7 +386,7 @@ func DifferentialIndexed
 	if oG.Release(aGrow)
 		nBad++ ? "  FAIL: Release() said valid after an append"
 	ok
-	if len(RPP_ADVICE) = 0
+	if len($RPP_ADVICE) = 0
 		nBad++ ? "  FAIL: an append during the phase produced no advice"
 	ok
 
