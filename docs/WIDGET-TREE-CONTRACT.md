@@ -28,7 +28,12 @@ of this repository's own tests define a `func Check` assertion helper,
 and Ring refuses a second definition outright.
 
 Built widgets: `Window` `Label` `Entry` `Button` `Checkbox` `Radio`
-`Choice` `Table` `Menu` `Status`. Every list-like widget — table, radio,
+`Choice` `Table` `Menu` `Status` `Text`. **`Text` is built to §6.1–6.5
+exactly** — the model shape, the renderer-owned scrollport, no undo in
+the widget, Enter as a line break — and `examples/13-a-text-to-edit`
+asserts the shape field by field, the serialisation byte for byte, the
+keystroke-only session against a hand-worked result, and its replay.
+Gate 7.2 judges five trees. Every list-like widget — table, radio,
 choice, menu — navigates with the arrow keys under one rule, falling
 through to the neighbouring widget at its edges, with a digit still
 jumping straight to an item. The **§9 open question is now answered**: `Table` draws
@@ -36,12 +41,13 @@ a minimal ASCII table in `rpp/tui.ring`, because commitment #1 forbids the
 library depending on Softanza — so `Show()` does *not* become the
 terminal renderer's `Table`. `Show()` remains the rich artist, reached
 through a Softanza-backed renderer, which is a different renderer on the
-same tree. Not yet built: `Text`, `Row`, the callback form of `Run`
-(§4), and the browser renderer. **`Text`'s two open questions are
-settled** in §6.1–6.5, before any of it is written: the model shape is
-fixed, the scrollport is renderer state, undo is the application's, Enter
-means a line break, and §6.5 says which half of `Text` the parity gate
-can honestly cover.
+same tree. Not yet built: `Row`, the callback form of `Run` (§4), and
+the browser renderer. `Text`'s two open questions were settled in
+§6.1–6.5 before any of it was written, and the widget was then built to
+them; building it put one ordinary line of Ring through the Ring++
+compiler and found two defects there (an assignment whose right side
+read its own target late, and every `+` classified as a number), both
+fixed and both now regression probes.
 
 **RingPad's shell exists** (`examples/12-the-ringpad-shell`): a file list,
 an editor placeholder, a menu and a status line, looping — choose a

@@ -32,6 +32,8 @@ $RppKeys   = []          # scripted lines; empty means "use the keyboard"
 $RppEvents = []          # every [kind, name, value] the renderer produced
 $RppEsc    = char(27)    # ANSI escape, cached: char() is a C call (F-4)
 $RppPlain  = 0           # 1 while scripted: no escape bytes in the output
+$RppTextRows = 6         # the terminal renderer's Text viewport (contract 6.2)
+$RppBsN    = char(92) + "n"   # a literal backslash-n, for one-line transcripts (6.1)
 
 ### ---------------------------------------------------------- the tree
 
@@ -84,6 +86,14 @@ func Menu(cName, aItems)
 ### what it is.
 func Status(cText)
 	return [ :kind = "status", :text = cText ]
+
+### Text: the multi-line editor, built to contract 6.1-6.5. The model
+### holds [ aLines, nRow, nCol ] -- lines as a list of strings, the cursor
+### as a 1-based row and the column BEFORE which it sits. Inside a Text,
+### Enter is a line break and Tab leaves (6.4). No undo here (6.3): history
+### is the program's, because it is history OF THE MODEL.
+func Text(cName)
+	return [ :kind = "text", :name = cName ]
 
 ### Table: columns and rows, the model holding the SELECTED ROW number
 ### (0 = none). A digit selects a row in both renderers, so a line "2" and
@@ -144,6 +154,30 @@ func Run(oTree)
 			RppTuiPickRow(aModel, cName, nRows, cLine)
 			$RppEvents + [ :change, cName, aModel[cName] ]
 			RppTuiDraw(oTree, aModel)
+		but cKind = "text"
+			# contract 6.4: the line-driven way to edit a buffer. Each line
+			# is one prompt; a blank line ends the field; the cursor ends
+			# after the last character of the last line.
+			cName = oKid[:name]
+			aLines = []
+			nLine = 1
+			while 1
+				cLine = RppTuiRead(cName + " [line " + nLine + "]> ")
+				if cLine = ""
+					exit
+				ok
+				aLines + cLine
+				nLine++
+			end
+			if len(aLines) = 0
+				aLines + ""
+			ok
+			nR = len(aLines)
+			nC = len(aLines[nR]) + 1
+			aDoc = [ aLines, nR, nC ]
+			aModel[cName] = aDoc
+			$RppEvents + [ :change, cName, aDoc ]
+			RppTuiDraw(oTree, aModel)
 		but cKind = "menu"
 			cName = oKid[:name]
 			aOpts = oKid[:options]
@@ -179,6 +213,9 @@ func RppTuiModel(aKids)
 			aModel + [ aKids[i][:name], 1 ]
 		but cKind = "menu"
 			aModel + [ aKids[i][:name], aKids[i][:options][1] ]
+		but cKind = "text"
+			aDoc = [ [ "" ], 1, 1 ]
+			aModel + [ aKids[i][:name], aDoc ]
 		ok
 	next
 	return aModel
@@ -390,6 +427,8 @@ func RppTuiDraw(oTree, aModel)
 			RppTuiTableShow(oKid, aModel, 0)
 		but cKind = "menu"
 			see "  " + RppTuiOptsLine(oKid, aModel) + nl
+		but cKind = "text"
+			RppTuiTextShow(oKid, aModel, 0)
 		but cKind = "status"
 			see "  status: " + oKid[:text] + nl
 		but cKind = "button"
@@ -413,14 +452,36 @@ func RppSerialise(aModel, aEvents)
 	cOut = "model:"
 	nM = len(aModel)
 	for i = 1 to nM
-		cOut += aModel[i][1] + "=" + aModel[i][2] + "|"
+		cOut += aModel[i][1] + "=" + RppTuiSerVal(aModel[i][2]) + "|"
 	next
 	cOut += "events:"
 	nE = len(aEvents)
 	for i = 1 to nE
-		cOut += aEvents[i][1] + "," + aEvents[i][2] + "," + aEvents[i][3] + "|"
+		cOut += aEvents[i][1] + "," + aEvents[i][2] + "," + RppTuiSerVal(aEvents[i][3]) + "|"
 	next
 	return cOut
+
+### One value as transcript text. A string or a number is itself; a Text
+### value (contract 6.1) is row, col, then the lines joined by a LITERAL
+### backslash-n, so a multi-line buffer stays one line and the comparison
+### stays a byte comparison. Starts from "" so a number is never the left
+### operand of + (number + non-numeric string is R41 on 1.27, measured).
+func RppTuiSerVal(v)
+	if islist(v)
+		cOut = "" + v[2] + "," + v[3] + ","
+		aL = v[1]
+		# not nL: Ring identifiers are case-insensitive, and nL IS nl -- the
+		# newline constant -- which this overwrote with a line count (F-18).
+		nLines = len(aL)
+		for i = 1 to nLines
+			if i > 1
+				cOut += $RppBsN
+			ok
+			cOut += aL[i]
+		next
+		return cOut
+	ok
+	return "" + v
 
 ### ---------------------------------------------------------- the keystroke renderer
 
@@ -485,6 +546,8 @@ func RunKeys(oTree)
 					$RppEvents + [ :submit, "", "" ]
 					exit
 				ok
+			but cKind = "text"
+				RppTuiTextKey(oKid, aModel, k)
 			but cKind = "menu"
 				RppTuiLeave(oKid, aModel)
 				$RppEvents + [ :click, aModel[oKid[:name]], "" ]
@@ -497,7 +560,9 @@ func RunKeys(oTree)
 				ok
 			ok
 		but k = "<down>"
-			if RppTuiIsList(cKind) = 1 and RppTuiSelIndex(oKid, aModel) < RppTuiListLen(oKid)
+			if cKind = "text"
+				RppTuiTextKey(oKid, aModel, k)
+			but RppTuiIsList(cKind) = 1 and RppTuiSelIndex(oKid, aModel) < RppTuiListLen(oKid)
 				RppTuiSetSel(oKid, aModel, RppTuiSelIndex(oKid, aModel) + 1)
 			else
 				RppTuiLeave(oKid, aModel)
@@ -506,7 +571,9 @@ func RunKeys(oTree)
 				ok
 			ok
 		but k = "<up>"
-			if RppTuiIsList(cKind) = 1 and RppTuiSelIndex(oKid, aModel) > 1
+			if cKind = "text"
+				RppTuiTextKey(oKid, aModel, k)
+			but RppTuiIsList(cKind) = 1 and RppTuiSelIndex(oKid, aModel) > 1
 				RppTuiSetSel(oKid, aModel, RppTuiSelIndex(oKid, aModel) - 1)
 			else
 				RppTuiLeave(oKid, aModel)
@@ -519,15 +586,23 @@ func RunKeys(oTree)
 			if nFocus < nF
 				nFocus++
 			ok
+		but k = "<left>" or k = "<right>" or k = "<home>" or k = "<end>" or k = "<delete>"
+			if cKind = "text"
+				RppTuiTextKey(oKid, aModel, k)
+			ok
 		but k = "<backspace>"
-			if cKind = "entry"
+			if cKind = "text"
+				RppTuiTextKey(oKid, aModel, k)
+			but cKind = "entry"
 				cV = aModel[oKid[:name]]
 				if len(cV) > 0
 					aModel[oKid[:name]] = left(cV, len(cV) - 1)
 				ok
 			ok
 		but len(k) = 1
-			if cKind = "entry"
+			if cKind = "text"
+				RppTuiTextKey(oKid, aModel, k)
+			but cKind = "entry"
 				aModel[oKid[:name]] = aModel[oKid[:name]] + k
 			but cKind = "check"
 				if k = " "
@@ -562,6 +637,153 @@ func RppTuiLeave(oKid, aModel)
 	if oKid[:kind] != "button"
 		$RppEvents + [ :change, oKid[:name], aModel[oKid[:name]] ]
 	ok
+
+### One key applied to a Text (contract 6.4). The model value is copied
+### out, edited, and written back -- assignment copies a list on both
+### runtimes (measured 2026-09-03), so the write-back is what makes the
+### edit land. Line breaks and joins rebuild the line list rather than
+### insert into it, so nothing here needs a builtin the other runtime
+### might lack.
+func RppTuiTextKey(oKid, aModel, k)
+	cName = oKid[:name]
+	aDoc = aModel[cName]
+	aLines = aDoc[1]
+	nRow = aDoc[2]
+	nCol = aDoc[3]
+	nRows = len(aLines)
+	cLine = aLines[nRow]
+	nLen = len(cLine)
+	if k = "<enter>"
+		cBefore = left(cLine, nCol - 1)
+		cAfter = RppTuiTail(cLine, nCol)
+		aNew = []
+		for i = 1 to nRows
+			if i = nRow
+				aNew + cBefore
+				aNew + cAfter
+			else
+				aNew + aLines[i]
+			ok
+		next
+		aLines = aNew
+		nRow++
+		nCol = 1
+	but k = "<backspace>"
+		if nCol > 1
+			aLines[nRow] = left(cLine, nCol - 2) + RppTuiTail(cLine, nCol)
+			nCol--
+		but nRow > 1
+			cPrev = aLines[nRow - 1]
+			aNew = []
+			for i = 1 to nRows
+				if i = nRow - 1
+					aNew + (cPrev + cLine)
+				but i != nRow
+					aNew + aLines[i]
+				ok
+			next
+			aLines = aNew
+			nCol = len(cPrev) + 1
+			nRow--
+		ok
+	but k = "<delete>"
+		if nCol <= nLen
+			aLines[nRow] = left(cLine, nCol - 1) + RppTuiTail(cLine, nCol + 1)
+		but nRow < nRows
+			cNext = aLines[nRow + 1]
+			aNew = []
+			for i = 1 to nRows
+				if i = nRow
+					aNew + (cLine + cNext)
+				but i != nRow + 1
+					aNew + aLines[i]
+				ok
+			next
+			aLines = aNew
+		ok
+	but k = "<left>"
+		if nCol > 1
+			nCol--
+		but nRow > 1
+			nRow--
+			nCol = len(aLines[nRow]) + 1
+		ok
+	but k = "<right>"
+		if nCol <= nLen
+			nCol++
+		but nRow < nRows
+			nRow++
+			nCol = 1
+		ok
+	but k = "<up>"
+		if nRow > 1
+			nRow--
+			nCol = RppTuiClampCol(aLines[nRow], nCol)
+		ok
+	but k = "<down>"
+		if nRow < nRows
+			nRow++
+			nCol = RppTuiClampCol(aLines[nRow], nCol)
+		ok
+	but k = "<home>"
+		nCol = 1
+	but k = "<end>"
+		nCol = nLen + 1
+	but len(k) = 1
+		aLines[nRow] = left(cLine, nCol - 1) + k + RppTuiTail(cLine, nCol)
+		nCol++
+	ok
+	aDoc[1] = aLines
+	aDoc[2] = nRow
+	aDoc[3] = nCol
+	aModel[cName] = aDoc
+
+### The characters from position n to the end; "" past the end. substr
+### past the end is already "" on both runtimes (measured), the guard is
+### for the reader.
+func RppTuiTail(cStr, n)
+	if n > len(cStr)
+		return ""
+	ok
+	return substr(cStr, n)
+
+### A column carried onto a shorter line lands after its last character.
+func RppTuiClampCol(cStr, nCol)
+	if nCol > len(cStr) + 1
+		return len(cStr) + 1
+	ok
+	return nCol
+
+### Draw a Text: a header with the count and the cursor, then a window of
+### lines. THE SCROLLPORT IS COMPUTED HERE AND STORED NOWHERE (contract
+### 6.2): $RppTextRows lines that follow the cursor. The cursor is drawn
+### as | before the character it sits before.
+func RppTuiTextShow(oKid, aModel, bFocus)
+	aDoc = aModel[oKid[:name]]
+	aLines = aDoc[1]
+	nRow = aDoc[2]
+	nCol = aDoc[3]
+	nRows = len(aLines)
+	cMark = "  "
+	if bFocus = 1
+		cMark = "> "
+	ok
+	RppTuiTableLine(cMark + oKid[:name] + ":  " + nRows + " line(s), cursor " + nRow + ":" + nCol)
+	nTop = 1
+	if nRow > $RppTextRows
+		nTop = nRow - $RppTextRows + 1
+	ok
+	nBottom = nTop + $RppTextRows - 1
+	if nBottom > nRows
+		nBottom = nRows
+	ok
+	for r = nTop to nBottom
+		cLine = aLines[r]
+		if r = nRow
+			cLine = left(cLine, nCol - 1) + "|" + RppTuiTail(cLine, nCol)
+		ok
+		RppTuiTableLine("    " + r + ": " + cLine)
+	next
 
 ### One key: the next scripted one if there is one, else the console's.
 func RppTuiKey()
@@ -615,6 +837,13 @@ func RppTuiDrawK(oTree, aModel, aFocus, nFocus)
 			loop
 		but cKind = "menu"
 			see cMark + RppTuiOptsLine(oKid, aModel)
+		but cKind = "text"
+			bF = 0
+			if i = nHere
+				bF = 1
+			ok
+			RppTuiTextShow(oKid, aModel, bF)
+			loop
 		but cKind = "status"
 			see cMark + "status: " + oKid[:text]
 		but cKind = "button"
