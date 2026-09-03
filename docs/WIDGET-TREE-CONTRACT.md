@@ -49,12 +49,18 @@ compiler and found two defects there (an assignment whose right side
 read its own target late, and every `+` classified as a number), both
 fixed and both now regression probes.
 
-**RingPad's shell exists** (`examples/12-the-ringpad-shell`): a file list,
-an editor placeholder, a menu and a status line, looping — choose a
-command, the program acts, the next screen is drawn. It needs no callback:
-`Run` returns when a menu item is activated, so the loop is the
-application. What it does not have is the editing surface, and building
-the shell first is what now names precisely what `Text` must do.
+**RingPad's shell runs its real editor** (`examples/12-the-ringpad-shell`):
+a file list, a `Text` that carries its document from screen to screen, a
+menu — Open, Save, **Undo**, Quit — and a status line, looping. It needs
+no callback: `Run` returns when a menu item is activated, so the loop is
+the application. Undo is §6.3 made visible: the program keeps a stack of
+previous document values and restores one, so history is history of the
+model, in the transcript, and gate 7.2 judges it — the third screen of
+the gated session shows the document Undo restored. Two things the shell
+needed and the widget gained: `TextWith(name, doc)` opens with content,
+and in the line renderer a blank first line *keeps* a field's value — the
+only way a line-driven interface can say "leave it", and the same result
+as Tab under the keystroke renderer.
 
 ## 1. What it is, in one sentence
 

@@ -93,7 +93,15 @@ func Status(cText)
 ### Enter is a line break and Tab leaves (6.4). No undo here (6.3): history
 ### is the program's, because it is history OF THE MODEL.
 func Text(cName)
-	return [ :kind = "text", :name = cName ]
+	aDoc = [ [ "" ], 1, 1 ]
+	return [ :kind = "text", :name = cName, :value = aDoc ]
+
+### TextWith: a Text that opens with content -- the value a previous
+### screen left, a file's lines as [ aLines, 1, 1 ], or a value restored by
+### an Undo the PROGRAM keeps (contract 6.3). Both constructors set :value,
+### so the model never has to read a key that might be missing (F-49).
+func TextWith(cName, aDoc)
+	return [ :kind = "text", :name = cName, :value = aDoc ]
 
 ### Table: columns and rows, the model holding the SELECTED ROW number
 ### (0 = none). A digit selects a row in both renderers, so a line "2" and
@@ -170,11 +178,16 @@ func Run(oTree)
 				nLine++
 			end
 			if len(aLines) = 0
-				aLines + ""
+				# a blank FIRST line keeps the field as it is -- the only way
+				# a line-driven interface can say "leave it", and the same
+				# result as Tab under the keystroke renderer. On an empty
+				# editor that is still [""] at 1:1.
+				aDoc = aModel[cName]
+			else
+				nR = len(aLines)
+				nC = len(aLines[nR]) + 1
+				aDoc = [ aLines, nR, nC ]
 			ok
-			nR = len(aLines)
-			nC = len(aLines[nR]) + 1
-			aDoc = [ aLines, nR, nC ]
 			aModel[cName] = aDoc
 			$RppEvents + [ :change, cName, aDoc ]
 			RppTuiDraw(oTree, aModel)
@@ -214,8 +227,7 @@ func RppTuiModel(aKids)
 		but cKind = "menu"
 			aModel + [ aKids[i][:name], aKids[i][:options][1] ]
 		but cKind = "text"
-			aDoc = [ [ "" ], 1, 1 ]
-			aModel + [ aKids[i][:name], aDoc ]
+			aModel + [ aKids[i][:name], aKids[i][:value] ]
 		ok
 	next
 	return aModel
