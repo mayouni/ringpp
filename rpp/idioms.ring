@@ -78,36 +78,36 @@ func RppTokens cCode
 
 class RppIndexed
 
-	nSizeAtOpen = 0
-	lApplied    = FALSE
-	cWhy        = ""
+	@nSizeAtOpen = 0
+	@lApplied    = FALSE
+	@cWhy        = ""
 
 	func init aList
-		nSizeAtOpen = len(aList)
-		if nSizeAtOpen < $RPP_INDEX_MIN_SIZE
-			lApplied = FALSE
-			cWhy = "list has " + nSizeAtOpen + " items; below " +
+		@nSizeAtOpen = len(aList)
+		if @nSizeAtOpen < $RPP_INDEX_MIN_SIZE
+			@lApplied = FALSE
+			@cWhy = "list has " + @nSizeAtOpen + " items; below " +
 			       $RPP_INDEX_MIN_SIZE + " the cursor walk is cheaper than the array"
 			return
 		ok
 		ringvm_genarray(aList)
-		lApplied = TRUE
-		cWhy = "items array built for " + nSizeAtOpen + " items"
+		@lApplied = TRUE
+		@cWhy = "items array built for " + @nSizeAtOpen + " items"
 
 	func Applied
-		return lApplied
+		return @lApplied
 
 	func Why
-		return cWhy
+		return @cWhy
 
 	### Closing the phase. Returns TRUE when the index was still valid.
 	func Release aList
-		if not lApplied
+		if not @lApplied
 			return FALSE
 		ok
-		if len(aList) != nSizeAtOpen
+		if len(aList) != @nSizeAtOpen
 			RppAdviseAdd("RppIndexed",
-			  "the list changed size during the phase (" + nSizeAtOpen +
+			  "the list changed size during the phase (" + @nSizeAtOpen +
 			  " -> " + len(aList) + "). One append frees the items array, so " +
 			  "reads after that point walked the list. Open the phase after " +
 			  "the mutations, not around them.")
@@ -135,21 +135,21 @@ class RppIndexed
 
 class RppSandbox
 
-	pState
-	lOpen = FALSE
+	@pState
+	@lOpen = FALSE
 
 	func init
-		pState = ring_state_init()
-		lOpen = TRUE
+		@pState = ring_state_init()
+		@lOpen = TRUE
 
 	func Run cCode
 		This.Alive("Run")
-		ring_state_runcode(pState, cCode)
+		ring_state_runcode(@pState, cCode)
 		return This
 
 	func Quiet
 		This.Alive("Quiet")
-		ring_state_runcode(pState, "ringvm_hideerrormsg(1)")
+		ring_state_runcode(@pState, "ringvm_hideerrormsg(1)")
 		return This
 
 	### Reads a variable back. Ring stores identifiers folded to LOWER CASE
@@ -159,7 +159,7 @@ class RppSandbox
 	### Both traps are closed here.
 	func Var cName
 		This.Alive("Var")
-		v = ring_state_findvar(pState, lower(cName))
+		v = ring_state_findvar(@pState, lower(cName))
 		if isnumber(v)
 			raise("Rpp: sandbox has no variable '" + cName + "'")
 		ok
@@ -167,7 +167,7 @@ class RppSandbox
 
 	func Has cName
 		This.Alive("Has")
-		v = ring_state_findvar(pState, lower(cName))
+		v = ring_state_findvar(@pState, lower(cName))
 		return not isnumber(v)
 
 	### F-33: `ring_state_setvar` ASSIGNS to a variable the sub-state already
@@ -190,9 +190,9 @@ class RppSandbox
 				      "' — a name to be created must be letters, digits " +
 				      "and _ only, not starting with a digit")
 			ok
-			ring_state_runcode(pState, lower(cName) + " = 0")
+			ring_state_runcode(@pState, lower(cName) + " = 0")
 		ok
-		ring_state_setvar(pState, lower(cName), vValue)
+		ring_state_setvar(@pState, lower(cName), vValue)
 		return This
 
 	### Deliberately not a regex: the library depends on nothing but the VM
@@ -218,15 +218,15 @@ class RppSandbox
 		return TRUE
 
 	func Free
-		if lOpen
-			ring_state_delete(pState)
-			lOpen = FALSE
+		if @lOpen
+			ring_state_delete(@pState)
+			@lOpen = FALSE
 		ok
 
 	func IsOpen
-		return lOpen
+		return @lOpen
 
 	func Alive cOp
-		if not lOpen
+		if not @lOpen
 			raise("Rpp: sandbox already freed — cannot " + cOp)
 		ok

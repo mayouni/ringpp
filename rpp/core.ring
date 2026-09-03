@@ -48,11 +48,11 @@ class RppBuffer
 	### `cData` is one of the commonest names in exactly the data-processing
 	### code Ring++ is for. Same root cause as RppView below; found by
 	### writing examples/05. See FINDINGS F-25.
-	cRppData          # the backing string, written only through a live pointer
-	nRppCap  = 0
-	pRppScratch       # reusable c-pointers, so Poke/Peek allocate nothing
-	pRppSrcPtr        # (nullptr() costs ~520 ns per call — FINDINGS F-4)
-	cRppNul           # RPP_NUL_BYTE cached as an attribute: reading a GLOBAL
+	@cRppData          # the backing string, written only through a live pointer
+	@nRppCap  = 0
+	@pRppScratch       # reusable c-pointers, so Poke/Peek allocate nothing
+	@pRppSrcPtr        # (nullptr() costs ~520 ns per call — FINDINGS F-4)
+	@cRppNul           # RPP_NUL_BYTE cached as an attribute: reading a GLOBAL
 	               # from inside a method is slower than an attribute read
 
 	### THE ADDRESS IS NOT CACHED, AND THAT IS DELIBERATE.
@@ -71,31 +71,31 @@ class RppBuffer
 	### Re-deriving costs ~0.8 us per call and is correct by construction: a
 	### copy resolves its OWN cRppData, so it writes to its own bytes.
 	func Base
-		return getptr(varptr(:cRppData, "char *"))
+		return getptr(varptr(:@cRppData, "char *"))
 
 	func init nBytes
 		if not isnumber(nBytes) or nBytes < 1
 			raise("Rpp: buffer size must be a positive number, got " + nBytes)
 		ok
-		cRppData = space(nBytes)
-		nRppCap = nBytes
-		pRppScratch = nullptr()
-		pRppSrcPtr  = nullptr()
-		cRppNul     = $RPP_NUL_BYTE
+		@cRppData = space(nBytes)
+		@nRppCap = nBytes
+		@pRppScratch = nullptr()
+		@pRppSrcPtr  = nullptr()
+		@cRppNul     = $RPP_NUL_BYTE
 
 	func Capacity
-		return nRppCap
+		return @nRppCap
 
 	func Size
-		return nRppCap
+		return @nRppCap
 
 	### ---- reading ----
 
 	# The O(1) slice. 0.09 us where substr() costs 12.5 us on 500 KB (F-6).
 	func Peek nOffset, nLen
 		This.CheckRange(nOffset, nLen, "Peek")
-		setptr(pRppScratch, This.Base() + nOffset)
-		return ptr2str(pRppScratch, 0, nLen)
+		setptr(@pRppScratch, This.Base() + nOffset)
+		return ptr2str(@pRppScratch, 0, nLen)
 
 	func Byte nOffset
 		This.CheckRange(nOffset, 1, "Byte")
@@ -104,7 +104,7 @@ class RppBuffer
 	# The explicit exit back to an ordinary Ring string. Named so the copy is
 	# visible at the call site.
 	func Str
-		return This.Peek(0, nRppCap)
+		return This.Peek(0, @nRppCap)
 
 	### ---- writing ----
 
@@ -115,14 +115,14 @@ class RppBuffer
 		# isstring() is NOT in the hot condition: it is a C call (~43 ns) on a
 		# path whose whole budget is one memcpy. len() above already rejects a
 		# non-string, and the error branch below names it properly.
-		if nOffset < 0 or nL < 0 or nOffset + nL > nRppCap
+		if nOffset < 0 or nL < 0 or nOffset + nL > @nRppCap
 			if not isstring(cBytes)
 				raise("Rpp: Poke expects a string, got " + type(cBytes))
 			ok
 			This.CheckRange(nOffset, nL, "Poke")
 		ok
 		if nL = 0 return ok
-		setptr(pRppScratch, This.Base() + nOffset)
+		setptr(@pRppScratch, This.Base() + nOffset)
 		# FINDINGS F-14 / ring-lang/ring#1643: on Ring <= 1.27, memcpy() aborts
 		# the process when the SOURCE string's first byte is zero, or when it is
 		# the literal "NULL" — strcmp() mistakes both for a NULL pointer. Only
@@ -146,14 +146,14 @@ class RppBuffer
 		# ordinary payload leaves the chain at the second test. The obvious
 		# alternative, a flag assigned across nested ifs, measured 0.32 us
 		# slower per Poke.
-		if cBytes[1] = cRppNul or
+		if cBytes[1] = @cRppNul or
 		   (nL >= 4 and cBytes[1] = "N" and cBytes[2] = "U" and
 		    cBytes[3] = "L" and cBytes[4] = "L" and
-		    (nL = 4 or cBytes[5] = cRppNul))
-			setptr(pRppSrcPtr, getptr(varptr(:cBytes, "char *")))
-			memcpy(pRppScratch, pRppSrcPtr, nL)
+		    (nL = 4 or cBytes[5] = @cRppNul))
+			setptr(@pRppSrcPtr, getptr(varptr(:cBytes, "char *")))
+			memcpy(@pRppScratch, @pRppSrcPtr, nL)
 		else
-			memcpy(pRppScratch, cBytes, nL)
+			memcpy(@pRppScratch, cBytes, nL)
 		ok
 
 	func PokeString nOffset, cStr
@@ -191,18 +191,18 @@ class RppBuffer
 		return new RppView(This, nOffset, nLen)
 
 	func All
-		return This.View(0, nRppCap)
+		return This.View(0, @nRppCap)
 
 	### ---- growth: the only legal resize ----
 
 	func Grow nNewBytes
-		if nNewBytes <= nRppCap
-			raise("Rpp: Grow must increase the size — have " + nRppCap + ", asked " + nNewBytes)
+		if nNewBytes <= @nRppCap
+			raise("Rpp: Grow must increase the size — have " + @nRppCap + ", asked " + nNewBytes)
 		ok
-		cOld = This.Peek(0, nRppCap)     # one explicit copy out
-		nOldCap = nRppCap
-		cRppData = space(nNewBytes)      # a NEW string; the old address is dead
-		nRppCap = nNewBytes
+		cOld = This.Peek(0, @nRppCap)     # one explicit copy out
+		nOldCap = @nRppCap
+		@cRppData = space(nNewBytes)      # a NEW string; the old address is dead
+		@nRppCap = nNewBytes
 		This.Poke(0, cOld)
 		return nOldCap
 
@@ -210,7 +210,7 @@ class RppBuffer
 
 	func LoadFile cPath
 		cIn = read(cPath)
-		if len(cIn) > nRppCap
+		if len(cIn) > @nRppCap
 			This.Grow(len(cIn))
 		ok
 		This.Poke(0, cIn)
@@ -226,10 +226,10 @@ class RppBuffer
 		return This.Base()
 
 	func PokeUnchecked nOffset, cBytes
-		setptr(pRppScratch, This.Base() + nOffset)
+		setptr(@pRppScratch, This.Base() + nOffset)
 		pSrc = nullptr()
 		setptr(pSrc, getptr(varptr(:cBytes, "char *")))
-		memcpy(pRppScratch, pSrc, len(cBytes))
+		memcpy(@pRppScratch, pSrc, len(cBytes))
 
 	### ---- the guard ----
 
@@ -239,11 +239,11 @@ class RppBuffer
 		ok
 		if nOffset < 0 or nLen < 0
 			raise("Rpp: " + cOp + " out of range — offset " + nOffset +
-			      ", length " + nLen + ", capacity " + nRppCap)
+			      ", length " + nLen + ", capacity " + @nRppCap)
 		ok
-		if nOffset + nLen > nRppCap
+		if nOffset + nLen > @nRppCap
 			raise("Rpp: " + cOp + " out of range — offset " + nOffset +
-			      ", length " + nLen + ", capacity " + nRppCap)
+			      ", length " + nLen + ", capacity " + @nRppCap)
 		ok
 
 ### A window into a buffer. Holds a reference to its owner, so the bytes
@@ -273,44 +273,44 @@ class RppView
 	###
 	### A prefix nobody types by accident costs nothing and removes the whole
 	### class of failure. Found by writing an example, not by a test.
-	oRppOwner = NULL
-	nRppOff   = 0
-	nRppLen   = 0
+	@oRppOwner = NULL
+	@nRppOff   = 0
+	@nRppLen   = 0
 
 	func init oBuffer, nOffset, nLength
 		# ref() is load-bearing. Plain assignment COPIES the object, and the
 		# view would then read a snapshot of the buffer taken at View() time
 		# -- writes made through the buffer afterwards would be invisible.
 		# It is a window, not a copy; that is the whole point of the type.
-		oRppOwner = ref(oBuffer)
-		nRppOff   = nOffset
-		nRppLen   = nLength
+		@oRppOwner = ref(oBuffer)
+		@nRppOff   = nOffset
+		@nRppLen   = nLength
 
 	func Size
-		return nRppLen
+		return @nRppLen
 
 	func Offset
-		return nRppOff
+		return @nRppOff
 
 	func Peek nOffset, nCount
-		if nOffset < 0 or nCount < 0 or nOffset + nCount > nRppLen
+		if nOffset < 0 or nCount < 0 or nOffset + nCount > @nRppLen
 			raise("Rpp: view Peek out of range — offset " + nOffset +
-			      ", length " + nCount + ", view length " + nRppLen)
+			      ", length " + nCount + ", view length " + @nRppLen)
 		ok
-		return oRppOwner.Peek(nRppOff + nOffset, nCount)
+		return @oRppOwner.Peek(@nRppOff + nOffset, nCount)
 
 	func Byte nOffset
 		return ascii(This.Peek(nOffset, 1))
 
 	func Sub nOffset, nCount
-		if nOffset < 0 or nCount < 0 or nOffset + nCount > nRppLen
+		if nOffset < 0 or nCount < 0 or nOffset + nCount > @nRppLen
 			raise("Rpp: view Sub out of range — offset " + nOffset +
-			      ", length " + nCount + ", view length " + nRppLen)
+			      ", length " + nCount + ", view length " + @nRppLen)
 		ok
-		return new RppView(oRppOwner, nRppOff + nOffset, nCount)
+		return new RppView(@oRppOwner, @nRppOff + nOffset, nCount)
 
 	func Str
-		return This.Peek(0, nRppLen)
+		return This.Peek(0, @nRppLen)
 
 	func Buffer
-		return oRppOwner
+		return @oRppOwner
