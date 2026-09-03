@@ -1,10 +1,28 @@
 # The widget-tree contract
 
-*Drafted 2026-09-02 at Mansour's request, after the map type. Nothing in
-this document is built. It is the contract a GUI foundation for Ring++
-would have to honour, written before the first line so that every later
-claim can be checked against it — the way `VM-CONTRACT.md` is checked by
-`rpp/probe.ring` on every load.*
+*Drafted 2026-09-02 at Mansour's request, after the map type, before a
+line of it existed — so that every later claim could be checked against
+it, the way `VM-CONTRACT.md` is checked by `rpp/probe.ring` on every
+load. The sections below are the contract as written; this block is
+what has been built against it since.*
+
+**Status, 2026-09-03.**
+
+| gate | result |
+|---|---|
+| 7.1 eight lines | **7** — window + label + entry + button, scripted-keys line included; `examples/09-a-window-in-the-terminal` counts them from its own text and fails at nine |
+| 7.2 two renderers, one model | **PASS** — the line renderer on Ring 1.27 and the keystroke renderer on Ring++, fed the same session, serialise to byte-identical model + events (`rnx-spike bench/tui72.py`, run by its gate) |
+| 7.3 the Windows console | **measured and confirmed live** — see §7.3 |
+| 7.4 no pixel | holds — the two renderers use flow layout and ANSI only |
+
+Built: `rpp/tui.ring` (the tree; `Run`, line-driven, Ring 1.27 and Ring++;
+`RunKeys`, keystroke-driven, Ring++ only, through the four builtins
+`tui_init` `tui_key` `tui_size` `tui_done` in the binary). One correction
+to the vocabulary below: the input widget is **`Entry`**, not `Input` —
+`input` is a Ring builtin and a user function replaces a builtin
+process-wide, so a library cannot take the name. Not yet built: `Text`,
+`Check`, `Radio`, `List`, `Table`, `Menu`, `Status`, `Row`, the callback
+form of `Run` (§4), and the browser renderer.
 
 ## 1. What it is, in one sentence
 
