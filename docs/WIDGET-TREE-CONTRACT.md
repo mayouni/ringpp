@@ -166,6 +166,12 @@ windowing system is a product.
 3. **The Windows console.** Cursor positioning and raw input on Windows —
    console API versus VT sequences — is the known risk. It gets a probe
    and a number before anything is promised.
+   *Measured 2026-09-03 (`bench/console_probe.py`): VT processing is OFF
+   by default in conhost and ON in Windows Terminal; a process can switch
+   it on itself in both; a raw key is readable in both without Enter.
+   Confirmed live the same day: the keystroke renderer, through the four
+   builtins, repainted cleanly in a plain `cmd.exe` window and in Windows
+   Terminal. The binary fixes the console; the program never has to.*
 4. **No pixel ever reaches a program.** If a learner's code contains a
    coordinate, the contract has been broken.
 
