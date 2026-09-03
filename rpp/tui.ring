@@ -176,6 +176,10 @@ func RunKeys(oTree)
 		nLive = tui_init()
 		if nLive = 1
 			$RppPlain = 0
+			# ONE full clear for the first frame. Homing alone painted the
+			# window over whatever was on screen -- the previous command line
+			# showed through the separator on the first live run.
+			see $RppEsc + "[2J"
 		ok
 	ok
 
@@ -276,7 +280,11 @@ func RppTuiDrawK(oTree, aModel, aFocus, nFocus)
 	else
 		see cTitle + nl
 	ok
-	see copy("-", len(cTitle)) + nl
+	see copy("-", len(cTitle))
+	if $RppPlain = 0
+		see $RppEsc + "[K"
+	ok
+	see nl
 	aKids = oTree[:children]
 	nKids = len(aKids)
 	nHere = aFocus[nFocus]
