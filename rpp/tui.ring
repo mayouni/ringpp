@@ -75,6 +75,13 @@ func Menu(cName, aItems)
 ### Status: a line at the foot of the window, showing text the program
 ### passes in. Not focusable and not in the model -- it is presentation, and
 ### the program rebuilds the tree with new text when it has news.
+###
+### IT MUST NOT LOOK LIKE A CONTROL. Drawn as "[ ready ]" it was read as a
+### button somebody should be able to focus (Mansour, on a live console),
+### because brackets in this renderer already mean "a value lives here" --
+### [Hello] is an entry, [ ] and [*] a checkbox and a choice -- and
+### parentheses mean a button. A status line borrows none of them and says
+### what it is.
 func Status(cText)
 	return [ :kind = "status", :text = cText ]
 
@@ -384,7 +391,7 @@ func RppTuiDraw(oTree, aModel)
 		but cKind = "menu"
 			see "  " + RppTuiOptsLine(oKid, aModel) + nl
 		but cKind = "status"
-			see "  [ " + oKid[:text] + " ]" + nl
+			see "  status: " + oKid[:text] + nl
 		but cKind = "button"
 			see "  ( " + oKid[:text] + " )" + nl
 		ok
@@ -609,7 +616,7 @@ func RppTuiDrawK(oTree, aModel, aFocus, nFocus)
 		but cKind = "menu"
 			see cMark + RppTuiOptsLine(oKid, aModel)
 		but cKind = "status"
-			see cMark + "[ " + oKid[:text] + " ]"
+			see cMark + "status: " + oKid[:text]
 		but cKind = "button"
 			see cMark + "( " + oKid[:text] + " )"
 		ok
