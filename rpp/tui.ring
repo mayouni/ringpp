@@ -47,6 +47,24 @@ func Entry(cName)
 func Button(cText, cEvent)
 	return [ :kind = "button", :text = cText, :event = cEvent ]
 
+### Checkbox: the model holds 1 or 0. (Not Check: three of this repo's own
+### tests define a `func Check` assertion helper, and Ring refuses a second
+### definition outright -- C22 -- so a library taking that name stops those
+### programs from loading at all.) Radio and Choice: the model holds the
+### chosen option's TEXT, "" until one is chosen; both keep their options
+### under :options so one drawing and one selecting path serve both. The
+### contract writes List for the second; `list(n)` is a Ring builtin and a
+### user function replaces a builtin process-wide, so -- like Entry for
+### Input -- the library cannot take the name. Choice it is.
+func Checkbox(cName, cLabel)
+	return [ :kind = "check", :name = cName, :label = cLabel ]
+
+func Radio(cName, aOptions)
+	return [ :kind = "radio", :name = cName, :options = aOptions ]
+
+func Choice(cName, aItems)
+	return [ :kind = "choice", :name = cName, :options = aItems ]
+
 ### ---------------------------------------------------------- the renderer
 
 ### Run(tree) -> the model, when the submit button is pressed or the
@@ -64,13 +82,8 @@ func Run(oTree)
 	aKids = oTree[:children]
 	nKids = len(aKids)
 
-	# every Entry exists in the model BEFORE any read (F-49)
-	aModel = []
-	for i = 1 to nKids
-		if aKids[i][:kind] = "entry"
-			aModel + [ aKids[i][:name], "" ]
-		ok
-	next
+	# every widget that holds a value exists in the model BEFORE any read (F-49)
+	aModel = RppTuiModel(aKids)
 
 	RppTuiDraw(oTree, aModel)
 	for i = 1 to nKids
@@ -81,6 +94,19 @@ func Run(oTree)
 			cLine = RppTuiRead(cName + "> ")
 			aModel[cName] = cLine
 			$RppEvents + [ :change, cName, cLine ]
+			RppTuiDraw(oTree, aModel)
+		but cKind = "check"
+			cName = oKid[:name]
+			cLine = RppTuiRead(cName + " [y/n]> ")
+			aModel[cName] = RppTuiYes(cLine)
+			$RppEvents + [ :change, cName, aModel[cName] ]
+			RppTuiDraw(oTree, aModel)
+		but cKind = "radio" or cKind = "choice"
+			cName = oKid[:name]
+			aOpts = oKid[:options]
+			cLine = RppTuiRead(cName + " [1-" + len(aOpts) + "]> ")
+			RppTuiPick(aModel, cName, aOpts, cLine)
+			$RppEvents + [ :change, cName, aModel[cName] ]
 			RppTuiDraw(oTree, aModel)
 		but cKind = "button"
 			cLine = RppTuiRead("[" + oKid[:text] + "] Enter> ")
@@ -93,6 +119,63 @@ func Run(oTree)
 	next
 	$RppEvents + [ :close, "", "" ]
 	return aModel
+
+### The model a tree starts with: "" for text and choices, 0 for a check.
+func RppTuiModel(aKids)
+	aModel = []
+	nKids = len(aKids)
+	for i = 1 to nKids
+		cKind = aKids[i][:kind]
+		if cKind = "entry" or cKind = "radio" or cKind = "choice"
+			aModel + [ aKids[i][:name], "" ]
+		but cKind = "check"
+			aModel + [ aKids[i][:name], 0 ]
+		ok
+	next
+	return aModel
+
+### y / Y / 1 mean yes; anything else means no. Same rule for a typed line
+### and for a single key, so the two renderers agree.
+func RppTuiYes(c)
+	if c = "y" or c = "Y" or c = "1"
+		return 1
+	ok
+	return 0
+
+### A digit selects an option, by position; out of range leaves the model
+### alone. Same rule for a line and for a key.
+func RppTuiPick(aModel, cName, aOpts, c)
+	if len(c) = 0
+		return
+	ok
+	nSel = number(c)
+	if nSel >= 1 and nSel <= len(aOpts)
+		aModel[cName] = aOpts[nSel]
+	ok
+
+### One line for a radio or choice: every option numbered, the chosen one
+### marked -- (o) for a radio, [*] for a choice -- so the number to type
+### is on the screen.
+func RppTuiOptsLine(oKid, aModel)
+	aOpts = oKid[:options]
+	cNow = aModel[oKid[:name]]
+	cOn = "(o) "
+	cOff = "( ) "
+	if oKid[:kind] = "choice"
+		cOn = "[*] "
+		cOff = "[ ] "
+	ok
+	cLine = oKid[:name] + ": "
+	nOpts = len(aOpts)
+	for j = 1 to nOpts
+		if aOpts[j] = cNow
+			cLine += cOn
+		else
+			cLine += cOff
+		ok
+		cLine += "" + j + "." + aOpts[j] + "  "
+	next
+	return cLine
 
 ### One line of input: the next scripted line if there is one, echoed so
 ### a transcript reads like a session; otherwise the keyboard.
@@ -127,11 +210,21 @@ func RppTuiDraw(oTree, aModel)
 			see oKid[:text] + nl
 		but cKind = "entry"
 			see "  [" + aModel[oKid[:name]] + "]" + nl
+		but cKind = "check"
+			see "  " + RppTuiBox(aModel[oKid[:name]]) + " " + oKid[:label] + nl
+		but cKind = "radio" or cKind = "choice"
+			see "  " + RppTuiOptsLine(oKid, aModel) + nl
 		but cKind = "button"
 			see "  ( " + oKid[:text] + " )" + nl
 		ok
 	next
 	see nl
+
+func RppTuiBox(nChecked)
+	if nChecked = 1
+		return "[x]"
+	ok
+	return "[ ]"
 
 ### ---------------------------------------------------------- the 7.2 harness
 
@@ -185,14 +278,10 @@ func RunKeys(oTree)
 
 	aKids = oTree[:children]
 	nKids = len(aKids)
-	aModel = []
+	aModel = RppTuiModel(aKids)
 	aFocus = []
 	for i = 1 to nKids
-		cKind = aKids[i][:kind]
-		if cKind = "entry"
-			aModel + [ aKids[i][:name], "" ]
-			aFocus + i
-		but cKind = "button"
+		if aKids[i][:kind] != "label"
 			aFocus + i
 		ok
 	next
@@ -212,29 +301,25 @@ func RunKeys(oTree)
 			$RppEvents + [ :close, "", "" ]
 			exit
 		but k = "<enter>"
-			if cKind = "entry"
-				$RppEvents + [ :change, oKid[:name], aModel[oKid[:name]] ]
-				if nFocus < nF
-					nFocus++
-				ok
-			else
+			if cKind = "button"
 				$RppEvents + [ :click, oKid[:text], "" ]
 				if oKid[:event] = :submit
 					$RppEvents + [ :submit, "", "" ]
 					exit
 				ok
+			else
+				RppTuiLeave(oKid, aModel)
+				if nFocus < nF
+					nFocus++
+				ok
 			ok
 		but k = "<tab>" or k = "<down>"
-			if cKind = "entry"
-				$RppEvents + [ :change, oKid[:name], aModel[oKid[:name]] ]
-			ok
+			RppTuiLeave(oKid, aModel)
 			if nFocus < nF
 				nFocus++
 			ok
 		but k = "<up>"
-			if cKind = "entry"
-				$RppEvents + [ :change, oKid[:name], aModel[oKid[:name]] ]
-			ok
+			RppTuiLeave(oKid, aModel)
 			if nFocus > 1
 				nFocus--
 			ok
@@ -245,8 +330,18 @@ func RunKeys(oTree)
 					aModel[oKid[:name]] = left(cV, len(cV) - 1)
 				ok
 			ok
-		but len(k) = 1 and cKind = "entry"
-			aModel[oKid[:name]] = aModel[oKid[:name]] + k
+		but len(k) = 1
+			if cKind = "entry"
+				aModel[oKid[:name]] = aModel[oKid[:name]] + k
+			but cKind = "check"
+				if k = " "
+					aModel[oKid[:name]] = 1 - aModel[oKid[:name]]
+				else
+					aModel[oKid[:name]] = RppTuiYes(k)
+				ok
+			but cKind = "radio" or cKind = "choice"
+				RppTuiPick(aModel, oKid[:name], oKid[:options], k)
+			ok
 		ok
 		if $RppPlain = 0
 			RppTuiDrawK(oTree, aModel, aFocus, nFocus)
@@ -259,6 +354,14 @@ func RunKeys(oTree)
 		tui_done()
 	ok
 	return aModel
+
+### Leaving a widget that holds a value: :change fires ONCE, with the whole
+### value -- per field, never per key -- which is what keeps this
+### renderer's event log byte-identical to the line renderer's.
+func RppTuiLeave(oKid, aModel)
+	if oKid[:kind] != "button"
+		$RppEvents + [ :change, oKid[:name], aModel[oKid[:name]] ]
+	ok
 
 ### One key: the next scripted one if there is one, else the console's.
 func RppTuiKey()
@@ -299,6 +402,10 @@ func RppTuiDrawK(oTree, aModel, aFocus, nFocus)
 			see cMark + oKid[:text]
 		but cKind = "entry"
 			see cMark + "[" + aModel[oKid[:name]] + "]"
+		but cKind = "check"
+			see cMark + RppTuiBox(aModel[oKid[:name]]) + " " + oKid[:label]
+		but cKind = "radio" or cKind = "choice"
+			see cMark + RppTuiOptsLine(oKid, aModel)
 		but cKind = "button"
 			see cMark + "( " + oKid[:text] + " )"
 		ok

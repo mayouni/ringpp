@@ -17,10 +17,14 @@ what has been built against it since.*
 
 Built: `rpp/tui.ring` (the tree; `Run`, line-driven, Ring 1.27 and Ring++;
 `RunKeys`, keystroke-driven, Ring++ only, through the four builtins
-`tui_init` `tui_key` `tui_size` `tui_done` in the binary). One correction
-to the vocabulary below: the input widget is **`Entry`**, not `Input` —
-`input` is a Ring builtin and a user function replaces a builtin
-process-wide, so a library cannot take the name. Not yet built: `Text`,
+`tui_init` `tui_key` `tui_size` `tui_done` in the binary). Three corrections
+to the vocabulary below, all for one reason: a name a program is likely
+to use itself is not one a library may take. The input widget is
+**`Entry`**, not `Input`, and the list widget is **`Choice`**, not `List` —
+`input` and `list` are Ring builtins, and a user function replaces a
+builtin process-wide. The check box is **`Checkbox`**, not `Check` — three
+of this repository's own tests define a `func Check` assertion helper,
+and Ring refuses a second definition outright. Not yet built: `Text`,
 `Check`, `Radio`, `List`, `Table`, `Menu`, `Status`, `Row`, the callback
 form of `Run` (§4), and the browser renderer.
 
