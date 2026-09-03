@@ -56,6 +56,9 @@ m2 = Run(ui)
 aE2 = $RppEvents
 cA = RppSerialise(m, aE)
 cB = RppSerialise(m2, aE2)
+# the line bench/tui72.py (rnx-spike) compares against keys.ring's, run
+# on Ring++: the same session through the keystroke renderer
+? "serial: " + cA
 nSame = 0
 if cA = cB
 	nSame = 1

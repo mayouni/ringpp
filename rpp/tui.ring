@@ -35,16 +35,16 @@ $RppPlain  = 0           # 1 while scripted: no escape bytes in the output
 
 ### ---------------------------------------------------------- the tree
 
-func Window cTitle, aChildren
+func Window(cTitle, aChildren)
 	return [ :kind = "window", :title = cTitle, :children = aChildren ]
 
-func Label cText
+func Label(cText)
 	return [ :kind = "label", :text = cText ]
 
-func Entry cName
+func Entry(cName)
 	return [ :kind = "entry", :name = cName ]
 
-func Button cText, cEvent
+func Button(cText, cEvent)
 	return [ :kind = "button", :text = cText, :event = cEvent ]
 
 ### ---------------------------------------------------------- the renderer
@@ -54,7 +54,7 @@ func Button cText, cEvent
 ### anonymous functions see only globals (measured, charter 4e), so a
 ### handler that needs the model would need the model to be global. The
 ### program reads what Run() returns, and $RppEvents for the history.
-func Run oTree
+func Run(oTree)
 	$RppEvents = []
 	$RppPlain  = 0
 	if len($RppKeys) > 0
@@ -96,7 +96,7 @@ func Run oTree
 
 ### One line of input: the next scripted line if there is one, echoed so
 ### a transcript reads like a session; otherwise the keyboard.
-func RppTuiRead cPrompt
+func RppTuiRead(cPrompt)
 	if len($RppKeys) > 0
 		cLine = $RppKeys[1]
 		del($RppKeys, 1)
@@ -109,7 +109,7 @@ func RppTuiRead cPrompt
 
 ### Paint the whole window. Flow layout, top to bottom; no geometry, no
 ### pixels, and none will ever be added here (contract, gate 4).
-func RppTuiDraw oTree, aModel
+func RppTuiDraw(oTree, aModel)
 	cTitle = oTree[:title]
 	if $RppPlain = 0
 		see $RppEsc + "[2J" + $RppEsc + "[H"
@@ -138,7 +138,7 @@ func RppTuiDraw oTree, aModel
 ### One string for a model and an event log, built by hand so a plain `=`
 ### compares BYTES. Contract 7.2: two renderers fed the same keys must
 ### leave byte-identical model state -- this is the string that is compared.
-func RppSerialise aModel, aEvents
+func RppSerialise(aModel, aEvents)
 	cOut = "model:"
 	nM = len(aModel)
 	for i = 1 to nM
@@ -150,3 +150,156 @@ func RppSerialise aModel, aEvents
 		cOut += aEvents[i][1] + "," + aEvents[i][2] + "," + aEvents[i][3] + "|"
 	next
 	return cOut
+
+### ---------------------------------------------------------- the keystroke renderer
+
+### RunKeys(tree) -> the model. Contract 7.2's SECOND renderer: the same
+### tree, driven by KEYS. A character types into the focused field,
+### <backspace> deletes, <tab> <down> <up> move the focus, <enter> leaves a
+### field or presses a button, <esc> closes. It repaints IN PLACE through
+### the four console builtins (tui_init/key/size/done), so it RUNS on Ring++
+### only; it is defined here so the library still loads on Ring 1.27 --
+### only a call needs the builtins.
+###
+### EVENTS ARE PER FIELD, NOT PER KEY. :change fires when a field is LEFT,
+### with its whole value, so this renderer's event log is byte-identical
+### to the line renderer's for the same session -- which is the 7.2 gate.
+### Scripted keys come from $RppKeys, one key per entry: "a", "m",
+### "<enter>" -- exactly the names tui_key() returns. When they are
+### present nothing touches the console and the frame is drawn plainly,
+### once at the start and once at the end.
+func RunKeys(oTree)
+	$RppEvents = []
+	$RppPlain = 1
+	nLive = 0
+	if len($RppKeys) = 0
+		nLive = tui_init()
+		if nLive = 1
+			$RppPlain = 0
+		ok
+	ok
+
+	aKids = oTree[:children]
+	nKids = len(aKids)
+	aModel = []
+	aFocus = []
+	for i = 1 to nKids
+		cKind = aKids[i][:kind]
+		if cKind = "entry"
+			aModel + [ aKids[i][:name], "" ]
+			aFocus + i
+		but cKind = "button"
+			aFocus + i
+		ok
+	next
+	nFocus = 1
+	nF = len(aFocus)
+
+	RppTuiDrawK(oTree, aModel, aFocus, nFocus)
+	while 1
+		k = RppTuiKey()
+		if k = ""
+			$RppEvents + [ :close, "", "" ]
+			exit
+		ok
+		oKid = aKids[ aFocus[nFocus] ]
+		cKind = oKid[:kind]
+		if k = "<esc>"
+			$RppEvents + [ :close, "", "" ]
+			exit
+		but k = "<enter>"
+			if cKind = "entry"
+				$RppEvents + [ :change, oKid[:name], aModel[oKid[:name]] ]
+				if nFocus < nF
+					nFocus++
+				ok
+			else
+				$RppEvents + [ :click, oKid[:text], "" ]
+				if oKid[:event] = :submit
+					$RppEvents + [ :submit, "", "" ]
+					exit
+				ok
+			ok
+		but k = "<tab>" or k = "<down>"
+			if cKind = "entry"
+				$RppEvents + [ :change, oKid[:name], aModel[oKid[:name]] ]
+			ok
+			if nFocus < nF
+				nFocus++
+			ok
+		but k = "<up>"
+			if cKind = "entry"
+				$RppEvents + [ :change, oKid[:name], aModel[oKid[:name]] ]
+			ok
+			if nFocus > 1
+				nFocus--
+			ok
+		but k = "<backspace>"
+			if cKind = "entry"
+				cV = aModel[oKid[:name]]
+				if len(cV) > 0
+					aModel[oKid[:name]] = left(cV, len(cV) - 1)
+				ok
+			ok
+		but len(k) = 1 and cKind = "entry"
+			aModel[oKid[:name]] = aModel[oKid[:name]] + k
+		ok
+		if $RppPlain = 0
+			RppTuiDrawK(oTree, aModel, aFocus, nFocus)
+		ok
+	end
+	if $RppPlain = 1
+		RppTuiDrawK(oTree, aModel, aFocus, nFocus)
+	ok
+	if nLive = 1
+		tui_done()
+	ok
+	return aModel
+
+### One key: the next scripted one if there is one, else the console's.
+func RppTuiKey()
+	if len($RppKeys) > 0
+		k = $RppKeys[1]
+		del($RppKeys, 1)
+		return k
+	ok
+	return tui_key()
+
+### The frame with a focus mark. In-place repaint: home, then each line
+### cleared to its end, then everything below cleared -- no full clear,
+### so nothing flickers. Still no geometry and no pixels (contract, 7.4).
+func RppTuiDrawK(oTree, aModel, aFocus, nFocus)
+	cTitle = oTree[:title]
+	if $RppPlain = 0
+		see $RppEsc + "[H"
+		see $RppEsc + "[1m" + cTitle + $RppEsc + "[0m" + $RppEsc + "[K" + nl
+	else
+		see cTitle + nl
+	ok
+	see copy("-", len(cTitle)) + nl
+	aKids = oTree[:children]
+	nKids = len(aKids)
+	nHere = aFocus[nFocus]
+	for i = 1 to nKids
+		oKid = aKids[i]
+		cKind = oKid[:kind]
+		cMark = "  "
+		if i = nHere
+			cMark = "> "
+		ok
+		if cKind = "label"
+			see cMark + oKid[:text]
+		but cKind = "entry"
+			see cMark + "[" + aModel[oKid[:name]] + "]"
+		but cKind = "button"
+			see cMark + "( " + oKid[:text] + " )"
+		ok
+		if $RppPlain = 0
+			see $RppEsc + "[K"
+		ok
+		see nl
+	next
+	if $RppPlain = 0
+		see $RppEsc + "[J"
+	ok
+	see nl
