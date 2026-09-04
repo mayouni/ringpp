@@ -2154,3 +2154,68 @@ cannot know whether the key is present, and says so. First sweep of the
 whole Softanza tree: **7,474 sites**. The charter's earlier figure of 592
 counted reads of keys that *may be absent*; this counts every keyed read,
 which is the honest scope for a rule that cannot see presence.
+
+---
+
+### F-50. Ring++ skipped the statements it could not compile — and the call still returned the right answer
+
+Measured 2026-09-04 on Ring 1.27 and Ring++ (`rnx-spike/bench/refusal.ring`),
+while looking for what to build next. It is the one place this project did
+what its own discipline forbids: skipping a gate without saying so.
+
+```
+  $acc = 0                            Ring 1.27      Ring++ (before)
+  $v = Total(2, 3)
+  ? "returned: "   + $v               5              5        <- the SAME
+  ? "arithmetic: " + ($v + 10)        15             15       <- the SAME
+  ? "acc is now: " + $acc             1              0        <- the side effect, gone
+                                                     TOP LEVEL RAN TO COMPLETION
+  func Total(a, b)
+      $acc++        <- refused by Ring++ (++ on a global)
+      return a + b
+```
+
+**Nothing at the call site looked wrong.** The return value was right, and
+arithmetic on it was right; only the statement Ring++ could not compile had
+quietly not happened. The function was not a no-op and was not skipped as a
+whole — it ran, minus the parts that failed to compile.
+
+The information existed the whole time. `census` reported `1 refused`, and
+`rnxc exec` printed a note saying the top level calls functions that did not
+compile. Neither was consulted at run time. In `emitOne` a statement whose
+codegen returned `Error.Unsupported` was counted, the function was marked
+poisoned, and the loop ran `continue` — the statement simply left a hole.
+
+**Why the A/B harness could not catch it.** Refused functions are
+named-and-skipped by design (29 of them in `ab-known.txt`), so the one
+comparison that would have shown Ring saying 1 and Ring++ saying 0 was never
+made. The harness was honest about what it skipped; the binary was not. On
+Softanza that is **934 refused statements out of 108,790** — 934 places where
+a clean-looking run could have omitted work.
+
+**What Ring++ does instead** (rnx-spike `2555d6a`): the refused statement
+becomes a **raise where it stood**, carrying its kind and line —
+
+```
+Error: Ring++ refused this statement (expression_statement, line 7)
+and did not compile it -- running past it would give a wrong answer
+```
+
+— so `rnxc exec`, which exists to run a program and hit the wall, now hits it
+loudly and in the right place. **In place, not at the call**, deliberately:
+the statements before it did run and their effects are real, and a refusal on
+a branch never taken must not break a function that otherwise works. Whatever
+the failed statement half-emitted is rolled back first — code and call fixups
+together, since a partly-emitted `if` can leave a forward jump that is never
+patched.
+
+Nothing else moved: census identical at 107,856 compiled / 934 refused on both
+builds, A/B 0 differing, contract gate 7.2 six of six pairs. The `refusal
+raises` gate step keeps it out, and was checked to **fail** on the regression
+shape — which is exactly what Ring 1.27 prints, since Ring runs the probe to
+the end.
+
+**The general lesson, worth more than the fix.** A tool that reports what it
+cannot do at *compile* time, and then runs anyway at *run* time, is telling
+the truth in one channel and not the other. The census had the number; the
+binary needed to act on it.
