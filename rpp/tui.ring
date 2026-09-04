@@ -390,7 +390,7 @@ func RppTuiTableShow(oKid, aModel, bFocus)
 	RppTuiTableLine("    " + cSep)
 
 func RppTuiTableLine(cStr)
-	$RppScreenRow = $RppScreenRow + 1   # not ++: Ring++ refuses $global++ today
+	$RppScreenRow++
 	see cStr
 	if $RppPlain = 0
 		see $RppEsc + "[K"
@@ -998,7 +998,7 @@ func RppTuiDrawK(oTree, aModel, aFocus, nFocus)
 			see $RppEsc + "[K"
 		ok
 		see nl
-		$RppScreenRow = $RppScreenRow + 1   # not ++: Ring++ refuses $global++ today
+		$RppScreenRow++
 	next
 	if $RppPlain = 0
 		see $RppEsc + "[J"
