@@ -2305,12 +2305,12 @@ and the information exists earlier than the failure does.
 
 ---
 
-### F-53. A string refcount goes negative when a screen loop also builds an HTML tree — Ring++, open
+### F-53. A string refcount goes negative when a screen loop also builds an HTML tree — Ring++, FIXED
 
-**This one is Ring++'s, it is not fixed, and it is the only defect in this
-file without a remedy beside it.** Recorded because the browser renderer's
-live shell cannot ship until it is closed, and a defect nobody wrote down
-is a defect nobody will find twice.
+**Fixed 2026-09-04 (`rnx-spike b1c2151`), and the cause was nowhere near
+where the symptom was.** Left in full because the search is the useful
+part: what follows is what was written while it was open, with the answer
+added at the end.
 
 Measured 2026-09-04 (`rnx-spike/bench/webloop.ring`, which fails in
 seconds): RingPad's shell loop driven by the **scripted** browser
@@ -2343,10 +2343,37 @@ strings. The single-screen browser example
 it never goes round twice.
 
 The refcounting in the builtin itself matches `str2list` exactly — `newVec`
-and `newStr` are both born at rc 0 and `vecPushB` takes the reference — so
-the fault is more likely in how a long-lived nested value is released when
-a frame that also holds it goes away. Not reduced further; the repro is the
-smallest failing case so far, and the next session on it starts there.
+and `newStr` are both born at rc 0 and `vecPushB` takes the reference.
+
+**THE ANSWER.** It was not in any renderer. `exprClass`'s identifier branch
+returned `.int` for a name it could not resolve — a `$global`, or a local
+not yet defined — and `.int` is the **one class that switches refcounting
+off**. `Choice(cName, aItems)`, called as `Choice(:file, $files)`, took a
+global argument, classified the parameter as an int, and put its register
+outside the boxed mask; `move` then copied a live vector without retaining
+it, and a string three frees later went to rc −1.
+
+`Menu` — the same signature one line below `Choice` — was correct all
+along, only because it happens to write `aItems[1]`, which proves the
+parameter is a list. The disassembly showing the two together is where it
+broke:
+
+```
+Choice ... ; r1 = aItems (int)      <- a list at run time
+Menu   ... ; r1 = aItems (list)
+```
+
+**How it was found, since reduction failed.** Every deletion from the
+repro made it pass, which says the shape is allocation-sensitive rather
+than logical — reduction was the wrong tool. Building with
+`-Dtyped=false` made it pass too, which put the fault in the boxed-mask
+path in a single command. A temporary check inside `setRegB`/`vecPushB`
+for *an unboxed store of a heap value* then named the opcodes, and the
+program counter mapped them to the functions.
+
+**The rule worth keeping:** a default class must never be the one that
+disables safety. `.int` was a reasonable guess for an unknown name and a
+catastrophic one, because every other wrong guess is merely slow.
 
 ---
 
