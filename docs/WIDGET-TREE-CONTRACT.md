@@ -41,13 +41,23 @@ a minimal ASCII table in `rpp/tui.ring`, because commitment #1 forbids the
 library depending on Softanza — so `Show()` does *not* become the
 terminal renderer's `Table`. `Show()` remains the rich artist, reached
 through a Softanza-backed renderer, which is a different renderer on the
-same tree. Gate 7.2 judges six trees, one of them the callback form
+same tree. **The browser renderer's model half is built** (`RunWeb`,
+`RunWebOn`): the tree drawn as HTML and a browser's own event vocabulary —
+a control `:set`, a button `:press`ed, a menu item `:pick`ed — applied to
+the same model. Gate 7.2 therefore judges **three renderers on each of six
+trees**, all byte-identical, and every tree has a `web.ring` beside its
+`example.ring` and `keys.ring`. The browser renderer is pure Ring: it needs
+neither the console builtins nor a socket, and runs on 1.27. **The socket
+is not built** — `RppWebHtml` draws the frame the binary will serve, and
+until it serves it the claim is "three renderers agree on the model", not
+"you can open it in a browser". Gate 7.2 also judges the callback form
 itself (`examples/14-a-handler-in-place`): `RunOn`/`RunKeysOn` call a
 handler as each event happens, a handler may use globals and nothing
 else (Ring++ additionally sees the definer's locals; the contract takes
 the intersection, §4), and its own gate asserts the handler's log,
 the live-model read mid-run, and the early `:close`. Not yet built:
-`Row` and the browser renderer. `Text`'s two open questions were settled in
+`Row`, and the browser renderer's SOCKET — the half that serves the HTML
+and takes events back over a port (§5.1). `Text`'s two open questions were settled in
 §6.1–6.5 before any of it was written, and the widget was then built to
 them; building it put one ordinary line of Ring through the Ring++
 compiler and found two defects there (an assignment whose right side

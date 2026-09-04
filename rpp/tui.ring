@@ -43,6 +43,7 @@ $RppLiveModel = []       # born HERE: on Ring 1.27 a $name first assigned inside
                          # a function is a LOCAL of it (Rule A discipline)
 $RppSaid   = ""          # what RppSay() put in the status line, this run
 $RppSaidSet = 0
+$RppWeb    = []          # scripted BROWSER events; empty means "use the socket"
 $RppScreenRow = 0        # the keystroke frame counts the lines it draws ...
 $RppCursorAt = []        # ... to put the console's cursor at [row, col], live only
 
@@ -473,6 +474,12 @@ func RunOn(oTree, fOn)
 func RunKeysOn(oTree, fOn)
 	RppInstall(fOn, 1)
 	aM = RunKeys(oTree)
+	RppInstall(0, 0)
+	return aM
+
+func RunWebOn(oTree, fOn)
+	RppInstall(fOn, 1)
+	aM = RunWeb(oTree)
 	RppInstall(0, 0)
 	return aM
 
@@ -1009,3 +1016,264 @@ func RppTuiDrawK(oTree, aModel, aFocus, nFocus)
 	if $RppPlain = 0 and len($RppCursorAt) = 2
 		see $RppEsc + "[" + $RppCursorAt[1] + ";" + $RppCursorAt[2] + "H"
 	ok
+
+### ---------------------------------------------------------- the browser renderer
+
+### RunWeb(tree) -> the model. THE THIRD RENDERER, and the one contract
+### 5.1 promises alongside the terminal: same tree, same model, a browser's
+### own event vocabulary.
+###
+### A browser does not send keys or lines. It sends what happened to a
+### CONTROL: a field was SET to a value, a button was PRESSED, a menu item
+### was PICKED. Those are the three, and they arrive as a list:
+###
+###     $RppWeb = [ [ :set, :name, "amina" ], [ :press, "OK" ] ]
+###
+### The transcript it produces is the one the other two produce for the
+### same session -- :change per field with its whole value, :click on a
+### button, :submit when the screen ends -- which is gate 7.2's whole
+### point: three input vocabularies, one model.
+###
+### THE SOCKET IS NOT HERE YET. This is the model half, and it is gateable
+### without a browser exactly as the keystroke renderer was gateable
+### without a console. RppWebHtml() below draws the frame the socket will
+### serve; nothing here opens a port.
+func RunWeb(oTree)
+	$RppEvents = []
+	RppResetOn()
+	$RppPlain = 1
+
+	aKids = oTree[:children]
+	nKids = len(aKids)
+	aModel = RppTuiModel(aKids)
+	$RppLiveModel = aModel
+
+	nEv = len($RppWeb)
+	for i = 1 to nEv
+		if $RppClose = 1
+			exit
+		ok
+		aEv = $RppWeb[i]
+		cWhat = aEv[1]
+		$RppLiveModel = aModel
+
+		if cWhat = :set
+			cName = aEv[2]
+			vVal = aEv[3]
+			oKid = RppWebFind(aKids, cName)
+			aModel[cName] = RppWebValue(oKid, vVal)
+			RppFire(:change, cName, aModel[cName])
+
+		but cWhat = :press
+			cText = aEv[2]
+			oKid = RppWebButton(aKids, cText)
+			RppFire(:click, cText, "")
+			if $RppClose = 1
+				RppFire(:close, "", "")
+				return aModel
+			ok
+			if len(oKid) > 0 and oKid[:event] = :submit
+				RppFire(:submit, "", "")
+				return aModel
+			ok
+
+		but cWhat = :pick
+			# a menu item: the browser reports the item, and choosing one
+			# ENDS the screen, exactly as it does in the other two
+			cName = aEv[2]
+			cItem = aEv[3]
+			aModel[cName] = cItem
+			RppFire(:change, cName, cItem)
+			RppFire(:click, cItem, "")
+			if $RppClose = 1
+				RppFire(:close, "", "")
+				return aModel
+			ok
+			RppFire(:submit, "", "")
+			return aModel
+
+		but cWhat = :close
+			RppFire(:close, "", "")
+			return aModel
+		ok
+	next
+	RppFire(:close, "", "")
+	return aModel
+
+### The widget a name belongs to, or [] when the tree has none.
+func RppWebFind(aKids, cName)
+	nKids = len(aKids)
+	for i = 1 to nKids
+		oKid = aKids[i]
+		cKind = oKid[:kind]
+		if cKind != "label" and cKind != "button" and cKind != "status"
+			if oKid[:name] = cName
+				return oKid
+			ok
+		ok
+	next
+	return []
+
+func RppWebButton(aKids, cText)
+	nKids = len(aKids)
+	for i = 1 to nKids
+		if aKids[i][:kind] = "button" and aKids[i][:text] = cText
+			return aKids[i]
+		ok
+	next
+	return []
+
+### What the browser sent, in the shape the MODEL holds. A checkbox keeps
+### 1 or 0, a table keeps the row NUMBER, a Text keeps [ lines, row, col ]
+### with the cursor after the last character (contract 6.1) -- and a
+### browser sends a textarea as a list of lines, so the cursor is computed
+### here the same way the line renderer computes it.
+func RppWebValue(oKid, vVal)
+	if len(oKid) = 0
+		return vVal
+	ok
+	cKind = oKid[:kind]
+	if cKind = "check"
+		return RppTuiYes("" + vVal)
+	but cKind = "table"
+		return number(vVal)
+	but cKind = "text"
+		aLines = vVal
+		if len(aLines) = 0
+			aLines = [ "" ]
+		ok
+		nR = len(aLines)
+		nC = len(aLines[nR]) + 1
+		aDoc = [ aLines, nR, nC ]
+		return aDoc
+	ok
+	return vVal
+
+### ---------------------------------------------------------- the frame
+
+### The tree as HTML. One page, no framework, no script library: a form
+### whose control names ARE the model's keys, so what comes back needs no
+### translation table. This is what the socket will serve.
+func RppWebHtml(oTree, aModel)
+	cOut = "<!doctype html>" + nl
+	cOut += "<meta charset=" + char(34) + "utf-8" + char(34) + ">" + nl
+	cOut += "<title>" + RppWebEsc(oTree[:title]) + "</title>" + nl
+	cOut += "<h1>" + RppWebEsc(oTree[:title]) + "</h1>" + nl
+	cOut += "<form method=" + char(34) + "post" + char(34) + ">" + nl
+	aKids = oTree[:children]
+	nKids = len(aKids)
+	for i = 1 to nKids
+		cOut += RppWebNode(aKids[i], aModel)
+	next
+	cOut += "</form>" + nl
+	return cOut
+
+func RppWebNode(oKid, aModel)
+	cKind = oKid[:kind]
+	if cKind = "label"
+		return "<p>" + RppWebEsc(oKid[:text]) + "</p>" + nl
+	but cKind = "status"
+		return "<p class=" + char(34) + "status" + char(34) + ">" + RppWebEsc(RppStatusText(oKid)) + "</p>" + nl
+	but cKind = "button"
+		cOut = "<button name=" + char(34) + "press" + char(34)
+		cOut += " value=" + RppWebQ(oKid[:text]) + ">"
+		cOut += RppWebEsc(oKid[:text]) + "</button>" + nl
+		return cOut
+	but cKind = "entry"
+		return "<input name=" + RppWebQ(oKid[:name]) + " value=" + RppWebQ("" + aModel[oKid[:name]]) + ">" + nl
+	but cKind = "check"
+		cTick = ""
+		if aModel[oKid[:name]] = 1
+			cTick = " checked"
+		ok
+		cOut = "<label><input type=" + char(34) + "checkbox" + char(34)
+		cOut += " name=" + RppWebQ(oKid[:name]) + cTick + "> "
+		cOut += RppWebEsc(oKid[:label]) + "</label>" + nl
+		return cOut
+	but cKind = "radio" or cKind = "choice" or cKind = "menu"
+		return RppWebOptions(oKid, aModel)
+	but cKind = "table"
+		return RppWebTable(oKid, aModel)
+	but cKind = "text"
+		return RppWebText(oKid, aModel)
+	ok
+	return ""
+
+func RppWebOptions(oKid, aModel)
+	aOpts = oKid[:options]
+	cNow = "" + aModel[oKid[:name]]
+	cKind = oKid[:kind]
+	# a menu is a row of buttons: choosing one ENDS the screen, and a
+	# button is the control that says so in a browser
+	if cKind = "menu"
+		cOut = ""
+		nOpts = len(aOpts)
+		for j = 1 to nOpts
+			cOut += "<button name=" + char(34) + "pick" + char(34) + " value=" + RppWebQ(aOpts[j]) + ">" + RppWebEsc(aOpts[j]) + "</button>" + nl
+		next
+		return cOut
+	ok
+	cOut = "<select name=" + RppWebQ(oKid[:name]) + ">" + nl
+	nOpts = len(aOpts)
+	for j = 1 to nOpts
+		cSel = ""
+		if aOpts[j] = cNow
+			cSel = " selected"
+		ok
+		cOut += "<option value=" + RppWebQ(aOpts[j]) + cSel + ">" + RppWebEsc(aOpts[j]) + "</option>" + nl
+	next
+	cOut += "</select>" + nl
+	return cOut
+
+func RppWebTable(oKid, aModel)
+	aCols = oKid[:columns]
+	aRows = oKid[:rows]
+	nSel = aModel[oKid[:name]]
+	cOut = "<table><tr>"
+	nCols = len(aCols)
+	for j = 1 to nCols
+		cOut += "<th>" + RppWebEsc("" + aCols[j]) + "</th>"
+	next
+	cOut += "</tr>" + nl
+	nRows = len(aRows)
+	for r = 1 to nRows
+		cMark = ""
+		if r = nSel
+			cMark = " class=" + char(34) + "sel" + char(34)
+		ok
+		cOut += "<tr" + cMark + ">"
+		for j = 1 to nCols
+			cOut += "<td>" + RppWebEsc("" + aRows[r][j]) + "</td>"
+		next
+		cOut += "</tr>" + nl
+	next
+	cOut += "</table>" + nl
+	return cOut
+
+func RppWebText(oKid, aModel)
+	aDoc = aModel[oKid[:name]]
+	aLines = aDoc[1]
+	cBody = ""
+	nL = len(aLines)
+	for i = 1 to nL
+		if i > 1
+			cBody += nl
+		ok
+		cBody += aLines[i]
+	next
+	cOut = "<textarea name=" + RppWebQ(oKid[:name]) + ">"
+	cOut += RppWebEsc(cBody) + "</textarea>" + nl
+	return cOut
+
+### HTML escaping, and a quoted attribute. & FIRST, or the escapes
+### introduced by the others get escaped again.
+func RppWebEsc(cStr)
+	cOut = "" + cStr
+	cOut = substr(cOut, "&", "&amp;")
+	cOut = substr(cOut, "<", "&lt;")
+	cOut = substr(cOut, ">", "&gt;")
+	cOut = substr(cOut, char(34), "&quot;")
+	return cOut
+
+func RppWebQ(cStr)
+	return char(34) + RppWebEsc(cStr) + char(34)
