@@ -2219,3 +2219,37 @@ the end.
 cannot do at *compile* time, and then runs anyway at *run* time, is telling
 the truth in one channel and not the other. The census had the number; the
 binary needed to act on it.
+
+---
+
+### F-51. `+=` is not `+`: Ring appends a list with one and raises R21 with the other
+
+Measured 2026-09-04 on Ring 1.27 while giving Ring++ compound assignment
+on elements (`rnx-spike/bench/cmpd.ring`):
+
+```
+  $x = [1, 2]
+  $y = $x + 9          len 3   -- `+` APPENDS one item to a list (F-earlier)
+  $x += 9              R21     -- `+=` REFUSES it: "operator with values of
+                                  incorrect type"
+  $s = "ab"
+  $s += "cd"           "abcd"  -- but on a STRING `+=` concatenates, like `+`
+```
+
+So Ring's `+=` is **not** sugar for `x = x + y`. It carries the string
+behaviour of `+` and drops the list behaviour. The same holds on an
+element: `a[2] += 9` where `a[2]` is a list raises R21 too, so it is a
+property of the operator and not of the place.
+
+**Ring++ diverges here, in every place kind, and did so before elements
+were supported at all**: it compiles every compound assignment through the
+polymorphic `add`, so `+=` on a list APPENDS where Ring raises. The
+divergence is therefore older than the element support that exposed it,
+and it is in the dangerous direction -- Ring stops, Ring++ carries on with
+a changed list. Registered in `bench/cmpd.ring` as `C8`, which cannot be
+an A/B case because Ring produces no output to compare: it raises.
+
+Closing it needs a compound-add that rejects a vector operand -- a
+distinct opcode, since plain `+` must keep appending. Not done: the fix is
+a VM change, and the finding is recorded first so the choice is a decision
+rather than a discovery.
