@@ -2253,3 +2253,52 @@ Closing it needs a compound-add that rejects a vector operand -- a
 distinct opcode, since plain `+` must keep appending. Not done: the fix is
 a VM change, and the finding is recorded first so the choice is a decision
 rather than a discovery.
+
+---
+
+### F-52. `This.Name` is a property, never a bare call — and a mistyped `def` is silently not a method
+
+Measured 2026-09-04 on Ring 1.27 while sampling the refusal table, after I
+had proposed building "bare calls" as a feature. There is no such feature.
+
+```ring
+class K
+    @v = 7
+    def Val()
+        return 42
+    def ViaThis()
+        return This.Val        # <-- Val is a METHOD
+```
+
+```
+  Line 9 Error (R12) : Error in property name, property not found: val
+  In method viathis()
+```
+
+`This.Name` is a **property access**. Ring does not fall back to calling a
+method of that name; it raises R12. So a site like
+`insert(This.HashList, n, pair)` — where `HashList` is `def HashList()` —
+is a **latent bug**: the file loads, and the line raises only when it runs.
+Ring++ refused these sites already; since 2026-09-04 it names them
+(`This.Name is a METHOD, not a property — Ring raises R12; write
+This.Name()`), which turns a refusal into a bug report. **3 sites** in
+Softanza — not the 107 the `member_expression` count suggested, which was
+the third time a refusal category turned out to be several unrelated
+things.
+
+**And a second, quieter one, from the same sweep.** A mistyped definition
+keyword is not an error:
+
+```ring
+    ded IsNotMultipleOf2()     # `ded`, not `def`
+        return This.IsOdd()
+```
+
+Ring loads the file without complaint and the method **does not exist** —
+calling it raises `R14 : Calling Method without definition`. Nothing at
+load time says so, so a typo in a definition keyword survives until
+something calls the method. One is in Softanza today
+(`stzNumber.ring`, `IsNotMultipleOf2`).
+
+Both belong to the same family as F-50: Ring is quiet where it could speak,
+and the information exists earlier than the failure does.
