@@ -6,14 +6,14 @@ it, the way `VM-CONTRACT.md` is checked by `rpp/probe.ring` on every
 load. The sections below are the contract as written; this block is
 what has been built against it since.*
 
-**Status, 2026-09-03.**
+**Status, 2026-09-04.**
 
 | gate | result |
 |---|---|
 | 7.1 eight lines | **7** — window + label + entry + button, scripted-keys line included; `examples/09-a-window-in-the-terminal` counts them from its own text and fails at nine |
-| 7.2 two renderers, one model | **PASS** — the line renderer on Ring 1.27 and the keystroke renderer on Ring++, fed the same session, serialise to byte-identical model + events (`rnx-spike bench/tui72.py`, run by its gate) |
+| 7.2 renderers, one model | **PASS with THREE** — the line renderer on Ring 1.27, the keystroke renderer on Ring++ and the browser renderer's model half, fed the same session in three different input vocabularies, serialise to byte-identical model + events on all six trees (`rnx-spike bench/tui72.py`, run by its gate) |
 | 7.3 the Windows console | **measured and confirmed live** — see §7.3 |
-| 7.4 no pixel | holds — the two renderers use flow layout and ANSI only |
+| 7.4 no pixel | holds — the terminal renderers use flow layout and ANSI only, and the browser renderer emits HTML controls with no geometry |
 | §9 Show() vs Table | **answered** — dependency-free renderer owns a minimal ASCII table; `Show()` is a Softanza-backed renderer's, a plug-in on the same tree |
 
 Built: `rpp/tui.ring` (the tree; `Run`, line-driven, Ring 1.27 and Ring++;
