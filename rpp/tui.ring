@@ -1596,13 +1596,17 @@ func RppWebHas(aSeen, cName)
 	next
 	return 0
 
-### The first colon, or 0. `substr` would find it too, but this says what
-### it is looking for and costs one pass.
+### The first colon, or 0.
+###
+### THIS WAS A LOOP OVER cStr[i] AND IT WAS WRONG (F-54): indexing a string
+### gives the character CODE on Ring++ and a one-character STRING on Ring
+### 1.27, so `cStr[i] = ":"` was never true on Ring++, the colon was never
+### found, and a menu pick wrote to an empty key -- leaving every screen of
+### the browser shell reporting the menu's FIRST item, whatever was
+### clicked. The terminal renderers never touch this function, so nothing
+### else showed it.
+###
+### substr's two-argument form is the position of a needle, 0 when absent,
+### and means the same thing on both runtimes.
 func RppWebColon(cStr)
-	nLen = len(cStr)
-	for i = 1 to nLen
-		if cStr[i] = ":"
-			return i
-		ok
-	next
-	return 0
+	return substr(cStr, ":")

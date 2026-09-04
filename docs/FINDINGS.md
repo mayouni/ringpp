@@ -2412,3 +2412,13 @@ harness whose every probe happens to normalise it away. The suite was not
 wrong — `ascii(s[i])` is what the kernels measure — but a shape used in
 exactly one way is a shape tested in exactly one way, and the other way
 was ordinary Ring.
+
+**And it had already cost something before it was found.** The browser
+shell's menu never worked: `RppWebColon` searched for a colon with
+`if cStr[i] = ":"`, which on Ring++ compares a code against a string and
+is never true, so a menu pick wrote to an empty key and every screen
+reported the menu's *first* item whatever was clicked. That was written
+before F-54 existed, and it was blamed on the socket, on the redirect and
+on a race before the finding explained it. The terminal renderers never
+call that function, which is why nothing else showed it — and the fix is
+`substr(cStr, ":")`, which means the same thing on both runtimes.
