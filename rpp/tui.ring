@@ -1139,6 +1139,9 @@ func RppWebValue(oKid, vVal)
 		return number(vVal)
 	but cKind = "text"
 		aLines = vVal
+		if isstring(vVal)
+			aLines = RppWebLines(vVal)
+		ok
 		if len(aLines) = 0
 			aLines = [ "" ]
 		ok
@@ -1209,7 +1212,10 @@ func RppWebOptions(oKid, aModel)
 		cOut = ""
 		nOpts = len(aOpts)
 		for j = 1 to nOpts
-			cOut += "<button name=" + char(34) + "pick" + char(34) + " value=" + RppWebQ(aOpts[j]) + ">" + RppWebEsc(aOpts[j]) + "</button>" + nl
+			cPick = "" + oKid[:name] + ":" + aOpts[j]
+			cOut += "<button name=" + char(34) + "pick" + char(34)
+			cOut += " value=" + RppWebQ(cPick) + ">"
+			cOut += RppWebEsc(aOpts[j]) + "</button>" + nl
 		next
 		return cOut
 	ok
@@ -1277,3 +1283,145 @@ func RppWebEsc(cStr)
 
 func RppWebQ(cStr)
 	return char(34) + RppWebEsc(cStr) + char(34)
+
+### ---------------------------------------------------------- over the socket
+
+### RunWebLive(tree, port) -> the model, when a submit button or a menu
+### item ends the screen. The browser renderer with its socket attached:
+### the binary serves RppWebHtml()'s page and hands back the form the
+### browser posted, and every rule about what that form MEANS is here.
+###
+### Runs on Ring++ only -- web_serve/web_wait/web_done are builtins in the
+### binary -- and is defined here so the library still loads on Ring 1.27,
+### exactly as RunKeys is. The scripted RunWeb above needs none of them and
+### is what gate 7.2 judges.
+func RunWebLive(oTree, nPort)
+	$RppEvents = []
+	RppResetOn()
+	$RppPlain = 1
+
+	aKids = oTree[:children]
+	aModel = RppTuiModel(aKids)
+	$RppLiveModel = aModel
+
+	if web_serve(nPort) = 0
+		? "Ring++: port " + nPort + " is not free"
+		return aModel
+	ok
+	? "Ring++: serving on http://127.0.0.1:" + nPort + "  (Ctrl+C to stop)"
+
+	while 1
+		cHtml = RppWebHtml(oTree, aModel)
+		aForm = web_wait(cHtml)
+		if len(aForm) = 0
+			RppFire(:close, "", "")
+			exit
+		ok
+		$RppLiveModel = aModel
+
+		# 1. the fields, in the order the page carries them. A browser
+		#    posts every control, so only a value that DIFFERS is a change.
+		cAct = ""
+		cActVal = ""
+		aSeen = []
+		nF = len(aForm)
+		for i = 1 to nF
+			cK = aForm[i][1]
+			cV = aForm[i][2]
+			if cK = "press" or cK = "pick"
+				cAct = cK
+				cActVal = cV
+			else
+				aSeen + cK
+				oKid = RppWebFind(aKids, cK)
+				if len(oKid) > 0
+					vNew = RppWebValue(oKid, cV)
+					if RppTuiSerVal(vNew) != RppTuiSerVal(aModel[cK])
+						aModel[cK] = vNew
+						RppFire(:change, cK, vNew)
+					ok
+				ok
+			ok
+		next
+
+		# 2. an unchecked box is not posted at all, so absence is 0
+		nKids = len(aKids)
+		for i = 1 to nKids
+			oKid = aKids[i]
+			if oKid[:kind] = "check"
+				cName = oKid[:name]
+				if RppWebHas(aSeen, cName) = 0 and aModel[cName] != 0
+					aModel[cName] = 0
+					RppFire(:change, cName, 0)
+				ok
+			ok
+		next
+
+		# 3. the action that ended the screen
+		if cAct = "press"
+			oKid = RppWebButton(aKids, cActVal)
+			RppFire(:click, cActVal, "")
+			if $RppClose = 1
+				RppFire(:close, "", "")
+				exit
+			ok
+			if len(oKid) > 0 and oKid[:event] = :submit
+				RppFire(:submit, "", "")
+				exit
+			ok
+		but cAct = "pick"
+			# "menu:item" -- the menu's name and the item chosen, split at
+			# the FIRST colon, so an item containing one survives
+			nCut = RppWebColon(cActVal)
+			cName = left(cActVal, nCut - 1)
+			cItem = RppTuiTail(cActVal, nCut + 1)
+			aModel[cName] = cItem
+			RppFire(:change, cName, cItem)
+			RppFire(:click, cItem, "")
+			if $RppClose = 1
+				RppFire(:close, "", "")
+				exit
+			ok
+			RppFire(:submit, "", "")
+			exit
+		ok
+	end
+
+	web_done()
+	return aModel
+
+### A textarea comes back with the browser's own line endings; the model
+### holds lines, so the carriage returns go here and nowhere else.
+func RppWebLines(cStr)
+	aRaw = str2list(cStr)
+	aOut = []
+	nR = len(aRaw)
+	for i = 1 to nR
+		cLine = aRaw[i]
+		nL = len(cLine)
+		if nL > 0 and ascii(cLine[nL]) = 13
+			cLine = left(cLine, nL - 1)
+		ok
+		aOut + cLine
+	next
+	return aOut
+
+func RppWebHas(aSeen, cName)
+	nS = len(aSeen)
+	for i = 1 to nS
+		if aSeen[i] = cName
+			return 1
+		ok
+	next
+	return 0
+
+### The first colon, or 0. `substr` would find it too, but this says what
+### it is looking for and costs one pass.
+func RppWebColon(cStr)
+	nL = len(cStr)
+	for i = 1 to nL
+		if cStr[i] = ":"
+			return i
+		ok
+	next
+	return 0

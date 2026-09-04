@@ -14,6 +14,7 @@ what has been built against it since.*
 | 7.2 renderers, one model | **PASS with THREE** — the line renderer on Ring 1.27, the keystroke renderer on Ring++ and the browser renderer's model half, fed the same session in three different input vocabularies, serialise to byte-identical model + events on all six trees (`rnx-spike bench/tui72.py`, run by its gate) |
 | 7.3 the Windows console | **measured and confirmed live** — see §7.3 |
 | 7.4 no pixel | holds — the terminal renderers use flow layout and ANSI only, and the browser renderer emits HTML controls with no geometry |
+| 5.1 the socket | **PASS** — the binary serves the tree and takes the form back; a real HTTP round trip leaves the terminal renderers' model (`bench/web_probe.py`, run by the gate) |
 | §9 Show() vs Table | **answered** — dependency-free renderer owns a minimal ASCII table; `Show()` is a Softanza-backed renderer's, a plug-in on the same tree |
 
 Built: `rpp/tui.ring` (the tree; `Run`, line-driven, Ring 1.27 and Ring++;
@@ -46,18 +47,22 @@ same tree. **The browser renderer's model half is built** (`RunWeb`,
 a control `:set`, a button `:press`ed, a menu item `:pick`ed — applied to
 the same model. Gate 7.2 therefore judges **three renderers on each of six
 trees**, all byte-identical, and every tree has a `web.ring` beside its
-`example.ring` and `keys.ring`. The browser renderer is pure Ring: it needs
-neither the console builtins nor a socket, and runs on 1.27. **The socket
-is not built** — `RppWebHtml` draws the frame the binary will serve, and
-until it serves it the claim is "three renderers agree on the model", not
-"you can open it in a browser". Gate 7.2 also judges the callback form
+`example.ring` and `keys.ring`. The scripted browser renderer is pure
+Ring: it needs neither the console builtins nor a socket, and runs on
+1.27. **And the socket is built** — `RunWebLive(tree, port)` over three
+builtins beside the four console ones (`web_serve` `web_wait` `web_done`,
+`src/web.zig`): the binary serves the tree as HTML and takes the form a
+browser posts back, with no framework, template engine or JavaScript. A
+real HTTP round trip leaves the same model the two terminal renderers
+leave, and `bench/web_probe.py` checks exactly that on every gate run —
+gated rather than opt-in, because a socket can be spoken to where a
+console must open a window. Gate 7.2 also judges the callback form
 itself (`examples/14-a-handler-in-place`): `RunOn`/`RunKeysOn` call a
 handler as each event happens, a handler may use globals and nothing
 else (Ring++ additionally sees the definer's locals; the contract takes
 the intersection, §4), and its own gate asserts the handler's log,
-the live-model read mid-run, and the early `:close`. Not yet built:
-`Row`, and the browser renderer's SOCKET — the half that serves the HTML
-and takes events back over a port (§5.1). `Text`'s two open questions were settled in
+the live-model read mid-run, and the early `:close`. Not yet built: `Row`, the last
+widget of the first tranche. `Text`'s two open questions were settled in
 §6.1–6.5 before any of it was written, and the widget was then built to
 them; building it put one ordinary line of Ring through the Ring++
 compiler and found two defects there (an assignment whose right side
