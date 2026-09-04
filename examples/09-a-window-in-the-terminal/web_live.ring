@@ -16,6 +16,7 @@ $ui = Window("Sign in", [
 	Button("OK", :submit) ])
 
 $m = RunWebLive($ui, 8770)
+RppWebBye("Signed in", "hello " + $m[:name])
 ? ""
 ? "hello " + $m[:name]
 ? "serial: " + RppSerialise($m, $RppEvents)

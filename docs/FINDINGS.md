@@ -2302,3 +2302,48 @@ something calls the method. One is in Softanza today
 
 Both belong to the same family as F-50: Ring is quiet where it could speak,
 and the information exists earlier than the failure does.
+
+---
+
+### F-53. A string refcount goes negative when a screen loop also builds an HTML tree — Ring++, open
+
+**This one is Ring++'s, it is not fixed, and it is the only defect in this
+file without a remedy beside it.** Recorded because the browser renderer's
+live shell cannot ship until it is closed, and a defect nobody wrote down
+is a defect nobody will find twice.
+
+Measured 2026-09-04 (`rnx-spike/bench/webloop.ring`, which fails in
+seconds): RingPad's shell loop driven by the **scripted** browser
+renderer — no socket, no console — with `RppWebHtml()` called once per
+screen. On the second screen:
+
+```
+thread panic: integer overflow
+  main.zig:815  in release    <- o.rc -= 1 on a STRING whose rc is already 0
+  main.zig:1041 in freeVec    <- releasing a vector's elements, recursing
+```
+
+A string is released more often than it was retained, and the frees
+recurse through nested vectors until a count goes below zero.
+
+**What it is not.** Each ruled out separately, each clean:
+
+| suspected | result |
+|---|---|
+| the socket | the repro never opens one |
+| `web_wait`'s nested list | copying the form into plain Ring strings first changes nothing |
+| `RppWebEsc` / `RppWebText` / `RppWebOptions` | 200 rounds each, clean |
+| `RppWebHtml` on a rebuilt tree | 200 rounds, clean |
+| the shell loop *without* the HTML frame | clean — and it is what `examples/12` gates on every run |
+
+It needs **the screen loop and the HTML frame together**, which is why the
+terminal renderers never show it: they draw with `see` and build no tree of
+strings. The single-screen browser example
+(`examples/13-a-text-to-edit/web_live.ring`) is unaffected and runs, because
+it never goes round twice.
+
+The refcounting in the builtin itself matches `str2list` exactly — `newVec`
+and `newStr` are both born at rc 0 and `vecPushB` takes the reference — so
+the fault is more likely in how a long-lived nested value is released when
+a frame that also holds it goes away. Not reduced further; the repro is the
+smallest failing case so far, and the next session on it starts there.

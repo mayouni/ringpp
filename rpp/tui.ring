@@ -1396,8 +1396,8 @@ func RppWebText(oKid, aModel)
 	aDoc = aModel[oKid[:name]]
 	aLines = aDoc[1]
 	cBody = ""
-	nL = len(aLines)
-	for i = 1 to nL
+	nLines = len(aLines)
+	for i = 1 to nLines
 		if i > 1
 			cBody += nl
 		ok
@@ -1523,8 +1523,24 @@ func RunWebLive(oTree, nPort)
 		ok
 	end
 
-	web_done()
+	# the listener stays OPEN: a shell calls this once per screen, and a
+	# socket closed between screens refuses the browser's redirect. The
+	# program ends the session with RppWebBye(), which serves one last
+	# page and shuts the socket -- otherwise the browser, still following
+	# the redirect, is answered by nothing at all.
 	return aModel
+
+### The last page of a session, and the end of the socket. A browser is
+### mid-redirect when the final screen returns; without this it is answered
+### by a closed port, which reads as a crash rather than an ending.
+func RppWebBye(cTitle, cLine)
+	cOut = "<!doctype html>" + nl
+	cOut += "<meta charset=" + char(34) + "utf-8" + char(34) + ">" + nl
+	cOut += "<title>" + RppWebEsc(cTitle) + "</title>" + nl
+	cOut += "<h1>" + RppWebEsc(cTitle) + "</h1>" + nl
+	cOut += "<p>" + RppWebEsc(cLine) + "</p>" + nl
+	cOut += "<p>The window is closed. You can shut this tab.</p>" + nl
+	web_bye(cOut)
 
 ### A textarea comes back with the browser's own line endings; the model
 ### holds lines, so the carriage returns go here and nowhere else.
@@ -1534,9 +1550,9 @@ func RppWebLines(cStr)
 	nR = len(aRaw)
 	for i = 1 to nR
 		cLine = aRaw[i]
-		nL = len(cLine)
-		if nL > 0 and ascii(cLine[nL]) = 13
-			cLine = left(cLine, nL - 1)
+		nLen = len(cLine)
+		if nLen > 0 and ascii(cLine[nLen]) = 13
+			cLine = left(cLine, nLen - 1)
 		ok
 		aOut + cLine
 	next
@@ -1554,8 +1570,8 @@ func RppWebHas(aSeen, cName)
 ### The first colon, or 0. `substr` would find it too, but this says what
 ### it is looking for and costs one pass.
 func RppWebColon(cStr)
-	nL = len(cStr)
-	for i = 1 to nL
+	nLen = len(cStr)
+	for i = 1 to nLen
 		if cStr[i] = ":"
 			return i
 		ok
