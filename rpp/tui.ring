@@ -131,6 +131,54 @@ func TextWith(cName, aDoc)
 func Table(cName, aColumns, aRows)
 	return [ :kind = "table", :name = cName, :columns = aColumns, :rows = aRows, :value = 1 ]
 
+### Row: children side by side instead of stacked. A container, like
+### Window -- it holds no value, takes no focus and appears in no model.
+### It promises NOTHING about width (§7.4): how much room each child gets
+### is the renderer's business, as the scrollport is (§6.2).
+###
+### A Row is meant for the single-line widgets. A Text or a Table inside
+### one is drawn on its own lines, because a multi-line widget cannot sit
+### beside anything and pretending otherwise would be geometry.
+func Row(aChildren)
+	return [ :kind = "row", :children = aChildren ]
+
+### The widgets in order, with Rows opened out. The model, the focus ring
+### and the event loops all use THIS; only the drawing walks the nesting.
+### That is what makes a Row invisible to the transcript, and example 15
+### is the gate that says so.
+func RppFlat(aKids)
+	aOut = []
+	nK = len(aKids)
+	for i = 1 to nK
+		oKid = aKids[i]
+		if oKid[:kind] = "row"
+			aInner = RppFlat(oKid[:children])
+			nI = len(aInner)
+			for j = 1 to nI
+				aOut + aInner[j]
+			next
+		else
+			aOut + oKid
+		ok
+	next
+	return aOut
+
+### A widget's identity for the frame. Focus was an INDEX into the
+### children, which a Row breaks: the flat order and the drawn order are
+### no longer the same list. A key survives the nesting.
+func RppKeyOf(oKid)
+	cKind = oKid[:kind]
+	if cKind = "button"
+		return "b:" + oKid[:text]
+	but cKind = "label"
+		return "l:" + oKid[:text]
+	but cKind = "status"
+		return "s:"
+	but cKind = "row"
+		return "r:"
+	ok
+	return "w:" + oKid[:name]
+
 ### ---------------------------------------------------------- the renderer
 
 ### Run(tree) -> the model, when the submit button is pressed or the
@@ -147,7 +195,7 @@ func Run(oTree)
 		$RppPlain = 1
 	ok
 
-	aKids = oTree[:children]
+	aKids = RppFlat(oTree[:children])
 	nKids = len(aKids)
 
 	# every widget that holds a value exists in the model BEFORE any read (F-49)
@@ -516,32 +564,46 @@ func RppTuiDraw(oTree, aModel)
 		see cTitle + nl
 	ok
 	see copy("-", len(cTitle)) + nl
+	# the children AS WRITTEN -- a Row is drawn, never flattened away
 	aKids = oTree[:children]
 	nKids = len(aKids)
 	for i = 1 to nKids
 		oKid = aKids[i]
 		cKind = oKid[:kind]
-		if cKind = "label"
-			see oKid[:text] + nl
-		but cKind = "entry"
-			see "  [" + aModel[oKid[:name]] + "]" + nl
-		but cKind = "check"
-			see "  " + RppTuiBox(aModel[oKid[:name]]) + " " + oKid[:label] + nl
-		but cKind = "radio" or cKind = "choice"
-			see "  " + RppTuiOptsLine(oKid, aModel) + nl
+		if cKind = "row"
+			see RppTuiRowLine(oKid, aModel, "") + nl
+			RppTuiRowRest(oKid, aModel, "")
 		but cKind = "table"
 			RppTuiTableShow(oKid, aModel, 0)
-		but cKind = "menu"
-			see "  " + RppTuiOptsLine(oKid, aModel) + nl
 		but cKind = "text"
 			RppTuiTextShow(oKid, aModel, 0)
-		but cKind = "status"
-			see "  status: " + RppStatusText(oKid) + nl
-		but cKind = "button"
-			see "  ( " + oKid[:text] + " )" + nl
+		but cKind = "label"
+			see RppTuiInline(oKid, aModel) + nl
+		else
+			see "  " + RppTuiInline(oKid, aModel) + nl
 		ok
 	next
 	see nl
+
+### A Row's multi-line children -- a Text or a Table -- cannot sit beside
+### anything, so they are drawn after the row's line, on their own.
+func RppTuiRowRest(oRow, aModel, cHere)
+	aKids = oRow[:children]
+	nK = len(aKids)
+	for i = 1 to nK
+		oKid = aKids[i]
+		if RppTuiFlatDraw(oKid[:kind]) = 0
+			bF = 0
+			if RppKeyOf(oKid) = cHere
+				bF = 1
+			ok
+			if oKid[:kind] = "table"
+				RppTuiTableShow(oKid, aModel, bF)
+			else
+				RppTuiTextShow(oKid, aModel, bF)
+			ok
+		ok
+	next
 
 ### What the status line shows: whatever a handler last said this run,
 ### otherwise the text the widget was built with.
@@ -550,6 +612,53 @@ func RppStatusText(oKid)
 		return $RppSaid
 	ok
 	return oKid[:text]
+
+### One line of a single-line widget, without its focus mark. Both
+### terminal frames draw through this, so a Row can join several of them
+### on one line and they read exactly as they do stacked.
+func RppTuiInline(oKid, aModel)
+	cKind = oKid[:kind]
+	if cKind = "label"
+		return oKid[:text]
+	but cKind = "entry"
+		return "[" + aModel[oKid[:name]] + "]"
+	but cKind = "check"
+		return RppTuiBox(aModel[oKid[:name]]) + " " + oKid[:label]
+	but cKind = "radio" or cKind = "choice" or cKind = "menu"
+		return RppTuiOptsLine(oKid, aModel)
+	but cKind = "status"
+		return "status: " + RppStatusText(oKid)
+	but cKind = "button"
+		return "( " + oKid[:text] + " )"
+	ok
+	return ""
+
+### A Row as one line: each child's inline text, the focused one marked
+### where it sits. cHere is "" in the line renderer, which has no focus.
+func RppTuiRowLine(oRow, aModel, cHere)
+	aKids = oRow[:children]
+	cOut = ""
+	nK = len(aKids)
+	for i = 1 to nK
+		oKid = aKids[i]
+		if i > 1
+			cOut += "   "
+		ok
+		if RppKeyOf(oKid) = cHere
+			cOut += "> "
+		else
+			cOut += "  "
+		ok
+		cOut += RppTuiInline(oKid, aModel)
+	next
+	return cOut
+
+### Is this a widget a Row can draw on one line?
+func RppTuiFlatDraw(cKind)
+	if cKind = "text" or cKind = "table"
+		return 0
+	ok
+	return 1
 
 func RppTuiBox(nChecked)
 	if nChecked = 1
@@ -630,7 +739,7 @@ func RunKeys(oTree)
 		ok
 	ok
 
-	aKids = oTree[:children]
+	aKids = RppFlat(oTree[:children])
 	nKids = len(aKids)
 	aModel = RppTuiModel(aKids)
 	aFocus = []
@@ -959,21 +1068,33 @@ func RppTuiDrawK(oTree, aModel, aFocus, nFocus)
 	ok
 	see nl
 	$RppScreenRow = 2
+	# the children AS WRITTEN; focus is matched by KEY, because with a Row
+	# the drawn order and the flat focus ring are no longer the same list
+	aFlat = RppFlat(oTree[:children])
+	cHere = RppKeyOf(aFlat[ aFocus[nFocus] ])
 	aKids = oTree[:children]
 	nKids = len(aKids)
-	nHere = aFocus[nFocus]
 	for i = 1 to nKids
 		oKid = aKids[i]
 		cKind = oKid[:kind]
 		cMark = "  "
-		if i = nHere
+		if RppKeyOf(oKid) = cHere
 			cMark = "> "
 		ok
-		if cKind = "label"
+		if cKind = "row"
+			see RppTuiRowLine(oKid, aModel, cHere)
+			if $RppPlain = 0
+				see $RppEsc + "[K"
+			ok
+			see nl
+			$RppScreenRow++
+			RppTuiRowRest(oKid, aModel, cHere)
+			loop
+		but cKind = "label"
 			see cMark + oKid[:text]
 		but cKind = "entry"
 			see cMark + "[" + aModel[oKid[:name]] + "]"
-			if i = nHere and $RppPlain = 0
+			if RppKeyOf(oKid) = cHere and $RppPlain = 0
 				$RppCursorAt = [ $RppScreenRow + 1, len(aModel[oKid[:name]]) + 4 ]
 			ok
 		but cKind = "check"
@@ -982,7 +1103,7 @@ func RppTuiDrawK(oTree, aModel, aFocus, nFocus)
 			see cMark + RppTuiOptsLine(oKid, aModel)
 		but cKind = "table"
 			bF = 0
-			if i = nHere
+			if RppKeyOf(oKid) = cHere
 				bF = 1
 			ok
 			RppTuiTableShow(oKid, aModel, bF)
@@ -991,7 +1112,7 @@ func RppTuiDrawK(oTree, aModel, aFocus, nFocus)
 			see cMark + RppTuiOptsLine(oKid, aModel)
 		but cKind = "text"
 			bF = 0
-			if i = nHere
+			if RppKeyOf(oKid) = cHere
 				bF = 1
 			ok
 			RppTuiTextShow(oKid, aModel, bF)
@@ -1043,7 +1164,7 @@ func RunWeb(oTree)
 	RppResetOn()
 	$RppPlain = 1
 
-	aKids = oTree[:children]
+	aKids = RppFlat(oTree[:children])
 	nKids = len(aKids)
 	aModel = RppTuiModel(aKids)
 	$RppLiveModel = aModel
@@ -1171,9 +1292,24 @@ func RppWebHtml(oTree, aModel)
 	cOut += "</form>" + nl
 	return cOut
 
+### A Row is one line of controls. No width, no columns, no geometry
+### (§7.4): the browser decides how much room each gets, exactly as the
+### terminal does.
+func RppWebRow(oRow, aModel)
+	cOut = "<div class=" + char(34) + "row" + char(34) + ">" + nl
+	aKids = oRow[:children]
+	nK = len(aKids)
+	for i = 1 to nK
+		cOut += RppWebNode(aKids[i], aModel)
+	next
+	cOut += "</div>" + nl
+	return cOut
+
 func RppWebNode(oKid, aModel)
 	cKind = oKid[:kind]
-	if cKind = "label"
+	if cKind = "row"
+		return RppWebRow(oKid, aModel)
+	but cKind = "label"
 		return "<p>" + RppWebEsc(oKid[:text]) + "</p>" + nl
 	but cKind = "status"
 		return "<p class=" + char(34) + "status" + char(34) + ">" + RppWebEsc(RppStatusText(oKid)) + "</p>" + nl
@@ -1300,7 +1436,7 @@ func RunWebLive(oTree, nPort)
 	RppResetOn()
 	$RppPlain = 1
 
-	aKids = oTree[:children]
+	aKids = RppFlat(oTree[:children])
 	aModel = RppTuiModel(aKids)
 	$RppLiveModel = aModel
 

@@ -14,6 +14,7 @@ what has been built against it since.*
 | 7.2 renderers, one model | **PASS with THREE** — the line renderer on Ring 1.27, the keystroke renderer on Ring++ and the browser renderer's model half, fed the same session in three different input vocabularies, serialise to byte-identical model + events on all six trees (`rnx-spike bench/tui72.py`, run by its gate) |
 | 7.3 the Windows console | **measured and confirmed live** — see §7.3 |
 | 7.4 no pixel | holds — the terminal renderers use flow layout and ANSI only, and the browser renderer emits HTML controls with no geometry |
+| 3.1 the first tranche | **complete** — `Window Label Entry Text Button Checkbox Radio Choice Table Menu Status Row`, every kind in the table below, under three renderers |
 | 5.1 the socket | **PASS** — the binary serves the tree and takes the form back; a real HTTP round trip leaves the terminal renderers' model (`bench/web_probe.py`, run by the gate) |
 | §9 Show() vs Table | **answered** — dependency-free renderer owns a minimal ASCII table; `Show()` is a Softanza-backed renderer's, a plug-in on the same tree |
 
@@ -61,8 +62,19 @@ itself (`examples/14-a-handler-in-place`): `RunOn`/`RunKeysOn` call a
 handler as each event happens, a handler may use globals and nothing
 else (Ring++ additionally sees the definer's locals; the contract takes
 the intersection, §4), and its own gate asserts the handler's log,
-the live-model read mid-run, and the early `:close`. Not yet built: `Row`, the last
-widget of the first tranche. `Text`'s two open questions were settled in
+the live-model read mid-run, and the early `:close`. **`Row` is built, and with it the first
+tranche is complete** — nothing in §3.1 is now unbuilt. Row is the only
+widget that is pure LAYOUT, which gives it the sharpest gate in the set:
+`examples/15-a-row-of-buttons` runs the same session on a tree *with* a
+Row and the same tree *without* one and requires byte-identical model and
+events. Layout is drawing, and drawing is invisible to the model, so every
+renderer flattens the tree for the model, the focus ring and the events,
+and only the drawing walks the nesting. **Row promises nothing about
+width** (§7.4): it says "these belong together, side by side", and how
+much room each child gets is the renderer's, exactly as the scrollport is
+(§6.2). There is no width parameter and there will not be one. A Text or a
+Table inside a Row is drawn on its own lines, because a multi-line widget
+cannot sit beside anything and pretending otherwise would be geometry. `Text`'s two open questions were settled in
 §6.1–6.5 before any of it was written, and the widget was then built to
 them; building it put one ordinary line of Ring through the Ring++
 compiler and found two defects there (an assignment whose right side
