@@ -689,6 +689,35 @@ func RppSerialise(aModel, aEvents)
 ### backslash-n, so a multi-line buffer stays one line and the comparison
 ### stays a byte comparison. Starts from "" so a number is never the left
 ### operand of + (number + non-numeric string is R41 on 1.27, measured).
+### A value's own characters, escaped so the transcript is INJECTIVE.
+### Measured 2026-09-04, after Mansour's live editing session put a comma
+### in a value and sent me to look at the joins:
+###
+###     [ [ "x", "1|y=2" ] ]           model:x=1|y=2|events:
+###     [ [ "x", "1" ], [ "y", "2" ] ] model:x=1|y=2|events:
+###
+### -- two different models, the same bytes, which is a FALSE PASS waiting
+### for gate 7.2. A value containing the field separator could impersonate
+### a field boundary. Now `\` doubles and `|` is written `\|`, so nothing
+### in a value can be mistaken for the frame around it.
+###
+### Names need no escaping: they are the symbols a tree was built with.
+### And this runs BEFORE the line join, so a Text whose content holds no
+### backslash serialises exactly as it did -- which is why no expected
+### transcript in the examples had to change.
+### Replacement, not indexing: `s[i]` on a string is a one-character
+### STRING on Ring 1.27 and the character CODE on Ring++, so a loop over
+### it escaped "amina" to "9710910511097" on one runtime and not the
+### other. The gate caught it on the first run. substr's four-argument
+### form means the same thing on both.
+###
+### `\` FIRST, or the backslash the second pass introduces gets doubled by
+### it -- the same order, and the same reason, as RppWebEsc's `&`.
+func RppEscVal(cStr)
+	cOut = substr("" + cStr, char(92), char(92) + char(92))
+	cOut = substr(cOut, "|", char(92) + "|")
+	return cOut
+
 func RppTuiSerVal(v)
 	if islist(v)
 		cOut = "" + v[2] + "," + v[3] + ","
@@ -700,11 +729,11 @@ func RppTuiSerVal(v)
 			if i > 1
 				cOut += $RppBsN
 			ok
-			cOut += aL[i]
+			cOut += RppEscVal(aL[i])
 		next
 		return cOut
 	ok
-	return "" + v
+	return RppEscVal("" + v)
 
 ### ---------------------------------------------------------- the keystroke renderer
 

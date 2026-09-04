@@ -2347,3 +2347,41 @@ and `newStr` are both born at rc 0 and `vecPushB` takes the reference — so
 the fault is more likely in how a long-lived nested value is released when
 a frame that also holds it goes away. Not reduced further; the repro is the
 smallest failing case so far, and the next session on it starts there.
+
+---
+
+### F-54. `s[i]` on a string is a character on Ring and a CODE on Ring++ — and every probe hid it
+
+Measured 2026-09-04, after it silently turned `amina` into `9710910511097`
+inside `rpp/tui.ring`:
+
+```
+  s = "abc"        Ring 1.27      Ring++
+  s[2]             b              98
+  ascii(s[2])      98             98
+```
+
+Indexing a string yields a **one-character string** on Ring and the
+**character code** on Ring++ (`dget` on a string returns the byte). Both
+agree the moment `ascii()` is wrapped around it — and that is the whole
+reason this survived so long unregistered. Every string-indexing probe in
+`bench/` was written as `ascii(s[i])`, because that is what the kernels
+needed, so the naked form was never once compared.
+
+**The failure is silent and it is in the dangerous direction.** A loop
+that builds a string character by character — the most ordinary thing in
+the world — produces text on one runtime and a run of numbers on the
+other, with no error on either. It cost one gate run to find and would
+have cost a user an afternoon.
+
+Registered as `bi:BI_IDX` in `ab-known.txt`, with a probe that does NOT
+wrap it, so the divergence is now reported by name on every A/B run. The
+portable idiom is `substr(s, i, 1)` for a character, or `ascii(s[i])` for
+a code; `rpp/tui.ring` uses `substr`'s four-argument replacement form
+instead of indexing at all.
+
+**What it says about the probe suite.** A divergence is invisible to a
+harness whose every probe happens to normalise it away. The suite was not
+wrong — `ascii(s[i])` is what the kernels measure — but a shape used in
+exactly one way is a shape tested in exactly one way, and the other way
+was ordinary Ring.
