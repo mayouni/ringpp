@@ -2222,7 +2222,7 @@ binary needed to act on it.
 
 ---
 
-### F-51. `+=` is not `+`: Ring appends a list with one and raises R21 with the other
+### F-51. `+=` is not `+`: Ring appends a list with one and raises R21 with the other — FIXED
 
 Measured 2026-09-04 on Ring 1.27 while giving Ring++ compound assignment
 on elements (`rnx-spike/bench/cmpd.ring`):
@@ -2249,10 +2249,23 @@ and it is in the dangerous direction -- Ring stops, Ring++ carries on with
 a changed list. Registered in `bench/cmpd.ring` as `C8`, which cannot be
 an A/B case because Ring produces no output to compare: it raises.
 
-Closing it needs a compound-add that rejects a vector operand -- a
-distinct opcode, since plain `+` must keep appending. Not done: the fix is
-a VM change, and the finding is recorded first so the choice is a decision
-rather than a discovery.
+**Closed 2026-09-04 (`rnx-spike 186dc00`), and it needed no new opcode.**
+`add` never used its `d` field and `addi` never used its `c`, so a compound
+assignment marks the instruction and `addSlow` refuses a vector when the
+mark is set. Plain `+` and the constant-folded `x + 5` leave the mark at
+zero and keep appending.
+
+**`++` diverged the same way and was not in this finding.** The postfix
+path compiles to `addi` — four sites — and `$x++` on a list appended where
+Ring raises. Found by checking the shapes *next to* the one written down,
+which is the habit this file keeps earning.
+
+**And two probes that could not be tested now are.** `cmpd:C8` sat in
+`bench/` uncalled, with a comment explaining that Ring raised so there was
+no output to compare. Now that both runtimes raise, `try`/`catch` makes the
+raise itself the answer — both return `"raised"` — so it is an ordinary
+gated case, `C9` covers `++`, and `C10` guards the append that must
+survive. A divergence closes by becoming testable, not by being argued.
 
 ---
 

@@ -44,6 +44,7 @@ $RppLiveModel = []       # born HERE: on Ring 1.27 a $name first assigned inside
 $RppSaid   = ""          # what RppSay() put in the status line, this run
 $RppSaidSet = 0
 $RppWeb    = []          # scripted BROWSER events; empty means "use the socket"
+$RppServing = 0          # the socket banner is printed once, not per screen
 $RppScreenRow = 0        # the keystroke frame counts the lines it draws ...
 $RppCursorAt = []        # ... to put the console's cursor at [row, col], live only
 
@@ -1473,7 +1474,12 @@ func RunWebLive(oTree, nPort)
 		? "Ring++: port " + nPort + " is not free"
 		return aModel
 	ok
-	? "Ring++: serving on http://127.0.0.1:" + nPort + "  (Ctrl+C to stop)"
+	# once per session, not once per screen: a shell calls this for every
+	# screen it draws, and five identical banners is what that looked like
+	if $RppServing = 0
+		$RppServing = 1
+		? "Ring++: serving on http://127.0.0.1:" + nPort + "  (Ctrl+C to stop)"
+	ok
 
 	while 1
 		cHtml = RppWebHtml(oTree, aModel)
