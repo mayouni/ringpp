@@ -371,7 +371,7 @@ foreach ($c in (Get-ChildItem $opDir -Filter *.ring | Sort-Object Name)) {
     }
 }
 "{0} {1,-16} {2}" -f $(if ($opBad.Count -eq 0) { "PASS" } else { "FAIL" }), "tsring open",
-    $(if ($opBad.Count -eq 0) { "4 known-bad + 4 controls unchanged (case-fold, trailing dot)" } else { "" })
+    $(if ($opBad.Count -eq 0) { "1 known-bad + 7 controls unchanged (trailing dot; case-fold closed 2026-09-05)" } else { "" })
 if ($opBad.Count) { $fail++; $opBad | ForEach-Object { "       $_" } }
 Pop-Location
 

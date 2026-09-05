@@ -259,7 +259,39 @@ neither caused nor fixed them. Fixtures for all of it are in
 `tests/fixtures/tsring_open/`, gated by `tests\run-all.ps1` as
 `tsring open`.
 
-### Defect A — the two codepoints Unicode case-folds into ASCII
+**Defect A is CLOSED as of 2026-09-05. Defect B is still open.** The fixtures
+for A were renamed `xfail_` -> `ok_` when the gate caught the change; the
+section below is kept in full, because the mechanism is worth reading and how
+it closed is worth more than that it closed.
+
+### Defect A — the two codepoints Unicode case-folds into ASCII -- CLOSED
+
+**Closed 2026-09-05, by a regeneration done for something else.** Commit
+`a833c05` -- "Grammar: finally, catch(e), multi-value `on` -- one
+regeneration" -- dropped `0x17f` in `src/parser.c` from **38 occurrences to
+0**, and `0x212a` with it:
+
+```
+a833c05^   0x17f count = 38
+a833c05    0x17f count = 0
+```
+
+`grammar.js` changed 31 lines in that commit, all three of the intended
+features, and **the `ci()` helper was not touched**. What changed is the
+generator: the same commit adds `tree-sitter.json` (version 0.2.0) and updates
+`src/tree_sitter/array.h`. A newer tree-sitter CLI no longer subtracts the
+case-folded members of a keyword class from the catch-all identifier
+transition, so the two codepoints have transitions again.
+
+So the fix was **free and unintended** -- bought while paying for `finally`.
+Nothing was reported upstream and nothing needed to be: the defect was in the
+generated table, and regenerating with a current CLI was the whole cure. It
+also means the shipped binaries disagreed with the vendored source from
+2026-08-31 until they were rebuilt on 2026-09-05, which is exactly the
+inconsistency `bin/README.md` warns about -- and the `tsring open` gate is
+what found it.
+
+The mechanism, kept because it is the interesting part:
 
 `? "ſ"` alone is rejected by the grammar. `ring -norun` accepts it, silently,
 exit 0. The character is **U+017F LATIN SMALL LETTER LONG S**, and it breaks

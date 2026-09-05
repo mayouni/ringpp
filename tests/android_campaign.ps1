@@ -53,8 +53,14 @@ if (-not (Test-Path $vm)) { Skip "no arm64 runtime stub -- run tests\b2_runtimes
 & $adb -s $serial push $vm "$dev/ring" | Out-Null
 & $adb -s $serial shell "chmod 755 $dev/ring" | Out-Null
 & $adb -s $serial push (Join-Path $root 'ringpp.ring') "$dev/" | Out-Null
-foreach ($f in 'core','idioms','probe') {
-    & $adb -s $serial push (Join-Path $root "rpp\$f.ring") "$dev/rpp/" | Out-Null
+# EVERY rpp module, not a list. The list here read 'core','idioms','probe'
+# and went stale the day rpp\tui.ring was added: ringpp.ring loads it on
+# line 12, the device did not have it, and all six on-device gates failed
+# with "Ring error on device" -- which named neither the file nor the load.
+# A staging list that has to be edited when a module is added is a list that
+# will be wrong again.
+foreach ($f in (Get-ChildItem (Join-Path $root 'rpp') -Filter *.ring)) {
+    & $adb -s $serial push $f.FullName "$dev/rpp/" | Out-Null
 }
 foreach ($f in 'probe_smoke','buffer','idioms','name_collision','differential','fuzz_bounds') {
     & $adb -s $serial push (Join-Path $root "tests\$f.ring") "$dev/tests/" | Out-Null
