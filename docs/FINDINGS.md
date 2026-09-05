@@ -315,6 +315,27 @@ Cost me a debugging cycle on `RppBuffer.Len()`, which is now `Size()`.
 Any class exposing `Len`, `Copy`, `Left`, `Right`, `Find`, `Sort`,
 `Type`, `Space` or `Read` will do this to itself.
 
+**An inherited method shadows just as well** — measured 2026-09-05. The
+class doing the shadowing need not be the class you are reading:
+
+```ring
+class stzHashList from stzList
+     def InsertAfter(_n_, paPair)
+          insert( This.HashList(), _n_, paPair )   # R20
+```
+
+`stzList`, the parent, defines `def Insert(pItem, pWhere)`. Nothing in
+`stzHashList` names `Insert`, and nothing at the call site suggests the
+three-argument builtin will not be reached.
+
+Both of Softanza's hash-list inserts are dead this way, and **three
+independent defects sit on that one line**: it was written `This.HashList`
+without parentheses ([F-52](#f-52)), so it raised R12 first; with the
+parentheses restored it raises R20, this finding; and were the arity right,
+`HashList()` returns `This.Content()` — the attribute **by value** — so the
+insert would mutate a copy and the method would silently do nothing. Each
+layer hides the next, and only the first raises an error a reader trusts.
+
 ### F-18. `N` and `n` are the same variable
 
 Ring is case-insensitive throughout, identifiers included:

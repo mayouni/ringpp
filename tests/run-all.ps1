@@ -317,11 +317,21 @@ $i2dir = "tests\fixtures\tsring_issue2"
 $i2bad = @()
 foreach ($c in (Get-ChildItem (Join-Path $root $i2dir) -Filter *.ring | Sort-Object Name)) {
     $o = & $ringpp check $c.FullName 2>&1 | Out-String
-    if ($o -match "rpp/unparsed") { $i2bad += $c.Name }
+    # A check that did not run says NOTHING about the grammar. Both of these
+    # gates read the ABSENCE of rpp/unparsed as proof a file parsed, so a
+    # failed invocation silently reads as a verdict -- see the note above the
+    # open gate below. Every completed run prints its summary line, whether or
+    # not any rule fired; a clean file names no file at all, so the summary is
+    # the only thing that distinguishes "parsed" from "never ran".
+    if ($o -notmatch "in 1 files") {
+        $i2bad += "$($c.Name) -- check produced no verdict; nothing was proved"
+    } elseif ($o -match "rpp/unparsed") {
+        $i2bad += "$($c.Name) is rejected -- the grammar regressed"
+    }
 }
 "{0} {1,-16} {2}" -f $(if ($i2bad.Count -eq 0) { "PASS" } else { "FAIL" }), "tsring #2",
     $(if ($i2bad.Count -eq 0) { "all 4 digit-leading cases parse (grammar v1.1.1)" } else { "" })
-if ($i2bad.Count) { $fail++; $i2bad | ForEach-Object { "       $_ is rejected -- the grammar regressed" } }
+if ($i2bad.Count) { $fail++; $i2bad | ForEach-Object { "       $_" } }
 Pop-Location
 
 # The OPEN defects in the vendored grammar, narrowed from the same corpus run
@@ -332,11 +342,28 @@ Pop-Location
 # stale; an ok_ that stops parsing means a fix was bought with a regression.
 # Both deserve to fail the build, which is why this gate is not a TODO in a
 # markdown file. See upstream\tree-sitter-ring-notes.md.
+#
+# The verdict is read from the ABSENCE of a note, which makes a check that
+# never ran indistinguishable from a file that parsed -- and it flips an
+# xfail to "upstream fixed it" rather than failing honestly. Hardened
+# 2026-09-05 to require the summary line, which every completed run prints.
+#
+# That day this gate also cost an hour to a difference that was ALREADY
+# PRINTED: the three xfail_ files parse under zig-out\bin\ringpp.exe and are
+# rejected under bin\win64\ringpp.exe, and the suite says which one it picked
+# on its "using" line above. The gate was right, the shipped binary is simply
+# older than the vendored grammar. Read the "using" line before doubting a
+# verdict.
 Push-Location $root
 $opDir = Join-Path $root "tests\fixtures\tsring_open"
 $opBad = @()
 foreach ($c in (Get-ChildItem $opDir -Filter *.ring | Sort-Object Name)) {
-    $rejected = ((& $ringpp check $c.FullName 2>&1 | Out-String) -match "rpp/unparsed")
+    $o = & $ringpp check $c.FullName 2>&1 | Out-String
+    if ($o -notmatch "in 1 files") {
+        $opBad += "$($c.Name) -- check produced no verdict; nothing was proved"
+        continue
+    }
+    $rejected = ($o -match "rpp/unparsed")
     $expected = $c.Name.StartsWith("xfail_")
     if ($rejected -ne $expected) {
         if ($expected) { $opBad += "$($c.Name) now PARSES -- upstream fixed it; update the notes" }
