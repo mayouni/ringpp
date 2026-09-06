@@ -56,6 +56,19 @@ pub const Ctx = struct {
     /// callers that skip the project pass) never asserts it.
     assert_undefined: bool = false,
 
+    /// The same permission for VARIABLES, under a weaker gate: loadlib
+    /// registers native functions and cannot create a Ring variable, and
+    /// a transparent eval has already declared what it assigns. Only an
+    /// eval whose target cannot be read ends the reasoning. Always true
+    /// wherever assert_undefined is, never the other way round.
+    assert_undefined_vars: bool = false,
+
+    /// all_globals / all_defined as built under the variable gate, so they
+    /// exist in runs where the function gate is closed. Same contents,
+    /// plus the names transparent evals assign.
+    all_globals_vars: ?*const std.StringHashMap(void) = null,
+    all_defined_vars: ?*const std.StringHashMap(void) = null,
+
     /// Every name defined in ANY form across the ENTIRE checked set —
     /// functions, methods, classes — regardless of load reachability. A
     /// library file's calls resolve at runtime through whoever loads it,
@@ -784,9 +797,9 @@ const Walker = struct {
     /// analysis, so a read-before-later-assign bug (verified R24 on 1.27)
     /// is deliberately missed rather than risk a branch-order guess.
     fn checkUninit(self: *Walker, fn_node: ts.Node) !void {
-        if (!self.ctx.assert_undefined) return;
-        const globals = self.ctx.all_globals orelse return;
-        const defined = self.ctx.all_defined orelse return;
+        if (!self.ctx.assert_undefined_vars) return;
+        const globals = self.ctx.all_globals_vars orelse return;
+        const defined = self.ctx.all_defined_vars orelse return;
 
         var suppress = std.StringHashMap(void).init(self.arena);
         const params = paramsOf(self.arena, fn_node) catch return;
@@ -812,9 +825,9 @@ const Walker = struct {
     /// Walking the subtree instead would analyse one statement per method
     /// and silently miss the rest.
     fn checkUninitMethods(self: *Walker, class_node: ts.Node) !void {
-        if (!self.ctx.assert_undefined) return;
-        const globals = self.ctx.all_globals orelse return;
-        const defined = self.ctx.all_defined orelse return;
+        if (!self.ctx.assert_undefined_vars) return;
+        const globals = self.ctx.all_globals_vars orelse return;
+        const defined = self.ctx.all_defined_vars orelse return;
 
         const saved = self.dollar_only;
         defer self.dollar_only = saved;

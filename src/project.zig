@@ -71,6 +71,21 @@ pub const FileInfo = struct {
     /// undefined-function rule for that file. Softanza measures the cost of
     /// gating on eval: 26 eval() calls in base/string alone.
     has_dynamic: bool = false,
+    /// loadlib()/loadlibfile() only. It registers native FUNCTIONS and
+    /// cannot create a Ring VARIABLE, so it gates the undefined-FUNCTION
+    /// rule and has no business gating the uninitialized-VARIABLE one --
+    /// which it did, silencing every class in every project that loads a
+    /// native library.
+    has_loadlib: bool = false,
+    /// An eval() whose assignment target this pass cannot read. eval CAN
+    /// create a variable (verified on 1.27: eval("$x = 43") then reading
+    /// $x works), so one of these anywhere in a closure is the honest end
+    /// of variable-absence reasoning. An eval whose target IS readable is
+    /// not opaque -- its names are harvested into eval_names instead.
+    has_opaque_eval: bool = false,
+    /// Names a transparent eval assigns: `eval("_bOk_ = (" + cond + ")")`
+    /// defines _bOk_ whatever the right-hand side turns out to be.
+    eval_names: [][]const u8 = &.{},
     /// Set by Project.build: some `load` target was NOT found in the checked
     /// set. Whatever that file defines is invisible here, so absence of a
     /// definition proves nothing.
@@ -126,6 +141,75 @@ fn hasDynamicCall(src: []const u8) bool {
     return false;
 }
 
+fn hasCallTo(src: []const u8, needle: []const u8) bool {
+    var i: usize = 0;
+    while (i + needle.len < src.len) : (i += 1) {
+        if (std.ascii.eqlIgnoreCase(src[i .. i + needle.len], needle)) {
+            var j = i + needle.len;
+            while (j < src.len and (src[j] == ' ' or src[j] == 9)) j += 1;
+            if (j < src.len and src[j] == '(') return true;
+            i = j;
+        }
+    }
+    return false;
+}
+
+/// The name a chunk of eval source assigns, when it opens with `name =`.
+///
+/// `'_bOk_ = (' + pCondition + ')'` names _bOk_ no matter what is appended,
+/// because the target is fixed before the first concatenation. Anything
+/// else -- a bare identifier, a call, a name built from pieces -- is not
+/// readable here and makes the eval opaque.
+fn evalTargetOf(text: []const u8) ?[]const u8 {
+    var i: usize = 0;
+    while (i < text.len and (text[i] == ' ' or text[i] == 9)) i += 1;
+    if (i >= text.len or (text[i] != '"' and text[i] != '\'')) return null;
+    const quote = text[i];
+    i += 1;
+    while (i < text.len and (text[i] == ' ' or text[i] == 9)) i += 1;
+    const start = i;
+    if (i < text.len and (text[i] == '$' or text[i] == '@')) i += 1;
+    if (i >= text.len or !(std.ascii.isAlphabetic(text[i]) or text[i] == '_')) return null;
+    while (i < text.len and (std.ascii.isAlphanumeric(text[i]) or text[i] == '_')) i += 1;
+    const name = text[start..i];
+    while (i < text.len and (text[i] == ' ' or text[i] == 9)) i += 1;
+    if (i >= text.len or text[i] != '=') return null;
+    if (i + 1 < text.len and text[i + 1] == '=') return null; // a comparison
+    if (std.mem.indexOfScalar(u8, name, quote) != null) return null;
+    return name;
+}
+
+/// Classify every eval() in a file: transparent ones give up their target,
+/// one opaque one ends variable-absence reasoning for the whole closure.
+///
+/// Measured on Softanza 2026-09-05: 170 eval sites, 92 with a readable
+/// target and 78 opaque across 51 files -- and because two of those files
+/// are stzFuncs.ring and stzListFunc.ring, which everything loads, this
+/// buys that corpus nothing. It buys every codebase whose evals are all
+/// literal-headed, and it costs one pass over the source.
+fn scanEvals(arena: std.mem.Allocator, src: []const u8, out: *std.ArrayList([]const u8)) !bool {
+    var opaque_found = false;
+    var i: usize = 0;
+    while (i + 4 < src.len) : (i += 1) {
+        if (!std.ascii.eqlIgnoreCase(src[i .. i + 4], "eval")) continue;
+        if (i > 0 and (std.ascii.isAlphanumeric(src[i - 1]) or src[i - 1] == '_')) continue;
+        var j = i + 4;
+        while (j < src.len and (src[j] == ' ' or src[j] == 9)) j += 1;
+        if (j >= src.len or src[j] != '(') continue;
+        j += 1;
+        const rest = src[j..];
+        const end = std.mem.indexOfScalar(u8, rest, '\n') orelse rest.len;
+        if (evalTargetOf(rest[0..end])) |nm| {
+            const low = try std.ascii.allocLowerString(arena, nm);
+            try out.append(arena, low);
+        } else {
+            opaque_found = true;
+        }
+        i = j;
+    }
+    return opaque_found;
+}
+
 /// Parse one file, extract what the project layer needs, FREE the tree.
 /// Constant memory over the scan: the price is parsing twice (once here,
 /// once in the check pass), which trades time for never holding two trees
@@ -151,6 +235,10 @@ pub fn scanFile(
     if (tree.root().hasError()) return info; // no signatures, no edges
     info.parsed_ok = true;
     info.has_dynamic = hasDynamicCall(src);
+    info.has_loadlib = hasCallTo(src, "loadlib") or hasCallTo(src, "loadlibfile");
+    var ev = std.ArrayList([]const u8){};
+    info.has_opaque_eval = scanEvals(arena, src, &ev) catch true;
+    info.eval_names = try ev.toOwnedSlice(arena);
     info.sigs = try types.collectTopSigs(arena, tree.root());
     var dn = std.ArrayList([]const u8){};
     try collectDefNames(arena, tree.root(), &dn);
@@ -449,6 +537,10 @@ pub const Project = struct {
         /// silence, on the same NO VERDICT principle the CLI already
         /// applies to files it could not read.
         assert_undefined: bool = false,
+        /// May absence prove a VARIABLE undefined? Weaker gate:
+        /// loadlib defines functions, not variables, and a
+        /// transparent eval has already named what it assigns.
+        assert_undefined_vars: bool = false,
     };
 
     /// What file `i`'s check pass may rely on. Allocates into `scratch`,
@@ -534,11 +626,31 @@ pub const Project = struct {
             }
         }
 
+        // The same question for VARIABLES, which loadlib cannot create and
+        // a transparent eval has already declared. Strictly weaker than the
+        // one above, so a run that could assert functions can always assert
+        // variables too.
+        var can_assert_vars = self.files[i].parsed_ok and
+            !self.files[i].has_opaque_eval and
+            !self.files[i].has_unresolved_load;
+        if (can_assert_vars) {
+            for (self.closures[i]) |j| {
+                if (!self.files[j].parsed_ok or
+                    self.files[j].has_opaque_eval or
+                    self.files[j].has_unresolved_load)
+                {
+                    can_assert_vars = false;
+                    break;
+                }
+            }
+        }
+
         return .{
             .extern_sigs = extern_sigs,
             .conflicted = conflicted,
             .duplicates = try dups.toOwnedSlice(scratch),
             .assert_undefined = can_assert,
+            .assert_undefined_vars = can_assert_vars,
         };
     }
 

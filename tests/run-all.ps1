@@ -132,6 +132,15 @@ $r24mok = ($r24m -match "rpp/uninitialized-variable") -and
 "{0} {1,-16} {2}" -f $(if ($r24mok) { "PASS" } else { "FAIL" }), "T1 R24 method", "the `$ read fires through the grammar's flattening; bare and @ stay silent"
 if (-not $r24mok) { $fail++ }
 
+# The dynamic gate, split by what each call can actually create. loadlib
+# registers native FUNCTIONS and cannot make a Ring VARIABLE, so it must no
+# longer silence this rule; a transparent eval names its own target, so that
+# name is as defined as an assignment would make it.
+$r24d = & $ringpp check "tests\fixtures\uninit_dyn" 2>&1 | Out-String
+$r24dok = ($r24d -match "_nMissing_") -and ($r24d -match "1 warn") -and ($r24d -notmatch "_seen_")
+"{0} {1,-16} {2}" -f $(if ($r24dok) { "PASS" } else { "FAIL" }), "T1 R24 dynamic", "loadlib no longer silences it; a transparent eval declares its target"
+if (-not $r24dok) { $fail++ }
+
 # R11/R15 at check time: the class typo and the function-as-class fire, the
 # missing-parent fires as the QUIET R15, and the two legal shapes stay
 # silent (exactly 3 errors, no more).

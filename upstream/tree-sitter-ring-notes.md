@@ -347,7 +347,29 @@ initial import.
 Accounts for `base/data/stzCharData.ring` (the `ſ` on line 1321) and
 `base/test/char/47_showshortxtnl.ring` (line 25).
 
-### Defect B — a statement terminated by a period
+### Defect B — a statement terminated by a period — AND IT GATES THE WHOLE CORPUS
+
+**Measured 2026-09-05, and this is the reason to fix it.** Two trailing
+periods in ONE file silence every set-wide rule across all of Softanza.
+
+`base/common/stzFuncs.ring` is 123 KB and carries two of them, at 2689 and
+one more. The parse dies at 2681, so the file is `rpp/unparsed` -- and a file
+that did not parse is excluded from the definition universe. `all_defined`,
+`all_globals` and every rule that needs them then go null for the ENTIRE run:
+6,038 files, 0 findings from rpp/undefined-function, rpp/uninitialized-
+variable, rpp/unknown-class and rpp/unknown-package.
+
+Removing those two characters -- nothing else -- makes the file parse whole:
+
+```
+stzFuncs.ring as it stands   rpp/unparsed at 2681, no rule ran
+the same file, 2 chars cut   0 error, 0 warn, 1 perf, 8 note
+```
+
+So the cost of Defect B is not "one file is skipped". It is that the
+strategic half of this project -- static analysis over a large real Ring
+codebase, commitment #4 -- cannot speak at all on the corpus it exists for,
+because of two characters Ring itself accepts.
 
 | | grammar | Ring |
 |---|---|---|

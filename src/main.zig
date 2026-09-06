@@ -320,6 +320,17 @@ fn runCheck(gpa: std.mem.Allocator, w: anytype, path: []const u8, advise: bool) 
             break;
         }
     }
+    // The same question for VARIABLES. loadlib cannot create one, and a
+    // transparent eval has already named what it assigns, so only an
+    // unreadable eval target closes this. Strictly weaker, so it holds
+    // wherever universe_complete does.
+    var universe_vars = true;
+    for (infos.items) |info| {
+        if (!info.parsed_ok or info.has_opaque_eval or info.has_unresolved_load) {
+            universe_vars = false;
+            break;
+        }
+    }
     var all_globals = std.StringHashMap(void).init(gpa);
     defer all_globals.deinit();
     var all_classes = std.StringHashMap(void).init(gpa);
@@ -332,6 +343,21 @@ fn runCheck(gpa: std.mem.Allocator, w: anytype, path: []const u8, advise: bool) 
             for (info.globalnames) |gn| try all_globals.put(gn, {});
             for (info.classnames) |cn| try all_classes.put(cn, {});
             for (info.packagenames) |pn2| try all_packages.put(pn2, {});
+        }
+    }
+    // Built separately, because the variable gate opens in runs where the
+    // function gate stays shut -- anything that loads a native library.
+    var all_globals_vars = std.StringHashMap(void).init(gpa);
+    defer all_globals_vars.deinit();
+    var all_defined_vars = std.StringHashMap(void).init(gpa);
+    defer all_defined_vars.deinit();
+    if (universe_vars) {
+        for (infos.items) |info| {
+            for (info.defnames) |dn| try all_defined_vars.put(dn, {});
+            for (info.globalnames) |gn| try all_globals_vars.put(gn, {});
+            // a transparent eval defines its target as surely as an
+            // assignment does
+            for (info.eval_names) |en| try all_globals_vars.put(en, {});
         }
     }
 
@@ -351,6 +377,9 @@ fn runCheck(gpa: std.mem.Allocator, w: anytype, path: []const u8, advise: bool) 
             .conflicted = &view.conflicted,
             .duplicates = view.duplicates,
             .assert_undefined = view.assert_undefined,
+            .assert_undefined_vars = view.assert_undefined_vars,
+            .all_globals_vars = if (universe_vars) &all_globals_vars else null,
+            .all_defined_vars = if (universe_vars) &all_defined_vars else null,
             .all_defined = if (universe_complete) &all_defined else null,
             .all_globals = if (universe_complete) &all_globals else null,
             .all_classes = if (universe_complete) &all_classes else null,
