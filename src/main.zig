@@ -3,6 +3,7 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
+const cache = @import("cache.zig");
 const ts = @import("ts.zig");
 const check = @import("check.zig");
 const why = @import("why.zig");
@@ -26,6 +27,7 @@ fn usage(w: anytype) void {
         \\Analyse
         \\
         \\  ringpp check [path] [--advise]  Type-check and lint; --advise names every place a measured Ring++ idiom is faster
+        \\  ringpp cache <file.ring>    Rewrite every #rpp: cache function; prints, writes nothing
         \\  ringpp why <thing>          Explain a rule, a finding, or a Ring error code
         \\  ringpp version              Show version
         \\  ringpp help                 This screen
@@ -205,6 +207,15 @@ pub fn main() !u8 {
             }
         }
         return try runCheck(gpa, w, path, advise, excludes.items);
+    }
+    if (std.mem.eql(u8, cmd, "cache")) {
+        if (args.len < 3) {
+            try w.print("usage: ringpp cache <file.ring>\n", .{});
+            try w.print("  prints the file with every #rpp: cache function rewritten.\n", .{});
+            try w.print("  Nothing is written: redirect it, or read it first.\n", .{});
+            return 1;
+        }
+        return try cache.run(gpa, w, args[2]);
     }
     if (std.mem.eql(u8, cmd, "deps") or std.mem.eql(u8, cmd, "d")) {
         if (args.len < 3) {

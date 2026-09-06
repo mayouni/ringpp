@@ -33,6 +33,17 @@ $aRppMemo   = []
 $nRppHits   = 0
 $nRppMisses = 0
 
+# One argument, as a key fragment. Generated wrappers call this once per
+# parameter -- a call rather than a list, so no list is allocated per call.
+#
+# A LIST costs list2str: 2.62 us for 50 items against 0.13 us for a number,
+# and that is the whole difference between the two loss cases in the
+# benchmark above. An OBJECT has no stable text here, so a cache keyed on
+# one is not supported; that is a limit of the feature, not of this line.
+func RppK(x)
+	if isList(x) return list2str(x) ok
+	return "" + x
+
 # The cached value for cKey, or "" when there is none. Callers test with
 # isList(), never against "" -- see the note above.
 func RppMemoGet(cKey)

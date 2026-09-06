@@ -414,6 +414,45 @@ fn collectAnchors(n: ts.Node, out: *std.AutoHashMap(u32, []const u8)) !void {
     var i: u32 = 0;
     while (i < n.childCount()) : (i += 1) try collectAnchors(n.child(i), out);
 }
+/// Why a function is not pure, and where -- or null.
+///
+/// Three signals, chosen because each is cheap, decisive, and visible in
+/// the syntax: writing a $global, printing, and calling something whose
+/// value moves on its own. It is NOT a proof. A function that calls another
+/// function which prints is not caught, because the analysis does not
+/// follow calls; silence means nothing obvious was found.
+pub const Impurity = struct { why: []const u8, at: ts.Node };
+
+pub fn impurityOf(arena: std.mem.Allocator, n: ts.Node) ?Impurity {
+    const k = n.kind();
+    if (std.mem.eql(u8, k, "see_statement")) return .{ .why = "prints", .at = n };
+    if (std.mem.eql(u8, k, "assignment_expression") and n.childCount() > 0) {
+        const t = n.child(0);
+        if (std.mem.eql(u8, t.kind(), "identifier") and t.text().len > 0 and t.text()[0] == '$')
+            return .{ .why = "writes a global", .at = n };
+    }
+    if (std.mem.eql(u8, k, "call_expression") and n.childCount() > 0) {
+        const h = n.child(0);
+        if (std.mem.eql(u8, h.kind(), "identifier")) {
+            if (lower(arena, h.text())) |lk| {
+                for ([_][]const u8{ "random", "clock", "date", "time", "epochtime",
+                    "read", "write", "fopen", "fwrite", "fread", "remove",
+                    "system", "eval", "loadlib", "loadlibfile", "input" }) |bad|
+                {
+                    if (std.mem.eql(u8, lk, bad)) {
+                        const msg = std.fmt.allocPrint(arena, "calls {s}()", .{h.text()}) catch "calls something whose value moves on its own";
+                        return .{ .why = msg, .at = n };
+                    }
+                }
+            } else |_| {}
+        }
+    }
+    var i: u32 = 0;
+    while (i < n.childCount()) : (i += 1) {
+        if (impurityOf(arena, n.child(i))) |r| return r;
+    }
+    return null;
+}
 const Walker = struct {
     gpa: std.mem.Allocator,
     arena: std.mem.Allocator,
@@ -855,42 +894,10 @@ const Walker = struct {
 
     /// The first reason this function is not pure, or "".
     fn impurity(self: *Walker, n: ts.Node, why: *[]const u8, at: *ts.Node) void {
-        if (why.len > 0) return;
-        const k = n.kind();
-        if (std.mem.eql(u8, k, "see_statement")) {
-            why.* = "prints";
-            at.* = n;
-            return;
+        if (impurityOf(self.arena, n)) |r| {
+            why.* = r.why;
+            at.* = r.at;
         }
-        if (std.mem.eql(u8, k, "assignment_expression") and n.childCount() > 0) {
-            const t = n.child(0);
-            if (std.mem.eql(u8, t.kind(), "identifier") and
-                t.text().len > 0 and t.text()[0] == '$')
-            {
-                why.* = "writes a global";
-                at.* = n;
-                return;
-            }
-        }
-        if (std.mem.eql(u8, k, "call_expression") and n.childCount() > 0) {
-            const h = n.child(0);
-            if (std.mem.eql(u8, h.kind(), "identifier")) {
-                if (lower(self.arena, h.text())) |lk| {
-                    for ([_][]const u8{ "random", "clock", "date", "time", "epochtime",
-                        "read", "write", "fopen", "fwrite", "fread", "remove",
-                        "system", "eval", "loadlib", "loadlibfile", "input" }) |bad|
-                    {
-                        if (std.mem.eql(u8, lk, bad)) {
-                            why.* = std.fmt.allocPrint(self.arena, "calls {s}()", .{h.text()}) catch "calls something whose value moves on its own";
-                            at.* = n;
-                            return;
-                        }
-                    }
-                } else |_| {}
-            }
-        }
-        var i: u32 = 0;
-        while (i < n.childCount()) : (i += 1) self.impurity(n.child(i), why, at);
     }
     fn checkUninit(self: *Walker, fn_node: ts.Node) !void {
         if (!self.ctx.assert_undefined_vars) return;

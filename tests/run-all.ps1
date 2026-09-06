@@ -173,6 +173,24 @@ $ancOk = ($anc -match "rpp/cache-impure") -and ($anc -match "rpp/anchor-unknown"
 "{0} {1,-16} {2}" -f $(if ($ancOk) { "PASS" } else { "FAIL" }), "T1 anchors", "3 impurities and a bad verb fire; both pure forms and an unanchored impure one stay silent"
 if (-not $ancOk) { $fail++ }
 
+# The `#rpp: cache` TRANSFORM, end to end. Inspecting the emitted text is
+# not enough: a cache that is fast and wrong is the failure this feature
+# exists to rule out, so Ring runs the output and the ANSWER is the gate.
+# 317811 is fib(28), and plain recursive fib prints the same.
+$cacheOut = & $ringpp cache "tests\fixtures\cache_fib.ring" 2>&1 | Out-String
+$cacheGen = Join-Path $env:TEMP "rpp_cache_gate.ring"
+# WriteAllText with an explicit BOM-less UTF-8: Set-Content would add a BOM
+# and Ring would choke on the first line. See CLAUDE.md on encoding.
+[IO.File]::WriteAllText($cacheGen, "load " + [char]34 + ($root + "\rpp\memo.ring").Replace('\','/') + [char]34 + "`n" + $cacheOut, [Text.UTF8Encoding]::new($false))
+$cacheRan = & $Ring $cacheGen 2>&1 | Out-String
+$impure = & $ringpp cache "tests\fixtures\anchors.ring" 2>&1 | Out-String
+$impureRc = $LASTEXITCODE
+$cacheOk = ($cacheOut -match "Fib__rpp_impl") -and ($cacheOut -match "RppMemoGet") -and
+           ($cacheRan -match "317811") -and
+           ($impure -match "refusing") -and ($impureRc -ne 0)
+"{0} {1,-16} {2}" -f $(if ($cacheOk) { "PASS" } else { "FAIL" }), "T1 cache xform", "the emitted program prints fib(28) correctly; an impure anchor is refused"
+if (-not $cacheOk) { $fail++ }
+
 # R11/R15 at check time: the class typo and the function-as-class fire, the
 # missing-parent fires as the QUIET R15, and the two legal shapes stay
 # silent (exactly 3 errors, no more).
