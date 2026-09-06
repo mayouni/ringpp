@@ -123,6 +123,36 @@ you think is worse than one that fails.
 
 ---
 
+## `ringpp expand` — apply every `#rpp:` anchor; prints, writes nothing
+
+An anchor is a comment, so an annotated file is still a Ring file: it loads
+and runs under plain `ring.exe`, without whatever the anchor adds. `expand`
+prints the file with the anchors applied; `ringpp build` does the same to
+the whole load closure, staged in a temp directory, never over your sources.
+
+```
+#rpp: cache                        the body moves to F__rpp_impl; F becomes a
+func Fib(n)                        wrapper over a keyed store. Refused on a
+                                   function that prints, writes a $global or
+                                   reads a clock -- a wrong cache never raises.
+
+#rpp: default b = 2, c = "x"       every SHORT call is rewritten: F(1) becomes
+func F(a, b, c)                    F(1, 2, "x"). Honoured across files by
+                                   `build`, which sees the closure.
+
+#rpp: named                        callers may write Area(:h = 4, :w = 3) and
+func Area(w, h)                    get Area(3, 4). OPT-IN: Ring already passes
+                                   the pair ["h", 4] for that syntax, which is
+                                   what Softanza's hand-written unwraps expect.
+```
+
+Measured, `bench/memo.ring`: fib(28) 95 ms -> below the 1 ms floor (> 95x);
+`Add(a,b)` 9x SLOWER; `Head(50-list)` 25x slower. The cache pays when the
+body is expensive relative to its arguments, and nothing in the source
+distinguishes the two shapes -- which is why the anchor is written by hand.
+
+---
+
 ## `ringpp why` — explain a rule, a finding, or a Ring error code
 
 ```

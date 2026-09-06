@@ -1108,8 +1108,13 @@ const Walker = struct {
             return;
         }
 
+        // `#rpp: named`: callers may use :name = value. Nothing to check on
+        // the declaration itself; the call sites are checked at transform
+        // time, where the whole closure is visible.
+        if (std.mem.eql(u8, verb, "named")) return;
+
         if (!std.mem.eql(u8, verb, "cache")) {
-            try self.report.add(self.gpa, self.file, fn_node, .err, "rpp/anchor-unknown", "#rpp: {s} is not a verb this version knows", .{verb}, "An anchor Ring++ does not recognise is reported rather than ignored: a silently skipped annotation looks like a feature that is working. The verbs are listed by `ringpp why rpp/anchor-unknown`.");
+            try self.report.add(self.gpa, self.file, fn_node, .err, "rpp/anchor-unknown", "#rpp: {s} is not a verb this version knows", .{verb}, "An anchor Ring++ does not recognise is reported rather than ignored: a silently skipped annotation looks like a feature that is working. The verbs this version knows: cache, default, named.");
             return;
         }
 

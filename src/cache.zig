@@ -467,7 +467,7 @@ fn isBoundary(n: ts.Node) bool {
 // first, then each file is rewritten; a call in app.ring to a function
 // declared in lib.ring is the ordinary case, not the edge.
 
-pub const FnDefaults = struct { nparams: usize, by_pos: []const []const u8 };
+pub const FnDefaults = struct { nparams: usize, by_pos: []const []const u8, params: []const []const u8 };
 pub const DefaultsMap = std.StringHashMap(FnDefaults);
 
 /// Pass 1: every function in this tree that carries a `default` anchor.
@@ -482,13 +482,19 @@ fn collectDefaultsIn(arena: std.mem.Allocator, n: ts.Node, anchors: *const std.A
         const row = n.start().row;
         const verb = anchors.get(row) orelse (if (row > 0) anchors.get(row - 1) else null);
         if (verb) |v| {
-            if (std.mem.startsWith(u8, v, "default")) {
+            // `#rpp: named` opts a function in with NO defaults: its callers may
+            // use :name = value. Opt-in is not optional -- a function written to
+            // RECEIVE the [name, value] pair Ring passes for :name = value (every
+            // one of Softanza\'s 215 unwrap sites) would break if its calls were
+            // made positional behind its back.
+            const is_named = std.mem.eql(u8, v, "named");
+            if (is_named or std.mem.startsWith(u8, v, "default")) {
                 const name_node = n.field("name");
                 if (!name_node.isNull()) {
                     var params = std.ArrayList([]const u8){};
                     try paramsOf(arena, n, &params);
                     var defs = std.ArrayList(types.DefaultArg){};
-                    try types.parseDefaults(arena, std.mem.trim(u8, v["default".len..], " \t"), &defs);
+                    if (!is_named) try types.parseDefaults(arena, std.mem.trim(u8, v["default".len..], " \t"), &defs);
                     const by_pos = try arena.alloc([]const u8, params.items.len);
                     for (params.items, 0..) |pn, k| {
                         by_pos[k] = "";
@@ -501,7 +507,9 @@ fn collectDefaultsIn(arena: std.mem.Allocator, n: ts.Node, anchors: *const std.A
                         }
                     }
                     const key = try std.ascii.allocLowerString(arena, name_node.text());
-                    try map.put(key, .{ .nparams = params.items.len, .by_pos = by_pos });
+                    const pnames = try arena.alloc([]const u8, params.items.len);
+                    for (params.items, 0..) |pn, k| pnames[k] = try arena.dupe(u8, pn);
+                    try map.put(key, .{ .nparams = params.items.len, .by_pos = by_pos, .params = pnames });
                 }
             }
         }
@@ -533,17 +541,41 @@ fn argsOf(call: ts.Node) ?ts.Node {
     }
     return null;
 }
-/// Pass 2: rewrite every short call in `src`. Returns null when nothing
-/// changed. Splices by byte in source order, exactly like the cache pass.
+/// A named argument in a call: `:name = expr`. Ring parses it as a
+/// binary_expression whose left side is a symbol -- and at run time passes
+/// the PAIR [name, expr] in whatever position it sits, which is why this
+/// has to be rewritten rather than left to Ring.
+const NamedArg = struct { name: []const u8, expr: []const u8 };
+
+fn namedArgOf(n: ts.Node) ?NamedArg {
+    if (!std.mem.eql(u8, n.kind(), "binary_expression")) return null;
+    if (n.namedChildCount() < 2 or n.childCount() < 3) return null;
+    const lhs = n.namedChild(0);
+    if (!std.mem.eql(u8, lhs.kind(), "symbol")) return null;
+    if (!std.mem.eql(u8, n.child(1).text(), "=")) return null;
+    if (lhs.namedChildCount() < 1) return null;
+    return .{ .name = lhs.namedChild(0).text(), .expr = n.namedChild(1).text() };
+}
+
+/// Pass 2: rewrite every call to an opted-in function that is SHORT or
+/// uses a NAMED argument, into a full positional call. Returns null when
+/// nothing changed. Splices by byte in source order.
+///
+/// Placement is by SLOT. Positional arguments fill slots in order; a named
+/// one goes to its parameter's slot; every slot still empty is filled from
+/// the defaults. Four things are refused, each a wrong program that Ring
+/// would otherwise accept and misrun: a positional argument after a named
+/// one, a name that is not a parameter, a slot filled twice, and a slot
+/// with neither an argument nor a default.
 pub fn applyDefaults(gpa: std.mem.Allocator, w: anytype, path: []const u8, root: ts.Node, src: []const u8, map: *const DefaultsMap) !?[]u8 {
     if (map.count() == 0) return null;
     if (hasDynamicCall(root)) {
-        try w.print("ringpp expand: {s}: refusing -- this file uses `call x(...)`, which resolves its target at run time, so a default parameter cannot be honoured for every call. Remove the dynamic call or the default.\n", .{path});
+        try w.print("ringpp expand: {s}: refusing -- this file uses `call x(...)`, which resolves its target at run time, so a default or named parameter cannot be honoured for every call. Remove the dynamic call or the anchor.\n", .{path});
         return Refused.CacheRefused;
     }
     var sites = std.ArrayList(ts.Node){};
     defer sites.deinit(gpa);
-    try collectShortCalls(gpa, root, map, &sites);
+    try collectRewritableCalls(gpa, root, map, &sites);
     if (sites.items.len == 0) return null;
 
     var out = std.ArrayList(u8){};
@@ -554,45 +586,97 @@ pub fn applyDefaults(gpa: std.mem.Allocator, w: anytype, path: []const u8, root:
         const key = try std.ascii.allocLowerString(gpa, name_node.text());
         defer gpa.free(key);
         const fd = map.get(key) orelse continue;
-        const given: usize = if (argsOf(call)) |a| a.namedChildCount() else 0;
-        // the insertion point is the call's own closing paren -- the last
-        // byte of its text -- which exists whether or not any argument does
-        const close: usize = call.startByte() + call.text().len - 1;
-        try out.appendSlice(gpa, src[cursor..close]);
-        var k: usize = given;
-        while (k < fd.nparams) : (k += 1) {
-            if (k > 0) try out.appendSlice(gpa, ", ");
-            try out.appendSlice(gpa, fd.by_pos[k]);
+        const row = call.start().row + 1;
+
+        const slots = try gpa.alloc([]const u8, fd.nparams);
+        defer gpa.free(slots);
+        for (slots) |*sl| sl.* = "";
+        var seen_named = false;
+        var pos: usize = 0;
+        if (argsOf(call)) |args| {
+            var ai: u32 = 0;
+            while (ai < args.namedChildCount()) : (ai += 1) {
+                const a = args.namedChild(ai);
+                if (namedArgOf(a)) |na| {
+                    seen_named = true;
+                    var slot: ?usize = null;
+                    for (fd.params, 0..) |pn, pi| {
+                        if (std.ascii.eqlIgnoreCase(pn, na.name)) slot = pi;
+                    }
+                    const si = slot orelse {
+                        try w.print("ringpp expand: {s}:{d}: refusing -- :{s} is not a parameter of {s}()\n", .{ path, row, na.name, name_node.text() });
+                        return Refused.CacheRefused;
+                    };
+                    if (slots[si].len > 0) {
+                        try w.print("ringpp expand: {s}:{d}: refusing -- {s}() gets its {s} twice\n", .{ path, row, name_node.text(), na.name });
+                        return Refused.CacheRefused;
+                    }
+                    slots[si] = na.expr;
+                } else {
+                    if (seen_named) {
+                        try w.print("ringpp expand: {s}:{d}: refusing -- a positional argument after a named one has no position to go to\n", .{ path, row });
+                        return Refused.CacheRefused;
+                    }
+                    if (pos >= fd.nparams) {
+                        // more positional arguments than parameters: Ring's
+                        // own R20 says it better than this tool can
+                        pos += 1;
+                        continue;
+                    }
+                    slots[pos] = a.text();
+                    pos += 1;
+                }
+            }
         }
-        cursor = close;
+        for (slots, 0..) |*sl, si| {
+            if (sl.*.len == 0) {
+                if (fd.by_pos[si].len == 0) {
+                    try w.print("ringpp expand: {s}:{d}: refusing -- {s}() is missing {s}, which has no default\n", .{ path, row, name_node.text(), fd.params[si] });
+                    return Refused.CacheRefused;
+                }
+                sl.* = fd.by_pos[si];
+            }
+        }
+
+        // replace everything after the callee name with the rebuilt list
+        const after_name: usize = name_node.startByte() + name_node.text().len;
+        const call_end: usize = call.startByte() + call.text().len;
+        try out.appendSlice(gpa, src[cursor..after_name]);
+        try out.appendSlice(gpa, "(");
+        for (slots, 0..) |sl, si| {
+            if (si > 0) try out.appendSlice(gpa, ", ");
+            try out.appendSlice(gpa, sl);
+        }
+        try out.appendSlice(gpa, ")");
+        cursor = call_end;
     }
     try out.appendSlice(gpa, src[cursor..]);
     return try out.toOwnedSlice(gpa);
 }
 
-/// Every call to a defaulted function that passes fewer arguments than it
-/// has parameters, in source order. A call with MORE than the defaults can
-/// fill is left alone -- Ring's own R20 says it better.
-fn collectShortCalls(gpa: std.mem.Allocator, n: ts.Node, map: *const DefaultsMap, out: *std.ArrayList(ts.Node)) !void {
+/// Every call to an opted-in function that is short OR carries a named
+/// argument, in source order. A complete positional call is left exactly
+/// as written -- the output must not churn code that needed nothing.
+fn collectRewritableCalls(gpa: std.mem.Allocator, n: ts.Node, map: *const DefaultsMap, out: *std.ArrayList(ts.Node)) !void {
     if (std.mem.eql(u8, n.kind(), "call_expression") and n.childCount() > 0) {
         const head = n.child(0);
         if (std.mem.eql(u8, head.kind(), "identifier")) {
             const key = try std.ascii.allocLowerString(gpa, head.text());
             defer gpa.free(key);
             if (map.get(key)) |fd| {
-                const given: usize = if (argsOf(n)) |a| a.namedChildCount() else 0;
-                if (given < fd.nparams) {
-                    // only when every missing slot HAS a default
-                    var ok = true;
-                    var k: usize = given;
-                    while (k < fd.nparams) : (k += 1) {
-                        if (fd.by_pos[k].len == 0) ok = false;
+                var given: usize = 0;
+                var any_named = false;
+                if (argsOf(n)) |args| {
+                    given = args.namedChildCount();
+                    var ai: u32 = 0;
+                    while (ai < args.namedChildCount()) : (ai += 1) {
+                        if (namedArgOf(args.namedChild(ai)) != null) any_named = true;
                     }
-                    if (ok) try out.append(gpa, n);
                 }
+                if (any_named or given < fd.nparams) try out.append(gpa, n);
             }
         }
     }
     var i: u32 = 0;
-    while (i < n.childCount()) : (i += 1) try collectShortCalls(gpa, n.child(i), map, out);
+    while (i < n.childCount()) : (i += 1) try collectRewritableCalls(gpa, n.child(i), map, out);
 }

@@ -247,6 +247,32 @@ $dpOk = ($dpRan -match "hello, Mansour\.") -and ($dpRan -match "salam, Mansour\.
 "{0} {1,-16} {2}" -f $(if ($dpOk) { "PASS" } else { "FAIL" }), "T1 default build", "declared in lib, filled in app, zero-arg filled too; a dynamic call is refused"
 if (-not $dpOk) { $fail++ }
 
+# Named arguments through `ringpp build`, end to end. Opted in by the
+# library, used by the entry, four different placements, and the package is
+# RUN: the answers are the assertion. Three refusals each exit non-zero: a
+# name that is not a parameter, a positional argument after a named one, and
+# a slot with neither an argument nor a default. Under plain Ring every one
+# of those is a program that runs and is wrong.
+$npOut = Join-Path $env:TEMP "rpp_named_proj_out"
+if (Test-Path $npOut) { Remove-Item -Recurse -Force $npOut }
+$null = & $ringpp build "tests\fixtures\named_proj\app.ring" --out $npOut 2>&1
+$npRan = ""
+if (Test-Path (Join-Path $npOut "app.exe")) {
+    Push-Location $npOut
+    $npRan = & ".\app.exe" app.ringo 2>&1 | Out-String
+    Pop-Location
+}
+$rcs = @()
+foreach ($bad in @("named_bad_unknown", "named_bad_order", "named_bad_missing")) {
+    $null = & $ringpp expand "tests\fixtures\$bad.ring" 2>&1
+    $rcs += $LASTEXITCODE
+}
+$npOk = ($npRan -match "hello, Mansour!") -and ($npRan -match "salam, Mansour\.") -and
+        ($npRan -match "hi, Mansour\?") -and ($npRan -match "(?m)^12\s*$") -and
+        (($rcs | Where-Object { $_ -eq 0 }).Count -eq 0)
+"{0} {1,-16} {2}" -f $(if ($npOk) { "PASS" } else { "FAIL" }), "T1 named args", "four placements run right in a package; unknown, misordered and missing are refused"
+if (-not $npOk) { $fail++ }
+
 # R11/R15 at check time: the class typo and the function-as-class fire, the
 # missing-parent fires as the QUIET R15, and the two legal shapes stay
 # silent (exactly 3 errors, no more).
