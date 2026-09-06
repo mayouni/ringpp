@@ -56,13 +56,17 @@ fn paramsOf(arena: std.mem.Allocator, fn_node: ts.Node, out: *std.ArrayList([]co
     }
 }
 
-pub fn run(gpa: std.mem.Allocator, w: anytype, path: []const u8) !u8 {
-    const src = std.fs.cwd().readFileAlloc(gpa, path, 64 * 1024 * 1024) catch {
-        try w.print("ringpp cache: cannot read {s}\n", .{path});
-        return 1;
-    };
-    defer gpa.free(src);
+/// The transformed text of `src`, or null when the file has no `#rpp:`
+/// cache anchor to act on. Refusals are printed and reported as an error
+/// so that a build stops rather than quietly shipping an uncached binary.
+pub const Refused = error{CacheRefused};
 
+pub fn transform(
+    gpa: std.mem.Allocator,
+    w: anytype,
+    path: []const u8,
+    src: []const u8,
+) !?[]u8 {
     var arena_state = std.heap.ArenaAllocator.init(gpa);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -71,7 +75,7 @@ pub fn run(gpa: std.mem.Allocator, w: anytype, path: []const u8) !u8 {
     defer parser.deinit();
     const tree = parser.parse(src) orelse {
         try w.print("ringpp cache: {s} did not parse\n", .{path});
-        return 1;
+        return Refused.CacheRefused;
     };
     defer tree.deinit();
     const root = tree.root();
@@ -79,15 +83,12 @@ pub fn run(gpa: std.mem.Allocator, w: anytype, path: []const u8) !u8 {
         // The same NO VERDICT principle the checker applies: a file whose
         // shape is uncertain is not one to rewrite.
         try w.print("ringpp cache: {s} did not parse cleanly -- refusing to rewrite it\n", .{path});
-        return 1;
+        return Refused.CacheRefused;
     }
 
     var anchors = std.AutoHashMap(u32, []const u8).init(arena);
     try collectAnchors(root, &anchors);
-    if (anchors.count() == 0) {
-        try w.print("{s}", .{src});
-        return 0;
-    }
+    if (anchors.count() == 0) return null;
 
     // The row of the first class: every func at or after it is a METHOD
     // (F-21), and a method is not transformed. Its key would have to carry
@@ -107,7 +108,6 @@ pub fn run(gpa: std.mem.Allocator, w: anytype, path: []const u8) !u8 {
     }
 
     var out = std.ArrayList(u8){};
-    defer out.deinit(gpa);
     var cursor: usize = 0;
     var n_done: usize = 0;
 
@@ -122,11 +122,11 @@ pub fn run(gpa: std.mem.Allocator, w: anytype, path: []const u8) !u8 {
 
         if (row >= first_class_row) {
             try w.print("ringpp cache: {s}:{d}: #rpp: cache on a method is not supported yet -- a method's key would have to carry the object's identity\n", .{ path, row + 1 });
-            return 1;
+            return Refused.CacheRefused;
         }
         if (types.impurityOf(arena, fn_node)) |imp| {
             try w.print("ringpp cache: {s}:{d}: refusing -- the function {s}\n", .{ path, row + 1, imp.why });
-            return 1;
+            return Refused.CacheRefused;
         }
 
         // child() walks ANONYMOUS nodes too, so child(0) is the `func`
@@ -175,10 +175,116 @@ pub fn run(gpa: std.mem.Allocator, w: anytype, path: []const u8) !u8 {
     }
     try out.appendSlice(gpa, src[cursor..]);
 
-    if (n_done == 0) {
-        try w.print("{s}", .{src});
-        return 0;
-    }
-    try w.print("{s}", .{out.items});
+    if (n_done == 0) return null;
+    return try out.toOwnedSlice(gpa);
+}
+
+/// `ringpp cache <file>` -- print the transform, write nothing.
+pub fn run(gpa: std.mem.Allocator, w: anytype, path: []const u8) !u8 {
+    const src = std.fs.cwd().readFileAlloc(gpa, path, 64 * 1024 * 1024) catch {
+        try w.print("ringpp cache: cannot read {s}\n", .{path});
+        return 1;
+    };
+    defer gpa.free(src);
+    const out = transform(gpa, w, path, src) catch return 1;
+    if (out) |t| {
+        defer gpa.free(t);
+        try w.print("{s}", .{t});
+    } else try w.print("{s}", .{src});
     return 0;
+}
+
+/// Mirror a program's load closure into `stage_dir`, transforming every
+/// file that carries a `#rpp: cache` anchor, and return the staged entry.
+/// Returns null when no file in the closure carries one -- the caller then
+/// builds the originals and nothing has been copied.
+///
+/// THE LAYOUT IS THE WHOLE DESIGN. Files are mirrored by ABSOLUTE path with
+/// the drive and leading separator folded away, so a closure spread over
+/// several directories keeps every relative offset it had. `load "../x.ring"`
+/// in a staged file resolves to the staged ../x.ring. Flattening the
+/// closure, or staging only the annotated files, would silently break
+/// exactly those loads.
+///
+/// The user's own tree is never written to. That was the alternative --
+/// transform in place, compile, restore -- and it is a build that edits the
+/// files you are editing, which is not a trade worth taking for a shorter
+/// implementation.
+pub fn stageClosure(
+    gpa: std.mem.Allocator,
+    w: anytype,
+    files: []const []const u8,
+    entry: []const u8,
+    stage_dir: []const u8,
+    runtime_src: ?[]const u8,
+) !?[]const u8 {
+    var any = false;
+    for (files) |f| {
+        const src = std.fs.cwd().readFileAlloc(gpa, f, 64 * 1024 * 1024) catch continue;
+        defer gpa.free(src);
+        if (std.mem.indexOf(u8, src, "#rpp:") != null) { any = true; break; }
+    }
+    if (!any) return null;
+
+    var staged_entry: ?[]const u8 = null;
+    for (files) |f| {
+        const abs = std.fs.cwd().realpathAlloc(gpa, f) catch continue;
+        defer gpa.free(abs);
+        const rel = mirrorRel(abs);
+        const dest = try std.fs.path.join(gpa, &.{ stage_dir, rel });
+        if (std.fs.path.dirname(dest)) |d| std.fs.cwd().makePath(d) catch {};
+
+        const src = std.fs.cwd().readFileAlloc(gpa, f, 64 * 1024 * 1024) catch continue;
+        defer gpa.free(src);
+        const out = transform(gpa, w, f, src) catch return Refused.CacheRefused;
+        if (out) |t| {
+            defer gpa.free(t);
+            try std.fs.cwd().writeFile(.{ .sub_path = dest, .data = t });
+        } else {
+            try std.fs.cwd().writeFile(.{ .sub_path = dest, .data = src });
+        }
+
+        const abs_entry = std.fs.cwd().realpathAlloc(gpa, entry) catch continue;
+        defer gpa.free(abs_entry);
+        if (std.mem.eql(u8, abs, abs_entry)) staged_entry = dest else gpa.free(dest);
+    }
+
+    const se = staged_entry orelse {
+        try w.print("ringpp build: could not stage the entry point for #rpp: cache\n", .{});
+        return Refused.CacheRefused;
+    };
+
+    // The generated wrappers call RppMemoGet/RppMemoPut/RppK, so the store
+    // has to be loaded before them. It is copied beside the staged entry and
+    // loaded by bare name, which is the one path that cannot go wrong
+    // wherever the entry itself ended up in the mirror.
+    if (runtime_src) |rt| {
+        const rt_bytes = std.fs.cwd().readFileAlloc(gpa, rt, 8 * 1024 * 1024) catch {
+            try w.print("ringpp build: cannot read the cache runtime at {s}\n", .{rt});
+            return Refused.CacheRefused;
+        };
+        defer gpa.free(rt_bytes);
+        const dir = std.fs.path.dirname(se) orelse stage_dir;
+        const rt_dest = try std.fs.path.join(gpa, &.{ dir, "rpp_memo.ring" });
+        defer gpa.free(rt_dest);
+        try std.fs.cwd().writeFile(.{ .sub_path = rt_dest, .data = rt_bytes });
+
+        const entry_src = try std.fs.cwd().readFileAlloc(gpa, se, 64 * 1024 * 1024);
+        defer gpa.free(entry_src);
+        var joined = std.ArrayList(u8){};
+        defer joined.deinit(gpa);
+        try joined.appendSlice(gpa, "load \"rpp_memo.ring\"\n");
+        try joined.appendSlice(gpa, entry_src);
+        try std.fs.cwd().writeFile(.{ .sub_path = se, .data = joined.items });
+    }
+    return se;
+}
+
+/// An absolute path as a mirror-relative one: drive letter and colon gone,
+/// leading separators gone, separators normalised.
+fn mirrorRel(abs: []const u8) []const u8 {
+    var i: usize = 0;
+    if (abs.len > 2 and abs[1] == ':') i = 2;
+    while (i < abs.len and (abs[i] == '/' or abs[i] == '\\')) i += 1;
+    return abs[i..];
 }

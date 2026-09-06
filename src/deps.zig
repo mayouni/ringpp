@@ -75,6 +75,11 @@ pub const Report = struct {
     excluded: std.ArrayList(Lib) = .{},
     unresolved: std.ArrayList(Unresolved) = .{},
     files_scanned: u32 = 0,
+    /// Every .ring file the entry point reaches, in discovery order.
+    /// `ringpp build` stages these when the program carries a #rpp:
+    /// anchor -- the transform has to run before Ring sees the source,
+    /// and it must not touch the files the user is editing.
+    files: std.ArrayList([]const u8) = .{},
     loads_unfound: std.ArrayList([]const u8) = .{},
 
     fn upsertExcluded(self: *Report, a: std.mem.Allocator, base: []const u8, which: u8, name: []const u8, from: []const u8, row: u32) !void {
@@ -320,6 +325,7 @@ pub fn collect(a: std.mem.Allocator, entry: []const u8, ring_root: ?[]const u8) 
         const tree = parser.parse(src) orelse continue;
         defer tree.deinit();
         rep.files_scanned += 1;
+        try rep.files.append(a, try a.dupe(u8, path));
 
         try walk(a, tree.root(), path, &rep);
 

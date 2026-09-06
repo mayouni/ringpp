@@ -34,6 +34,7 @@
 
 const std = @import("std");
 const deps = @import("deps.zig");
+const cache = @import("cache.zig");
 const android = @import("android.zig");
 const builtin = @import("builtin");
 
@@ -235,8 +236,48 @@ pub fn run(gpa: std.mem.Allocator, w: anytype, args: []const []const u8) !u8 {
         return 1;
     }
 
-    const entry_dir = std.fs.path.dirname(entry) orelse ".";
-    const entry_base = std.fs.path.stem(std.fs.path.basename(entry));
+    // The load closure is needed BEFORE the compile now, because a program
+    // carrying `#rpp: cache` is staged and transformed first -- Ring must
+    // read the rewritten sources, not the annotated ones.
+    const rep = try deps.collect(a, entry, ring_root);
+
+    // Staged into a directory of ours, never over the user's files. Absent
+    // any anchor this does nothing at all and the originals are built.
+    var build_entry: []const u8 = entry;
+    var staged_build = false;
+    {
+        const self_dir = std.fs.selfExeDirPathAlloc(a) catch null;
+        var rt: ?[]const u8 = null;
+        if (self_dir) |d| {
+            // bin/win64/ringpp.exe and zig-out/bin/ringpp.exe are both two levels
+            // under the repo root, so ../../rpp is the one that finds it in
+            // either layout; ./rpp covers a flat install.
+            for ([_][]const u8{ "rpp", "..\\/rpp", "..\\/..\\/rpp" }) |sub| {
+                const c = std.fs.path.join(a, &.{ d, sub, "memo.ring" }) catch continue;
+                if (exists(c)) { rt = c; break; }
+            }
+        }
+        // A temp directory, not the output one: `--out` may not be decided
+        // yet here, and staging into the user's tree is what this design is
+        // specifically avoiding.
+        var tmp_base: []const u8 = ".";
+        for ([_][]const u8{ "TEMP", "TMPDIR", "TMP" }) |v| {
+            if (std.process.getEnvVarOwned(a, v)) |t| { tmp_base = t; break; } else |_| {}
+        }
+        const stage_root = std.fs.path.join(a, &.{ tmp_base, "ringpp-cache-stage" }) catch null;
+        if (stage_root) |sr| {
+            const staged = cache.stageClosure(a, w, rep.files.items, entry, sr, rt) catch return 1;
+            if (staged) |se| {
+                build_entry = se;
+                staged_build = true;
+                try w.print("  cache: {d} file(s) staged and transformed under {s}\n", .{ rep.files.items.len, sr });
+                if (rt == null) try w.print("  cache: WARNING -- rpp/memo.ring not found beside ringpp; the staged program will not load the store\n", .{});
+            }
+        }
+    }
+
+    const entry_dir = std.fs.path.dirname(build_entry) orelse ".";
+    const entry_base = std.fs.path.stem(std.fs.path.basename(build_entry));
     const ringo_path = try std.fs.path.join(a, &.{ entry_dir, try std.fmt.allocPrint(a, "{s}.ringo", .{entry_base}) });
 
     // `-norun` is not optional, and its absence was a real defect here until
@@ -248,9 +289,17 @@ pub fn run(gpa: std.mem.Allocator, w: anytype, args: []const []const u8) !u8 {
     //
     // Measured before relying on it: with and without `-norun` the .ringo is
     // byte-identical, so this costs nothing but the execution.
+    // Ring resolves a relative `load` against the WORKING DIRECTORY, not
+    // against the file doing the loading -- so a staged program has to be
+    // compiled from inside its own staged directory or every load misses.
+    // Found by running the packaged program: R3 on a function that was
+    // sitting in a file the bytecode never picked up.
+    const compile_cwd: ?[]const u8 = if (staged_build) entry_dir else null;
+    const compile_arg: []const u8 = if (staged_build) std.fs.path.basename(build_entry) else build_entry;
     const compiled = std.process.Child.run(.{
         .allocator = gpa,
-        .argv = &.{ ring, entry, "-go", "-norun" },
+        .cwd = compile_cwd,
+        .argv = &.{ ring, compile_arg, "-go", "-norun" },
         .max_output_bytes = 4 * 1024 * 1024,
     }) catch |err| {
         try w.print("ringpp build: could not run `{s} {s} -go -norun`: {s}\n", .{ ring, entry, @errorName(err) });
@@ -266,7 +315,6 @@ pub fn run(gpa: std.mem.Allocator, w: anytype, args: []const []const u8) !u8 {
     const ringo_bytes = try std.fs.cwd().readFileAlloc(a, ringo_path, 256 * 1024 * 1024);
 
     // -------------------------------------------------------------- 2. deps
-    const rep = try deps.collect(a, entry, ring_root);
     const closure_complete = rep.loads_unfound.items.len == 0;
 
     // Refuse before writing anything. Bundling ringqt.dll alone (the only

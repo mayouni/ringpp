@@ -191,6 +191,25 @@ $cacheOk = ($cacheOut -match "Fib__rpp_impl") -and ($cacheOut -match "RppMemoGet
 "{0} {1,-16} {2}" -f $(if ($cacheOk) { "PASS" } else { "FAIL" }), "T1 cache xform", "the emitted program prints fib(28) correctly; an impure anchor is refused"
 if (-not $cacheOk) { $fail++ }
 
+# `#rpp: cache` through `ringpp build`, end to end and in TWO files. The
+# packaged program is RUN and its answer is the assertion -- a cache that is
+# fast and wrong is what this feature has to rule out, and a staged closure
+# that loses a relative load is what the two-file shape rules out. Both were
+# real: the first version compiled from the wrong working directory and the
+# packaged program raised R3 on a function whose file was never loaded.
+$cpOut = Join-Path $env:TEMP "rpp_cache_proj_out"
+if (Test-Path $cpOut) { Remove-Item -Recurse -Force $cpOut }
+$cpLog = & $ringpp build "tests\fixtures\cache_proj\app.ring" --out $cpOut 2>&1 | Out-String
+$cpRan = ""
+if (Test-Path (Join-Path $cpOut "app.exe")) {
+    Push-Location $cpOut
+    $cpRan = & ".\app.exe" app.ringo 2>&1 | Out-String
+    Pop-Location
+}
+$cpOk = ($cpLog -match "staged and transformed") -and ($cpRan -match "fib\(28\) = 317811")
+"{0} {1,-16} {2}" -f $(if ($cpOk) { "PASS" } else { "FAIL" }), "T1 cache build", "a two-file program with an anchor packages, and the package prints the right answer"
+if (-not $cpOk) { $fail++ }
+
 # R11/R15 at check time: the class typo and the function-as-class fire, the
 # missing-parent fires as the QUIET R15, and the two legal shapes stay
 # silent (exactly 3 errors, no more).
