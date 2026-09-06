@@ -168,9 +168,10 @@ $anc = & $ringpp check "tests\fixtures\anchors.ring" 2>&1 | Out-String
 # "pure", so -notmatch on it always matched and the gate passed for the
 # wrong reason on its first draft.
 $ancOk = ($anc -match "rpp/cache-impure") -and ($anc -match "rpp/anchor-unknown") -and
+         ($anc -match "rpp/cache-reads-object") -and ($anc -match "nSide") -and
          ($anc -match "prints") -and ($anc -match "writes a global") -and
-         ($anc -match "clock\(\)") -and ($anc -match "4 error, 0 warn")
-"{0} {1,-16} {2}" -f $(if ($ancOk) { "PASS" } else { "FAIL" }), "T1 anchors", "3 impurities and a bad verb fire; both pure forms and an unanchored impure one stay silent"
+         ($anc -match "clock\(\)") -and ($anc -match "5 error, 0 warn")
+"{0} {1,-16} {2}" -f $(if ($ancOk) { "PASS" } else { "FAIL" }), "T1 anchors", "3 impurities, a bad verb and a state-reading method fire; the pure forms and the stateless method stay silent"
 if (-not $ancOk) { $fail++ }
 
 # The `#rpp: cache` TRANSFORM, end to end. Inspecting the emitted text is
@@ -185,7 +186,13 @@ $cacheGen = Join-Path $env:TEMP "rpp_cache_gate.ring"
 $cacheRan = & $Ring $cacheGen 2>&1 | Out-String
 $impure = & $ringpp cache "tests\fixtures\anchors.ring" 2>&1 | Out-String
 $impureRc = $LASTEXITCODE
-$cacheOk = ($cacheOut -match "Fib__rpp_impl") -and ($cacheOut -match "RppMemoGet") -and
+# The same, for a METHOD: transformed, then RUN, and the answer asserted.
+$mOut = & $ringpp cache "tests\fixtures\cache_method.ring" 2>&1 | Out-String
+$mGen = Join-Path $env:TEMP "rpp_cache_method.ring"
+[IO.File]::WriteAllText($mGen, "load " + [char]34 + ($root + "\rpp\memo.ring").Replace('\','/') + [char]34 + "`n" + $mOut, [Text.UTF8Encoding]::new($false))
+$mRan = & $Ring $mGen 2>&1 | Out-String
+$cacheOk = ($mOut -match "def Slow__rpp_impl") -and ($mRan -match "fib\(28\) = 317811") -and
+           ($cacheOut -match "Fib__rpp_impl") -and ($cacheOut -match "RppMemoGet") -and
            ($cacheRan -match "317811") -and
            ($impure -match "refusing") -and ($impureRc -ne 0)
 "{0} {1,-16} {2}" -f $(if ($cacheOk) { "PASS" } else { "FAIL" }), "T1 cache xform", "the emitted program prints fib(28) correctly; an impure anchor is refused"

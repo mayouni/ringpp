@@ -143,6 +143,29 @@ pub const catalog = [_]Entry{
             "slot back was not isolated. Reporting beats guessing at a line.",
     },
     .{
+        .rule = "rpp/cache-reads-object",
+        .codes = &.{},
+        .findings = &.{},
+        .title = "#rpp: cache on a method that reads the object it belongs to",
+        .symptom = "Nothing at run time, like every cache defect: the second instance is " ++
+            "handed the first one's answer and no one is told.",
+        .cause = "A cache keys on the arguments. A method that reads the object depends on " ++
+            "more than its arguments, and Ring offers nothing to put in the key -- measured " ++
+            "on 1.27, list2str() on an object returns the EMPTY STRING, so every instance of " ++
+            "a class collapses onto one entry.",
+        .fix = "Cache a plain function of the values instead, or drop the anchor. A method " ++
+            "that reads NO object state IS cacheable and is left alone -- the receiver cannot " ++
+            "change the answer. This.Method() is a self-call, not a read, so recursive " ++
+            "methods still qualify.",
+        .evidence = "2,696 of Softanza's 35,494 library methods (7.6%) read no object state, " ++
+            "so the permitted set is real -- though most of those are constant returns, which " ++
+            "the benchmark says are the WORST cache candidates.",
+        .hurts = "It does not follow calls. A stateless method that calls a stateful one is " ++
+            "not caught, exactly as the purity check does not follow calls. Silence means " ++
+            "nothing obvious was found.",
+        .upstream = "Not applicable: a Ring++ annotation, not a Ring behaviour.",
+    },
+    .{
         .rule = "rpp/cache-impure",
         .codes = &.{},
         .findings = &.{},

@@ -36,3 +36,17 @@ func Unknown(n)
 func NoAnchor(n)
 	? n
 	return n
+
+class Shape
+	nSide = 4
+
+	# MUST STAY SILENT: reads no object state, so the receiver cannot change
+	# the answer and the key needs only the arguments. This.Method() is a
+	# self-call, not a read -- which is what keeps recursive methods eligible.
+	def Slow(n)   #rpp: cache
+		if n < 2 return n ok
+		return This.Slow(n-1) + This.Slow(n-2)
+
+	# MUST FIRE: reads an attribute, and no key can carry an object.
+	def Area()   #rpp: cache
+		return nSide * nSide

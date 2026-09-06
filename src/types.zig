@@ -387,6 +387,7 @@ pub fn check(
         .arena = arena,
         .report = report,
         .file = file,
+        .src_len = root.text().len,
         .first_class_row = first_class_row,
         .sigs = &sigs,
         .classes = &classes,
@@ -423,7 +424,29 @@ fn collectAnchors(n: ts.Node, out: *std.AutoHashMap(u32, []const u8)) !void {
 /// follow calls; silence means nothing obvious was found.
 pub const Impurity = struct { why: []const u8, at: ts.Node };
 
+/// Impurity anywhere in [lo, hi) -- the same byte-range reasoning as
+/// readsObjectStateInRange, for the same grammar reason.
+pub fn impurityInRange(arena: std.mem.Allocator, n: ts.Node, lo: usize, hi: usize) ?Impurity {
+    const sb: usize = n.startByte();
+    if (sb >= lo and sb < hi) {
+        if (impurityHere(arena, n)) |r| return r;
+    }
+    var i: u32 = 0;
+    while (i < n.childCount()) : (i += 1) {
+        if (impurityInRange(arena, n.child(i), lo, hi)) |r| return r;
+    }
+    return null;
+}
 pub fn impurityOf(arena: std.mem.Allocator, n: ts.Node) ?Impurity {
+    if (impurityHere(arena, n)) |r| return r;
+    var i: u32 = 0;
+    while (i < n.childCount()) : (i += 1) {
+        if (impurityOf(arena, n.child(i))) |r| return r;
+    }
+    return null;
+}
+
+fn impurityHere(arena: std.mem.Allocator, n: ts.Node) ?Impurity {
     const k = n.kind();
     if (std.mem.eql(u8, k, "see_statement")) return .{ .why = "prints", .at = n };
     if (std.mem.eql(u8, k, "assignment_expression") and n.childCount() > 0) {
@@ -453,11 +476,137 @@ pub fn impurityOf(arena: std.mem.Allocator, n: ts.Node) ?Impurity {
     }
     return null;
 }
+/// The byte where the next function or class begins after `after`, or
+/// `limit` when there is none.
+///
+/// A method's body is not reachable by sibling-walking. The grammar keeps
+/// only the first statement under function_definition, emits the rest as
+/// siblings of the CLASS -- and at the end of a file it emits them as
+/// siblings of the FILE, escaping the class node altogether. Verified with
+/// `ringpp ast`. So a method's extent is a BYTE RANGE, ending wherever the
+/// next definition starts, wherever the tree happened to put it.
+pub fn nextDefBoundary(root: ts.Node, after: usize, limit: usize) usize {
+    var best: usize = limit;
+    scanBoundary(root, after, &best);
+    return best;
+}
+
+fn scanBoundary(n: ts.Node, after: usize, best: *usize) void {
+    const k = n.kind();
+    const sb: usize = n.startByte();
+    if ((std.mem.eql(u8, k, "function_definition") or isClass(n)) and sb > after and sb < best.*) best.* = sb;
+    var i: u32 = 0;
+    while (i < n.childCount()) : (i += 1) scanBoundary(n.child(i), after, best);
+}
+
+/// Does anything in the byte range [lo, hi) read object state?
+pub fn readsObjectStateInRange(
+    arena: std.mem.Allocator,
+    n: ts.Node,
+    lo: usize,
+    hi: usize,
+    attrs: *const std.StringHashMap(void),
+) ?[]const u8 {
+    const sb: usize = n.startByte();
+    if (sb >= lo and sb < hi) {
+        if (readsObjectStateHere(arena, n, attrs)) |r| return r;
+    }
+    var i: u32 = 0;
+    while (i < n.childCount()) : (i += 1) {
+        if (readsObjectStateInRange(arena, n.child(i), lo, hi, attrs)) |r| return r;
+    }
+    return null;
+}
+/// Does this node read the object it belongs to -- and if so, how?
+///
+/// A method that reads NO object state is exactly as cacheable as a plain
+/// function: the receiver cannot change the answer, so it need not be in
+/// the key. One that DOES read state cannot be cached at all here, because
+/// Ring offers no way to put an object into a key. list2str() on an object
+/// returns the EMPTY STRING -- measured on 1.27 -- so every instance would
+/// collapse onto one entry and the second object would be served the
+/// first's answer, silently and forever.
+pub fn readsObjectState(
+    arena: std.mem.Allocator,
+    n: ts.Node,
+    attrs: *const std.StringHashMap(void),
+) ?[]const u8 {
+    if (readsObjectStateHere(arena, n, attrs)) |r| return r;
+    var i: u32 = 0;
+    while (i < n.childCount()) : (i += 1) {
+        if (readsObjectState(arena, n.child(i), attrs)) |r| return r;
+    }
+    return null;
+}
+
+/// The test for ONE node, with no recursion.
+fn readsObjectStateHere(
+    arena: std.mem.Allocator,
+    n: ts.Node,
+    attrs: *const std.StringHashMap(void),
+) ?[]const u8 {
+    const k = n.kind();
+
+    // `This` is its own node kind (`self`), not an identifier -- and the two
+    // things it can introduce are not the same. `This.attr` READS STATE and
+    // disqualifies the method. `This.Method()` is a SELF-CALL, which is how
+    // recursion is written, and disqualifying it would rule out precisely
+    // the shape a cache is for. So the call form is allowed through.
+    if (std.mem.eql(u8, k, "self")) {
+        const p1 = n.parent();
+        if (!p1.isNull() and std.mem.eql(u8, p1.kind(), "member_expression")) {
+            const p2 = p1.parent();
+            if (!p2.isNull() and std.mem.eql(u8, p2.kind(), "call_expression")) return null;
+            return "This.<attribute>";
+        }
+        return "This";
+    }
+
+    if (std.mem.eql(u8, k, "identifier")) {
+        const t = n.text();
+        if (t.len > 1 and t[0] == '@') return t;
+        if (lower(arena, t)) |lk| {
+            if (attrs.contains(lk)) return t;
+        } else |_| {}
+    }
+    var i: u32 = 0;
+    while (i < n.childCount()) : (i += 1) {
+        if (readsObjectState(arena, n.child(i), attrs)) |r| return r;
+    }
+    return null;
+}
+
+/// The bare attribute names a class declares, lower-cased: the statements
+/// between `class` and its first method. `@name = x` counts too -- the
+/// declaration form differs across Softanza and both are attributes.
+pub fn classAttrs(arena: std.mem.Allocator, class_node: ts.Node, out: *std.StringHashMap(void)) !void {
+    var i: u32 = 0;
+    while (i < class_node.childCount()) : (i += 1) {
+        const c = class_node.child(i);
+        const k = c.kind();
+        if (std.mem.eql(u8, k, "function_definition")) return;
+        if (isClass(c)) return;
+        if (!std.mem.eql(u8, k, "expression_statement")) continue;
+        var target = c;
+        if (c.namedChildCount() > 0) {
+            const inner = c.namedChild(0);
+            if (std.mem.eql(u8, inner.kind(), "assignment_expression") and inner.childCount() > 0) {
+                target = inner.child(0);
+            } else target = inner;
+        }
+        if (!std.mem.eql(u8, target.kind(), "identifier")) continue;
+        var t = target.text();
+        if (t.len > 1 and t[0] == '@') t = t[1..];
+        if (lower(arena, t)) |lk| try out.put(lk, {}) else |_| {}
+    }
+}
 const Walker = struct {
     gpa: std.mem.Allocator,
     arena: std.mem.Allocator,
     report: *chk.Report,
     file: []const u8,
+    /// Length of the file, so a method's byte range can end at EOF.
+    src_len: usize = 0,
     /// Row of the first class_definition among the ROOT's children, or
     /// maxInt when there is none. The vendored grammar does NOT reliably
     /// nest post-class functions inside the class node (rpp/idioms.ring
@@ -882,6 +1031,39 @@ const Walker = struct {
         if (!std.mem.eql(u8, verb, "cache")) {
             try self.report.add(self.gpa, self.file, fn_node, .err, "rpp/anchor-unknown", "#rpp: {s} is not a verb this version knows", .{verb}, "An anchor Ring++ does not recognise is reported rather than ignored: a silently skipped annotation looks like a feature that is working. The verbs are listed by `ringpp why rpp/anchor-unknown`.");
             return;
+        }
+
+        // A METHOD carries one more question than a function: does it read
+        // the object? If it does, no key can describe it -- list2str() on an
+        // object returns the empty string, so every instance would share one
+        // entry. Reported here so `check` and `cache` refuse the same code.
+        // A function after the first class is a METHOD (F-21), whether or
+        // not the grammar nested it inside the class node -- it often does
+        // not. Asking the parent gets this wrong on any file with functions
+        // before its first class, and every one of them would be checked as
+        // if it had no object at all.
+        const par = fn_node.parent();
+        if (fn_node.start().row >= self.first_class_row and !par.isNull()) {
+            var rootn = fn_node;
+            while (true) {
+                const up = rootn.parent();
+                if (up.isNull()) break;
+                rootn = up;
+            }
+            var cls: ?ts.Node = null;
+            var ci: u32 = 0;
+            while (ci < rootn.childCount()) : (ci += 1) {
+                const c = rootn.child(ci);
+                if (isClass(c) and c.start().row <= fn_node.start().row) cls = c;
+            }
+            var attrs = std.StringHashMap(void).init(self.arena);
+            if (cls) |cn| classAttrs(self.arena, cn, &attrs) catch {};
+            const lo: usize = fn_node.startByte();
+            const hi = nextDefBoundary(rootn, lo, self.src_len);
+            if (readsObjectStateInRange(self.arena, rootn, lo, hi, &attrs)) |what| {
+                try self.report.add(self.gpa, self.file, fn_node, .err, "rpp/cache-reads-object", "#rpp: cache on a method that reads {s} -- an object cannot be part of a cache key", .{what}, "A cache keys on the arguments. A method that reads the object depends on more than its arguments, and Ring offers nothing to put in the key: list2str() on an object returns the EMPTY STRING, so every instance of the class would collapse onto one entry and the second object would be handed the first one's answer. A method that reads NO object state is cacheable, because the receiver cannot change the answer; This.Method() is a self-call and does not count as a read.");
+                return;
+            }
         }
 
         var why: []const u8 = "";

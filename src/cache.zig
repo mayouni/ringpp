@@ -108,70 +108,28 @@ pub fn transform(
     }
 
     var out = std.ArrayList(u8){};
+    errdefer out.deinit(gpa);
     var cursor: usize = 0;
     var n_done: usize = 0;
 
+    // Source order matters: `cursor` only ever moves forward, so root
+    // children are walked in order and a class is descended into where it
+    // sits. Methods are children of the CLASS node, not of the file -- the
+    // first version looped over root only and never saw one.
     var i: u32 = 0;
     while (i < root.childCount()) : (i += 1) {
-        const fn_node = root.child(i);
-        if (!std.mem.eql(u8, fn_node.kind(), "function_definition")) continue;
-        const row = fn_node.start().row;
-        const verb = anchors.get(row) orelse
-            (if (row > 0) anchors.get(row - 1) else null) orelse continue;
-        if (!std.mem.eql(u8, verb, "cache")) continue;
-
-        if (row >= first_class_row) {
-            try w.print("ringpp cache: {s}:{d}: #rpp: cache on a method is not supported yet -- a method's key would have to carry the object's identity\n", .{ path, row + 1 });
-            return Refused.CacheRefused;
+        const top = root.child(i);
+        const tk = top.kind();
+        if (std.mem.eql(u8, tk, "class_definition") or std.mem.eql(u8, tk, "class_statement")) {
+            var j: u32 = 0;
+            while (j < top.childCount()) : (j += 1) {
+                if (!std.mem.eql(u8, top.child(j).kind(), "function_definition")) continue;
+                if (try emitOne(gpa, w, arena, src, root, top, j, &anchors, &out, &cursor, first_class_row)) n_done += 1;
+            }
+            continue;
         }
-        if (types.impurityOf(arena, fn_node)) |imp| {
-            try w.print("ringpp cache: {s}:{d}: refusing -- the function {s}\n", .{ path, row + 1, imp.why });
-            return Refused.CacheRefused;
-        }
-
-        // child() walks ANONYMOUS nodes too, so child(0) is the `func`
-        // keyword and not the name. The first draft of this read child(0),
-        // found a keyword, and silently emitted the file unchanged.
-        const name_node = fn_node.field("name");
-        if (name_node.isNull()) continue;
-        const name = name_node.text();
-
-        var params = std.ArrayList([]const u8){};
-        try paramsOf(arena, fn_node, &params);
-
-        const start: usize = fn_node.startByte();
-        const end: usize = start + fn_node.text().len;
-
-        try out.appendSlice(gpa, src[cursor..start]);
-
-        // the wrapper
-        try out.writer(gpa).print("func {s}(", .{name});
-        for (params.items, 0..) |pname, k| {
-            if (k > 0) try out.appendSlice(gpa, ", ");
-            try out.appendSlice(gpa, pname);
-        }
-        try out.appendSlice(gpa, ")\n");
-        try out.writer(gpa).print("\t_kRpp_ = \"{s}\"", .{name});
-        for (params.items) |pname| {
-            try out.writer(gpa).print(" + char(31) + RppK({s})", .{pname});
-        }
-        try out.appendSlice(gpa, "\n\t_hRpp_ = RppMemoGet(_kRpp_)\n");
-        try out.appendSlice(gpa, "\tif isList(_hRpp_) return _hRpp_[1] ok\n");
-        try out.writer(gpa).print("\treturn RppMemoPut(_kRpp_, {s}__rpp_impl(", .{name});
-        for (params.items, 0..) |pname, k| {
-            if (k > 0) try out.appendSlice(gpa, ", ");
-            try out.appendSlice(gpa, pname);
-        }
-        try out.appendSlice(gpa, "))\n\n");
-
-        // the original, renamed: everything after the name is reproduced
-        // byte for byte, so the body is never reformatted or reinterpreted
-        try out.writer(gpa).print("func {s}__rpp_impl", .{name});
-        const after_name = name_node.startByte() + name.len;
-        try out.appendSlice(gpa, src[after_name..end]);
-
-        cursor = end;
-        n_done += 1;
+        if (!std.mem.eql(u8, tk, "function_definition")) continue;
+        if (try emitOne(gpa, w, arena, src, root, root, i, &anchors, &out, &cursor, first_class_row)) n_done += 1;
     }
     try out.appendSlice(gpa, src[cursor..]);
 
@@ -287,4 +245,153 @@ fn mirrorRel(abs: []const u8) []const u8 {
     if (abs.len > 2 and abs[1] == ':') i = 2;
     while (i < abs.len and (abs[i] == '/' or abs[i] == '\\')) i += 1;
     return abs[i..];
+}
+
+/// The class_definition that encloses `row`, if any.
+fn enclosingClass(root: ts.Node, row: u32) ?ts.Node {
+    var found: ?ts.Node = null;
+    var i: u32 = 0;
+    while (i < root.childCount()) : (i += 1) {
+        const c = root.child(i);
+        const k = c.kind();
+        if ((std.mem.eql(u8, k, "class_definition") or std.mem.eql(u8, k, "class_statement")) and c.start().row <= row) found = c;
+    }
+    return found;
+}
+
+/// Does the method starting at child `idx` read object state anywhere in
+/// its SPAN? A method body is not a subtree inside a class -- the grammar
+/// keeps only the first statement and emits the rest as siblings -- so the
+/// span is the node plus every following sibling up to the next method or
+/// class. Checking the subtree alone would clear a method on the strength
+/// of its first line.
+fn readsStateInSpan(
+    arena: std.mem.Allocator,
+    parent: ts.Node,
+    idx: u32,
+    attrs: *const std.StringHashMap(void),
+) ?[]const u8 {
+    var j: u32 = idx;
+    while (j < parent.childCount()) : (j += 1) {
+        const c = parent.child(j);
+        if (j > idx) {
+            const k = c.kind();
+            if (std.mem.eql(u8, k, "function_definition") or
+                std.mem.eql(u8, k, "class_definition") or
+                std.mem.eql(u8, k, "class_statement")) break;
+        }
+        if (types.readsObjectState(arena, c, attrs)) |r| return r;
+    }
+    return null;
+}
+
+/// Emit one anchored function or method. Returns true when it rewrote one.
+///
+/// `parent` is the file for a function and the CLASS for a method, because
+/// a method's body is not its subtree: inside a class the grammar keeps
+/// only the first statement under function_definition and emits the rest as
+/// siblings. So the impl is taken from the whole SPAN -- the node plus every
+/// following sibling up to the next method or class.
+fn emitOne(
+    gpa: std.mem.Allocator,
+    w: anytype,
+    arena: std.mem.Allocator,
+    src: []const u8,
+    root: ts.Node,
+    parent: ts.Node,
+    idx: u32,
+    anchors: *const std.AutoHashMap(u32, []const u8),
+    out: *std.ArrayList(u8),
+    cursor: *usize,
+    first_class_row: u32,
+) !bool {
+    const fn_node = parent.child(idx);
+    const row = fn_node.start().row;
+    // FINDINGS F-21 and the grammar's own inconsistency: a function after the
+    // first class is a METHOD whether or not the tree nested it there. Asking
+    // the parent node gets this wrong on any file that has functions before
+    // its first class, which is most of them.
+    const is_method = row >= first_class_row;
+    const verb = anchors.get(row) orelse
+        (if (row > 0) anchors.get(row - 1) else null) orelse return false;
+    if (!std.mem.eql(u8, verb, "cache")) return false;
+
+    // ONE byte range for everything below. Sibling-walking cannot find a
+    // method's body: the grammar emits it as a sibling of the class, and at
+    // the end of a file as a sibling of the FILE, escaping the class node
+    // entirely. The extent is bytes, ending where the next definition starts.
+    const start: usize = fn_node.startByte();
+    const end: usize = types.nextDefBoundary(root, start, src.len);
+
+    if (is_method) {
+        var attrs = std.StringHashMap(void).init(arena);
+        if (enclosingClass(root, row)) |cls| try types.classAttrs(arena, cls, &attrs);
+        if (types.readsObjectStateInRange(arena, root, start, end, &attrs)) |what| {
+            try w.print("ringpp cache: {d}: refusing -- the method reads {s}, and an object cannot be part of a cache key: list2str() returns the empty string for every object, so all instances would share one entry\n", .{ row + 1, what });
+            return Refused.CacheRefused;
+        }
+    }
+
+    // impurity over the whole span, for the same reason
+    {
+        var j: u32 = idx;
+        while (j < parent.childCount()) : (j += 1) {
+            const c = parent.child(j);
+            if (j > idx and isBoundary(c)) break;
+            if (types.impurityOf(arena, c)) |imp| {
+                try w.print("ringpp cache: {d}: refusing -- it {s}\n", .{ row + 1, imp.why });
+                return Refused.CacheRefused;
+            }
+        }
+    }
+
+    const name_node = fn_node.field("name");
+    if (name_node.isNull()) return false;
+    const name = name_node.text();
+
+    var params = std.ArrayList([]const u8){};
+    try paramsOf(arena, fn_node, &params);
+
+    const kw = if (is_method) "def" else "func";
+    const ind = if (is_method) "\t" else "";
+
+    try out.appendSlice(gpa, src[cursor.*..start]);
+    try out.writer(gpa).print("{s} {s}(", .{ kw, name });
+    for (params.items, 0..) |pn, k| {
+        if (k > 0) try out.appendSlice(gpa, ", ");
+        try out.appendSlice(gpa, pn);
+    }
+    try out.appendSlice(gpa, ")\n");
+    try out.writer(gpa).print("{s}\t_kRpp_ = \"{s}\"", .{ ind, name });
+    for (params.items) |pn| try out.writer(gpa).print(" + char(31) + RppK({s})", .{pn});
+    try out.writer(gpa).print("\n{s}\t_hRpp_ = RppMemoGet(_kRpp_)\n", .{ind});
+    try out.writer(gpa).print("{s}\tif isList(_hRpp_) return _hRpp_[1] ok\n", .{ind});
+    try out.writer(gpa).print("{s}\treturn RppMemoPut(_kRpp_, {s}__rpp_impl(", .{ ind, name });
+    for (params.items, 0..) |pn, k| {
+        if (k > 0) try out.appendSlice(gpa, ", ");
+        try out.appendSlice(gpa, pn);
+    }
+    try out.appendSlice(gpa, "))\n\n");
+    try out.writer(gpa).print("{s}{s} {s}__rpp_impl", .{ ind, kw, name });
+    // The anchor must not travel onto the impl. In the same-line form it
+    // sits between the name and the body, and leaving it there would make a
+    // second `ringpp cache` wrap the wrapper.
+    var after_name = name_node.startByte() + name.len;
+    {
+        const line_end = std.mem.indexOfScalarPos(u8, src, after_name, '\n') orelse src.len;
+        if (std.mem.indexOfPos(u8, src[0..line_end], after_name, "#rpp:")) |a| {
+            try out.appendSlice(gpa, src[after_name..a]);
+            after_name = line_end;
+        }
+    }
+    try out.appendSlice(gpa, src[after_name..end]);
+    cursor.* = end;
+    return true;
+}
+
+fn isBoundary(n: ts.Node) bool {
+    const k = n.kind();
+    return std.mem.eql(u8, k, "function_definition") or
+        std.mem.eql(u8, k, "class_definition") or
+        std.mem.eql(u8, k, "class_statement");
 }

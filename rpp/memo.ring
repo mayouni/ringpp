@@ -42,6 +42,15 @@ $nRppMisses = 0
 # one is not supported; that is a limit of the feature, not of this line.
 func RppK(x)
 	if isList(x) return list2str(x) ok
+
+	# An OBJECT has no usable text here, and the dangerous part is that Ring
+	# does not say so: list2str() on an object returns an EMPTY STRING, so
+	# every instance of a class would collapse onto one cache entry and the
+	# second object would be handed the first one's answer. Measured on 1.27.
+	# Raising is the only safe answer, and it names the reason.
+	if isObject(x)
+		raise("rpp cache: an object cannot be part of a cache key -- list2str() returns the empty string for every object, so all instances would share one entry. Cache a function of the object" + char(39) + "s VALUES instead.")
+	ok
 	return "" + x
 
 # The cached value for cKey, or "" when there is none. Callers test with
