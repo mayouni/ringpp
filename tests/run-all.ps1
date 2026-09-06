@@ -240,11 +240,18 @@ if (Test-Path (Join-Path $dpOut "app.exe")) {
     $dpRan = & ".\app.exe" app.ringo 2>&1 | Out-String
     Pop-Location
 }
-$null = & $ringpp expand "tests\fixtures\default_dyn.ring" 2>&1
+# A dynamic `call x(...)` no longer REFUSES. Measured on 1.27: a dynamic
+# short call raises R19 loudly, which is the behaviour that existed before
+# the feature -- incomplete, not wrong. The cache still refuses what it
+# cannot key, because a bad key is silently wrong. So: a note, exit 0, and
+# every other call in the file still rewritten.
+$dynOut = & $ringpp expand "tests\fixtures\default_dyn.ring" 2>&1 | Out-String
 $dynRc = $LASTEXITCODE
 $dpOk = ($dpRan -match "hello, Mansour\.") -and ($dpRan -match "salam, Mansour\.") -and
-        ($dpRan -match "salam, Mansour!") -and ($dpRan -match "(?m)^42\s*$") -and ($dynRc -ne 0)
-"{0} {1,-16} {2}" -f $(if ($dpOk) { "PASS" } else { "FAIL" }), "T1 default build", "declared in lib, filled in app, zero-arg filled too; a dynamic call is refused"
+        ($dpRan -match "salam, Mansour!") -and ($dpRan -match "(?m)^42\s*$") -and
+        ($dynRc -eq 0) -and ($dynOut -match "still raises R19") -and
+        ($dynOut -match "F\(1, 2\)")
+"{0} {1,-16} {2}" -f $(if ($dpOk) { "PASS" } else { "FAIL" }), "T1 default build", "declared in lib, filled in app, zero-arg filled too; a dynamic call warns and the rest is rewritten"
 if (-not $dpOk) { $fail++ }
 
 # Named arguments through `ringpp build`, end to end. Opted in by the
@@ -272,6 +279,22 @@ $npOk = ($npRan -match "hello, Mansour!") -and ($npRan -match "salam, Mansour\."
         (($rcs | Where-Object { $_ -eq 0 }).Count -eq 0)
 "{0} {1,-16} {2}" -f $(if ($npOk) { "PASS" } else { "FAIL" }), "T1 named args", "four placements run right in a package; unknown, misordered and missing are refused"
 if (-not $npOk) { $fail++ }
+
+# Keyword ALIASES: `#rpp: named X as ReturnedAs, ReturnAs`. Measured over
+# Softanza's library, its named-parameter idiom uses decorative English --
+# :ReturnedAs 81 sites, :Using 47, :Of 45 -- with several aliases per
+# parameter, and NOT the parameter's own name. All three spellings must land
+# in the same slot, and a complete positional call must be left alone.
+$alOut = & $ringpp expand "tests\fixtures\alias.ring" 2>&1 | Out-String
+$alOk = (([regex]::Matches($alOut, [regex]::Escape('ClassifyQRT(:stzList)'))).Count -eq 3) -and
+        ($alOut -match [regex]::Escape('ClassifyQRT(:stzHashList)'))
+# The COUNT is the proof, not a -notmatch on the keyword: this gate's first
+# draft asserted the output no longer contained 'pcReturnType =', which the
+# fixture's own explanatory COMMENT contains. Second time that shape has
+# passed-or-failed for the wrong reason -- an absence test over a file that
+# talks about itself proves nothing.
+"{0} {1,-16} {2}" -f $(if ($alOk) { "PASS" } else { "FAIL" }), "T1 named alias", "a keyword alias, a second alias and the parameter name all reach the same slot"
+if (-not $alOk) { $fail++ }
 
 # R11/R15 at check time: the class typo and the function-as-class fire, the
 # missing-parent fires as the QUIET R15, and the two legal shapes stay

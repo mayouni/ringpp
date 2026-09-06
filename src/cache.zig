@@ -467,7 +467,22 @@ fn isBoundary(n: ts.Node) bool {
 // first, then each file is rewritten; a call in app.ring to a function
 // declared in lib.ring is the ordinary case, not the edge.
 
-pub const FnDefaults = struct { nparams: usize, by_pos: []const []const u8, params: []const []const u8 };
+pub const Alias = struct { name: []const u8, slot: usize };
+pub const FnDefaults = struct {
+    nparams: usize,
+    by_pos: []const []const u8,
+    params: []const []const u8,
+    /// Readable keywords a caller may use instead of the parameter's own
+    /// name: `#rpp: named pcReturnType as ReturnedAs, ReturnAs`.
+    ///
+    /// Softanza's own idiom is exactly this and NOT the parameter name --
+    /// measured over its library, the keywords are :ReturnedAs (81 sites),
+    /// :Using (47), :Of (45), :Sections (45) -- decorative English chosen
+    /// for how the call READS, with several aliases per parameter. Keying
+    /// only on the parameter's own name would have made every such call
+    /// read worse than the hand-written unwrapping it replaced.
+    aliases: []const Alias,
+};
 pub const DefaultsMap = std.StringHashMap(FnDefaults);
 
 /// Pass 1: every function in this tree that carries a `default` anchor.
@@ -487,14 +502,25 @@ fn collectDefaultsIn(arena: std.mem.Allocator, n: ts.Node, anchors: *const std.A
             // RECEIVE the [name, value] pair Ring passes for :name = value (every
             // one of Softanza\'s 215 unwrap sites) would break if its calls were
             // made positional behind its back.
-            const is_named = std.mem.eql(u8, v, "named");
+            const is_named = std.mem.startsWith(u8, v, "named");
             if (is_named or std.mem.startsWith(u8, v, "default")) {
                 const name_node = n.field("name");
                 if (!name_node.isNull()) {
                     var params = std.ArrayList([]const u8){};
                     try paramsOf(arena, n, &params);
                     var defs = std.ArrayList(types.DefaultArg){};
-                    if (!is_named) try types.parseDefaults(arena, std.mem.trim(u8, v["default".len..], " \t"), &defs);
+                    var alias_list = std.ArrayList(Alias){};
+                    const body = if (is_named)
+                        std.mem.trim(u8, v["named".len..], " \t")
+                    else
+                        std.mem.trim(u8, v["default".len..], " \t");
+                    // `X as A, B` declares aliases; `X = expr` declares a
+                    // default. One anchor may carry either.
+                    if (std.mem.indexOf(u8, body, " as ")) |_| {
+                        try parseAliases(arena, body, params.items, &alias_list);
+                    } else if (!is_named) {
+                        try types.parseDefaults(arena, body, &defs);
+                    }
                     const by_pos = try arena.alloc([]const u8, params.items.len);
                     for (params.items, 0..) |pn, k| {
                         by_pos[k] = "";
@@ -509,7 +535,7 @@ fn collectDefaultsIn(arena: std.mem.Allocator, n: ts.Node, anchors: *const std.A
                     const key = try std.ascii.allocLowerString(arena, name_node.text());
                     const pnames = try arena.alloc([]const u8, params.items.len);
                     for (params.items, 0..) |pn, k| pnames[k] = try arena.dupe(u8, pn);
-                    try map.put(key, .{ .nparams = params.items.len, .by_pos = by_pos, .params = pnames });
+                    try map.put(key, .{ .nparams = params.items.len, .by_pos = by_pos, .params = pnames, .aliases = try alias_list.toOwnedSlice(arena) });
                 }
             }
         }
@@ -518,6 +544,29 @@ fn collectDefaultsIn(arena: std.mem.Allocator, n: ts.Node, anchors: *const std.A
     while (i < n.childCount()) : (i += 1) try collectDefaultsIn(arena, n.child(i), anchors, map);
 }
 
+
+/// `pcReturnType as ReturnedAs, ReturnAs` -- one parameter, several readable
+/// keywords. Several such clauses may be separated by ';'.
+fn parseAliases(arena: std.mem.Allocator, body: []const u8, params: []const []const u8, out: *std.ArrayList(Alias)) !void {
+    var clauses = std.mem.splitScalar(u8, body, ';');
+    while (clauses.next()) |raw| {
+        const clause = std.mem.trim(u8, raw, " \t");
+        if (clause.len == 0) continue;
+        const at = std.mem.indexOf(u8, clause, " as ") orelse continue;
+        const pname = std.mem.trim(u8, clause[0..at], " \t");
+        var slot: ?usize = null;
+        for (params, 0..) |pn, pi| {
+            if (std.ascii.eqlIgnoreCase(pn, pname)) slot = pi;
+        }
+        const si = slot orelse continue;
+        var names = std.mem.splitScalar(u8, clause[at + 4 ..], ',');
+        while (names.next()) |nraw| {
+            const a = std.mem.trim(u8, nraw, " \t:");
+            if (a.len == 0) continue;
+            try out.append(arena, .{ .name = try std.ascii.allocLowerString(arena, a), .slot = si });
+        }
+    }
+}
 /// Does the tree contain a dynamic `call x(...)`? Such a call resolves its
 /// target at run time, so no call-site rewrite can reach it -- a program
 /// that uses one cannot have defaults honoured soundly, and is refused
@@ -569,9 +618,20 @@ fn namedArgOf(n: ts.Node) ?NamedArg {
 /// with neither an argument nor a default.
 pub fn applyDefaults(gpa: std.mem.Allocator, w: anytype, path: []const u8, root: ts.Node, src: []const u8, map: *const DefaultsMap) !?[]u8 {
     if (map.count() == 0) return null;
+    // A dynamic `call x(...)` cannot be rewritten -- its target is a string
+    // decided at run time. This used to REFUSE the file, and that was too
+    // strong: measured on 1.27, a dynamic short call raises R19 loudly, which
+    // is exactly the behaviour that existed before the feature. It does not
+    // produce a wrong answer.
+    //
+    // So the two anchors part company here, and the rule is the project's own:
+    // REFUSE what is silently wrong, WARN what is loudly incomplete. A bad
+    // cache key returns the first call's answer forever with nothing raised;
+    // a default that misses a dynamic call raises R19 at that call, as it
+    // always did. Refusing it cost every program that uses `call` anywhere --
+    // 49 files in Softanza's library alone -- the whole feature.
     if (hasDynamicCall(root)) {
-        try w.print("ringpp expand: {s}: refusing -- this file uses `call x(...)`, which resolves its target at run time, so a default or named parameter cannot be honoured for every call. Remove the dynamic call or the anchor.\n", .{path});
-        return Refused.CacheRefused;
+        try w.print("ringpp expand: {s}: note -- this file uses `call x(...)`; a default or named argument cannot be filled in at a call whose target is chosen at run time, and such a call still raises R19 exactly as it does today. Every other call in the file is rewritten.\n", .{path});
     }
     var sites = std.ArrayList(ts.Node){};
     defer sites.deinit(gpa);
@@ -602,6 +662,12 @@ pub fn applyDefaults(gpa: std.mem.Allocator, w: anytype, path: []const u8, root:
                     var slot: ?usize = null;
                     for (fd.params, 0..) |pn, pi| {
                         if (std.ascii.eqlIgnoreCase(pn, na.name)) slot = pi;
+                    }
+                    // a declared keyword alias resolves to the same slot
+                    if (slot == null) {
+                        for (fd.aliases) |al| {
+                            if (std.ascii.eqlIgnoreCase(al.name, na.name)) slot = al.slot;
+                        }
                     }
                     const si = slot orelse {
                         try w.print("ringpp expand: {s}:{d}: refusing -- :{s} is not a parameter of {s}()\n", .{ path, row, na.name, name_node.text() });
