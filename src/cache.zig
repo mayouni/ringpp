@@ -67,6 +67,7 @@ pub fn transform(
     path: []const u8,
     src_in: []const u8,
     defaults: *const DefaultsMap,
+    dyn: *usize,
 ) !?[]u8 {
     var arena_state = std.heap.ArenaAllocator.init(gpa);
     defer arena_state.deinit();
@@ -90,7 +91,7 @@ pub fn transform(
     // the cache pass re-parses; every offset from tree1 is stale after this.
     var src: []const u8 = src_in;
     var owned: ?[]u8 = null;
-    if (try applyDefaults(gpa, w, path, tree1.root(), src_in, defaults)) |t| {
+    if (try applyDefaults(gpa, w, path, tree1.root(), src_in, defaults, dyn)) |t| {
         owned = t;
         src = t;
     }
@@ -187,7 +188,9 @@ pub fn run(gpa: std.mem.Allocator, w: anytype, path: []const u8) !u8 {
             if (!t.root().hasError()) try collectDefaults(arena_state.allocator(), t.root(), &defaults);
         }
     }
-    const out = transform(gpa, w, path, src, &defaults) catch return 1;
+    var dyn: usize = 0;
+    const out = transform(gpa, w, path, src, &defaults, &dyn) catch return 1;
+    if (dyn > 0) try w.print("ringpp expand: note -- {s} uses `call x(...)`; a default or named argument cannot be filled in where the target is chosen at run time, and such a call still raises R19 exactly as it does today. Every other call is rewritten.\n", .{path});
     if (out) |t| {
         defer gpa.free(t);
         try w.print("{s}", .{t});
@@ -220,6 +223,7 @@ pub fn stageClosure(
     runtime_src: ?[]const u8,
 ) !?[]const u8 {
     var any = false;
+    var dyn: usize = 0;
     var arena_state = std.heap.ArenaAllocator.init(gpa);
     defer arena_state.deinit();
     var defaults = DefaultsMap.init(arena_state.allocator());
@@ -252,7 +256,7 @@ pub fn stageClosure(
 
         const src = std.fs.cwd().readFileAlloc(gpa, f, 64 * 1024 * 1024) catch continue;
         defer gpa.free(src);
-        const out = transform(gpa, w, f, src, &defaults) catch return Refused.CacheRefused;
+        const out = transform(gpa, w, f, src, &defaults, &dyn) catch return Refused.CacheRefused;
         if (out) |t| {
             defer gpa.free(t);
             try std.fs.cwd().writeFile(.{ .sub_path = dest, .data = t });
@@ -292,6 +296,9 @@ pub fn stageClosure(
         try joined.appendSlice(gpa, "load \"rpp_memo.ring\"\n");
         try joined.appendSlice(gpa, entry_src);
         try std.fs.cwd().writeFile(.{ .sub_path = se, .data = joined.items });
+    }
+    if (dyn > 0) {
+        try w.print("  cache: {d} file(s) use `call x(...)`; a default or named argument is not filled in where the target is chosen at run time, and such a call still raises R19 exactly as it does today. Every other call is rewritten.\n", .{dyn});
     }
     return se;
 }
@@ -616,7 +623,7 @@ fn namedArgOf(n: ts.Node) ?NamedArg {
 /// would otherwise accept and misrun: a positional argument after a named
 /// one, a name that is not a parameter, a slot filled twice, and a slot
 /// with neither an argument nor a default.
-pub fn applyDefaults(gpa: std.mem.Allocator, w: anytype, path: []const u8, root: ts.Node, src: []const u8, map: *const DefaultsMap) !?[]u8 {
+pub fn applyDefaults(gpa: std.mem.Allocator, w: anytype, path: []const u8, root: ts.Node, src: []const u8, map: *const DefaultsMap, dyn: *usize) !?[]u8 {
     if (map.count() == 0) return null;
     // A dynamic `call x(...)` cannot be rewritten -- its target is a string
     // decided at run time. This used to REFUSE the file, and that was too
@@ -630,9 +637,12 @@ pub fn applyDefaults(gpa: std.mem.Allocator, w: anytype, path: []const u8, root:
     // a default that misses a dynamic call raises R19 at that call, as it
     // always did. Refusing it cost every program that uses `call` anywhere --
     // 49 files in Softanza's library alone -- the whole feature.
-    if (hasDynamicCall(root)) {
-        try w.print("ringpp expand: {s}: note -- this file uses `call x(...)`; a default or named argument cannot be filled in at a call whose target is chosen at run time, and such a call still raises R19 exactly as it does today. Every other call in the file is rewritten.\n", .{path});
-    }
+    // COUNTED, not printed here. Softanza has 94 of these across 40 library
+    // files -- every one a callback: Map, Filter, Reduce, an event handler,
+    // a work function. A note per file would put 40 identical lines in a
+    // build log and teach the reader to skip them. One line per build says
+    // the same thing and is still there to be read.
+    if (hasDynamicCall(root)) dyn.* += 1;
     var sites = std.ArrayList(ts.Node){};
     defer sites.deinit(gpa);
     try collectRewritableCalls(gpa, root, map, &sites);
