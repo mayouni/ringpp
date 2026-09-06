@@ -400,6 +400,17 @@ const Walker = struct {
     classes: *std.StringHashMap(ClassInfo),
     /// the class whose body we are inside, if any
     current_class: ?ClassInfo = null,
+    /// Inside a class METHOD, consider only `$`-prefixed reads.
+    ///
+    /// F-47 kept this rule out of class bodies because a method reads
+    /// attributes and inherited state this pass does not model, and
+    /// guessing there is a false positive waiting. That reasoning holds
+    /// for a BARE name and does not touch a `$` one: `$x` in Ring is a
+    /// global, never an attribute and never inherited, so the whole
+    /// objection is about a different set of names. The global half is
+    /// already proven set-wide by all_globals, so it needs no new
+    /// analysis -- only permission to look.
+    dollar_only: bool = false,
     loads_hints: bool,
     ctx: Ctx,
 
@@ -438,6 +449,11 @@ const Walker = struct {
         {
             try self.checkUninit(n);
         }
+
+        // ... and the `$` half of it inside every class body. Nested class
+        // nodes are visited in their own right, and a method span stops at
+        // the next class, so each class sees only its own methods.
+        if (isClass(n)) try self.checkUninitMethods(n);
 
         // The grammar nests class_definition nodes, so entering one both
         // sets the current class AND must restore the previous on the way
@@ -784,6 +800,57 @@ const Walker = struct {
         try self.walkReads(fn_node, &suppress, globals, defined, &reported);
     }
 
+    /// The same rule inside class methods, restricted to `$` names.
+    ///
+    /// A METHOD BODY IS NOT A SUBTREE. Inside a class the vendored grammar
+    /// keeps only the FIRST body statement under function_definition and
+    /// emits the rest as siblings of the class -- verified with `ringpp
+    /// ast`, where `def Go` held `x = 1` and the next two statements came
+    /// out at class level. At file level the same function nests properly.
+    /// So a method's scope is a SPAN: its own node, plus every following
+    /// sibling up to the next function_definition or nested class.
+    /// Walking the subtree instead would analyse one statement per method
+    /// and silently miss the rest.
+    fn checkUninitMethods(self: *Walker, class_node: ts.Node) !void {
+        if (!self.ctx.assert_undefined) return;
+        const globals = self.ctx.all_globals orelse return;
+        const defined = self.ctx.all_defined orelse return;
+
+        const saved = self.dollar_only;
+        defer self.dollar_only = saved;
+        self.dollar_only = true;
+
+        var i: u32 = 0;
+        while (i < class_node.childCount()) : (i += 1) {
+            const head = class_node.child(i);
+            if (!std.mem.eql(u8, head.kind(), "function_definition")) continue;
+
+            // the span: this node and its trailing siblings
+            var end: u32 = i + 1;
+            while (end < class_node.childCount()) : (end += 1) {
+                const c = class_node.child(end);
+                if (std.mem.eql(u8, c.kind(), "function_definition") or isClass(c)) break;
+            }
+
+            var suppress = std.StringHashMap(void).init(self.arena);
+            const params = paramsOf(self.arena, head) catch continue;
+            for (params) |pp| {
+                const lp = lower(self.arena, pp.name) catch continue;
+                suppress.put(lp, {}) catch continue;
+            }
+            var w: u32 = i;
+            while (w < end) : (w += 1) self.collectWrites(class_node.child(w), &suppress);
+
+            var reported = std.StringHashMap(void).init(self.arena);
+            var r: u32 = i;
+            while (r < end) : (r += 1) {
+                try self.walkReads(class_node.child(r), &suppress, globals, defined, &reported);
+            }
+
+            i = end - 1;
+        }
+    }
+
     /// Every name this function assigns in any form: assignment targets,
     /// for-variables, give-targets, and ++/-- operands (those raise R21,
     /// not R24, so they are suppression rather than findings). Skips other
@@ -925,7 +992,9 @@ const Walker = struct {
         defined: *const std.StringHashMap(void),
         reported: *std.StringHashMap(void),
     ) !void {
-        const lk = lower(self.arena, n.text()) catch return;
+        const raw = n.text();
+        if (self.dollar_only and (raw.len == 0 or raw[0] != '$')) return;
+        const lk = lower(self.arena, raw) catch return;
         if (suppress.contains(lk)) return;
         if (globals.contains(lk)) return;
         if (defined.contains(lk)) return;

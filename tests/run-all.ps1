@@ -117,6 +117,21 @@ $r24ok = ($r24 -match "rpp/uninitialized-variable") -and
 "{0} {1,-16} {2}" -f $(if ($r24ok) { "PASS" } else { "FAIL" }), "T1 R24 gate", "the typo fires, the six look-alikes stay silent"
 if (-not $r24ok) { $fail++ }
 
+# R24 inside a CLASS METHOD, restricted to `$` names. Both directions, and
+# the silent half is the point: a bare unknown name in a method could be an
+# attribute of a parent this pass does not model, so it must stay quiet.
+# The firing half sits on the method's THIRD body statement, which the
+# vendored grammar emits as a sibling of the class rather than a child of
+# the method -- a subtree walk passes this gate for the wrong reason.
+$r24m = & $ringpp check "tests\fixtures\uninit_method.ring" 2>&1 | Out-String
+$r24mok = ($r24m -match "rpp/uninitialized-variable") -and
+          ($r24m -match "_nMissing_") -and
+          ($r24m -match "1 warn") -and
+          ($r24m -notmatch "_cUnknown_") -and
+          ($r24m -notmatch "aAttr")
+"{0} {1,-16} {2}" -f $(if ($r24mok) { "PASS" } else { "FAIL" }), "T1 R24 method", "the `$ read fires through the grammar's flattening; bare and @ stay silent"
+if (-not $r24mok) { $fail++ }
+
 # R11/R15 at check time: the class typo and the function-as-class fire, the
 # missing-parent fires as the QUIET R15, and the two legal shapes stay
 # silent (exactly 3 errors, no more).

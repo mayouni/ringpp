@@ -436,3 +436,41 @@ hand-written parser.
 And the turnaround on #2 deserves saying: a narrowed reproducer went in, a
 fix came back, and the corpus now measures seven fewer false rejections
 across ten thousand files.
+
+## Defect C -- a method body is not a subtree, found 2026-09-05
+
+Inside a `class`, `function_definition` keeps only the FIRST body statement
+and the rest of the method is emitted as SIBLINGS of the class. At file level
+the same function nests correctly, so this is specific to class bodies.
+
+```
+class T                              func Go(pcStr)
+    def Go(pcStr)                        x = 1
+        x = 1                            y = len(zzz)
+        y = len(zzz)                     return y
+        return y
+
+function_definition                  function_definition
+  identifier 'Go'                      identifier 'Go'
+  param_list                           param_list
+  expression_statement  x = 1          expression_statement  x = 1
+expression_statement  y = ...          expression_statement  y = ...
+return_statement                       return_statement
+   ^ siblings of the CLASS                ^ children of the FUNCTION
+```
+
+A single-statement method is torn in half too: `def Two()` / `return 9` gives
+`return_statement 'return'` inside the function and `expression_statement 9`
+outside it.
+
+**What it costs a checker.** Any rule that treats a method as its subtree sees
+one statement and silently misses the rest -- and it PASSES its own tests,
+because a one-statement fixture looks correct. `rpp/uninitialized-variable`
+walks a method as a SPAN for exactly this reason: the node plus every
+following sibling up to the next `function_definition` or nested class. The
+gate fixture puts its seeded defect on the THIRD body statement so that a
+subtree walk cannot pass it by accident.
+
+Not reported upstream: it is a grammar defect, not a Ring one, and the same
+regeneration that closed Defect A may well have moved it. Worth re-testing on
+the next grammar bump before writing anything.
