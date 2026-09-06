@@ -75,6 +75,15 @@ fn exists(p: []const u8) bool {
     return true;
 }
 
+/// access() says nothing about WHAT is there, and a directory passed where
+/// a file is expected reaches readFileAlloc and comes back as `error.IsDir`
+/// -- which escaped this command as a bare `error: IsDir` and no diagnostic.
+fn isDir(p: []const u8) bool {
+    var d = std.fs.cwd().openDir(p, .{}) catch return false;
+    d.close();
+    return true;
+}
+
 /// A minimal `which`: PATH is the only lookup, because that is what a user
 /// actually has when they type `ring` at a shell.
 fn findOnPath(gpa: std.mem.Allocator, name: []const u8) !?[]const u8 {
@@ -203,6 +212,37 @@ pub fn run(gpa: std.mem.Allocator, w: anytype, args: []const []const u8) !u8 {
         }
     }
 
+    // Argument validation comes BEFORE any check on the machine. A bad flag
+    // is bad whether or not Ring is installed, and putting this after the
+    // PATH probe meant the diagnostic depended on the box you ran it on --
+    // on Linux without Ring the flag error was never reached at all.
+    // --runtime names a FILE (a B2 stub); --runtime-dir names a directory to
+    // search. Passing a directory to the first is the easy mistake -- the two
+    // options differ by four characters -- and it used to reach readFileAlloc
+    // and escape as a bare `error: IsDir`. Checked here, where the fix can be
+    // named, rather than surfacing as a crash 200 lines later.
+    if (runtime_path) |rp| {
+        if (!exists(rp)) {
+            try w.print("ringpp build: --runtime: no such file: {s}\n", .{rp});
+            try w.print("              --runtime takes a stub FILE. To search a directory, use\n", .{});
+            try w.print("                --runtime-dir <dir>\n", .{});
+            return 1;
+        }
+        if (isDir(rp)) {
+            try w.print("ringpp build: --runtime takes a stub FILE, and {s} is a directory.\n", .{rp});
+            try w.print("              To search it for <target>/ring[.exe], use:\n", .{});
+            try w.print("                --runtime-dir {s}\n", .{rp});
+            return 1;
+        }
+    }
+    if (runtime_dir) |rd| {
+        if (!isDir(rd)) {
+            try w.print("ringpp build: --runtime-dir takes a DIRECTORY, and {s} is not one.\n", .{rd});
+            if (exists(rd)) try w.print("              For a stub file, use --runtime {s}\n", .{rd});
+            return 1;
+        }
+    }
+
     if (!exists(entry)) {
         try w.print("ringpp build: no such file: {s}\n", .{entry});
         return 1;
@@ -312,7 +352,10 @@ pub fn run(gpa: std.mem.Allocator, w: anytype, args: []const []const u8) !u8 {
         if (compiled.stderr.len > 0) try w.print("  {s}\n", .{compiled.stderr});
         return 1;
     }
-    const ringo_bytes = try std.fs.cwd().readFileAlloc(a, ringo_path, 256 * 1024 * 1024);
+    const ringo_bytes = std.fs.cwd().readFileAlloc(a, ringo_path, 256 * 1024 * 1024) catch |err| {
+        try w.print("ringpp build: cannot read the bytecode {s}: {s}\n", .{ ringo_path, @errorName(err) });
+        return 1;
+    };
 
     // -------------------------------------------------------------- 2. deps
     const closure_complete = rep.loads_unfound.items.len == 0;
@@ -399,7 +442,10 @@ pub fn run(gpa: std.mem.Allocator, w: anytype, args: []const []const u8) !u8 {
         try w.print("              or pass --runtime <path> directly.\n", .{});
         return 1;
     };
-    const runtime_bytes = try std.fs.cwd().readFileAlloc(a, runtime, 64 * 1024 * 1024);
+    const runtime_bytes = std.fs.cwd().readFileAlloc(a, runtime, 64 * 1024 * 1024) catch |err| {
+        try w.print("ringpp build: cannot read the runtime stub {s}: {s}\n", .{ runtime, @errorName(err) });
+        return 1;
+    };
 
     // --------------------------------------------------------- 4. assemble
     const out = out_dir orelse try std.fmt.allocPrint(a, "{s}-{s}", .{ entry_base, plat.name });

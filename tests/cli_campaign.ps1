@@ -123,6 +123,14 @@ try {
     # An APK that installs and then dies on the phone is the worst failure
     # this target can produce, so every way of not having what it needs must
     # stop it before it writes anything.
+    # --runtime names a stub FILE, --runtime-dir a directory to search. The
+    # two differ by four characters, and passing a directory to the first
+    # used to reach readFileAlloc and escape as a bare `error: IsDir` with no
+    # diagnostic -- a crash this campaign's '0 crashes' had not covered,
+    # because every case here was a bad FILE and none was a bad KIND.
+    Check-Case 'runtime is a dir'  @('build', (Join-Path $tmp 'good.ring'), '--runtime', $tmp) 1 'is a directory'
+    Check-Case 'runtime missing'   @('build', (Join-Path $tmp 'good.ring'), '--runtime', (Join-Path $tmp 'no-stub.exe')) 1 'no such file'
+    Check-Case 'runtime-dir is a file' @('build', (Join-Path $tmp 'good.ring'), '--runtime-dir', (Join-Path $tmp 'good.ring')) 1 'is not one'
     Check-Case 'android unknown target' @('build', (Join-Path $tmp 'good.ring'), '--target', 'androidx') 1 'unknown --target'
     Check-Case 'android needs a JDK'    @('build', (Join-Path $tmp 'good.ring'), '--target', 'android', '--sdk', $tmp, '--jdk', (Join-Path $tmp 'no-jdk')) 1 'could not find'
 
