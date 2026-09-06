@@ -89,6 +89,38 @@ Zero false positives across Ring's own 1,959-file corpus and Softanza's
 and fixed along the way, is
 [CASE-TYPE-SAFETY.md](CASE-TYPE-SAFETY.md).
 
+### `--exclude SEG` — keep a directory out of the scan, and why it matters
+
+Not cosmetic. **One unparseable file empties the definition universe for the
+whole run**: absence stops proving anything, so every set-wide rule
+(`undefined-function`, `uninitialized-variable`, `unknown-class`,
+`unknown-package`) goes silent on every file — including the ones that parse
+perfectly.
+
+```
+$ ringpp check tests/fixtures/exclude_demo
+  0 error, 0 warn, 0 perf, 1 note   in 3 files
+  1 of those parsed as far as a point and no further, so no rule ran on them
+
+$ ringpp check tests/fixtures/exclude_demo --exclude drafts
+  1 error, 0 warn, 0 perf, 0 note   in 2 files
+  1 file(s) kept out by --exclude: drafts
+```
+
+Same code both times. The typo'd call is invisible in the first run because a
+broken draft sits in the next directory.
+
+Measured on Softanza, 2026-09-05: 59 unparsed files — every one a test, a doc
+or a draft — kept the whole 6,038-file corpus silent. Scoped to the library
+(`--exclude max --exclude test --exclude doc --exclude future --exclude
+archive`), 642 files scanned at **0 unparsed**, and the rules found 14 real
+arity defects and 20 empty catches.
+
+The flag matches whole path SEGMENTS, not substrings — `--exclude test` skips
+a `test/` directory and keeps `stzTestoor.ring`. It is repeatable, and the
+summary always **names what it skipped**: a scan that quietly covers less than
+you think is worse than one that fails.
+
 ---
 
 ## `ringpp why` — explain a rule, a finding, or a Ring error code

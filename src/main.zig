@@ -172,25 +172,39 @@ pub fn main() !u8 {
         var advise = false;
         var path: []const u8 = ".";
         var got_path = false;
+        var excludes = std.ArrayList([]const u8){};
+        defer excludes.deinit(gpa);
         var ai: usize = 2;
         while (ai < args.len) : (ai += 1) {
             const a2 = args[ai];
             if (std.mem.eql(u8, a2, "--advise")) {
                 advise = true;
+            } else if (std.mem.eql(u8, a2, "--exclude")) {
+                // Keeping a directory out of the scan is not cosmetic: ONE
+                // unparsed file empties the definition universe for the whole
+                // run, so a single broken draft silences every set-wide rule.
+                // Excluded files are COUNTED and NAMED in the summary --
+                // coverage dropped in silence is a green nobody earned.
+                ai += 1;
+                if (ai >= args.len) {
+                    try w.print("ringpp check: --exclude needs a path segment\n", .{});
+                    return 1;
+                }
+                try excludes.append(gpa, args[ai]);
             } else if (a2.len > 1 and a2[0] == '-') {
                 try w.print("ringpp check: unknown option '{s}'\n", .{a2});
-                try w.print("usage: ringpp check [path] [--advise]\n", .{});
+                try w.print("usage: ringpp check [path] [--advise] [--exclude SEG]...\n", .{});
                 return 1;
             } else if (!got_path) {
                 path = a2;
                 got_path = true;
             } else {
                 try w.print("ringpp check: unexpected argument '{s}'\n", .{a2});
-                try w.print("usage: ringpp check [path] [--advise]\n", .{});
+                try w.print("usage: ringpp check [path] [--advise] [--exclude SEG]...\n", .{});
                 return 1;
             }
         }
-        return try runCheck(gpa, w, path, advise);
+        return try runCheck(gpa, w, path, advise, excludes.items);
     }
     if (std.mem.eql(u8, cmd, "deps") or std.mem.eql(u8, cmd, "d")) {
         if (args.len < 3) {
@@ -230,7 +244,7 @@ pub fn main() !u8 {
     return 1;
 }
 
-fn runCheck(gpa: std.mem.Allocator, w: anytype, path: []const u8, advise: bool) !u8 {
+fn runCheck(gpa: std.mem.Allocator, w: anytype, path: []const u8, advise: bool, excludes: []const []const u8) !u8 {
     var files = std.ArrayList([]const u8){};
     defer {
         for (files.items) |f| gpa.free(f);
@@ -247,7 +261,8 @@ fn runCheck(gpa: std.mem.Allocator, w: anytype, path: []const u8, advise: bool) 
     var unreadable = std.ArrayList([]const u8){};
     defer unreadable.deinit(gpa);
 
-    try collectFiles(gpa, path, &files, &missing);
+    var excluded: usize = 0;
+    try collectFiles(gpa, path, &files, &missing, excludes, &excluded);
     std.mem.sort([]const u8, files.items, {}, lessStr);
 
     const parser = ts.Parser.init();
@@ -418,6 +433,13 @@ fn runCheck(gpa: std.mem.Allocator, w: anytype, path: []const u8, advise: bool) 
         "\n  {d} error, {d} warn, {d} perf, {d} note   in {d} files ({d:.1} KB, {d:.0} ms)\n",
         .{ c.err, c.warn, c.perf, c.note, read_ok, @as(f64, @floatFromInt(bytes)) / 1024.0, ms },
     );
+    if (excluded > 0) {
+        try w.print("  {d} file(s) kept out by --exclude", .{excluded});
+        for (excludes, 0..) |e, i| {
+            try w.print("{s} {s}", .{ if (i == 0) ":" else ",", e });
+        }
+        try w.print("\n", .{});
+    }
     if (c.adv > 0 and !advise) {
         try w.print("  {d} place(s) where a measured Ring++ idiom is faster -- add --advise to see them\n", .{c.adv});
     } else if (advise and c.adv > 0) {
@@ -523,11 +545,37 @@ fn lessStr(_: void, a: []const u8, b: []const u8) bool {
     return std.mem.lessThan(u8, a, b);
 }
 
+/// Does `p` contain any of `pats` as a whole path SEGMENT?
+///
+/// Segment, not substring, because someone who writes `--exclude test`
+/// means the test DIRECTORY and would be startled to lose stzTestoor.ring.
+/// A pattern may itself span segments ("base/test"). Case- and
+/// separator-insensitive: the same tree gets scanned from PowerShell and
+/// from sh, and an exclusion that works in one shell only is a trap.
+fn pathExcluded(gpa: std.mem.Allocator, p: []const u8, pats: []const []const u8) bool {
+    if (pats.len == 0) return false;
+    const norm = gpa.alloc(u8, p.len + 2) catch return false;
+    defer gpa.free(norm);
+    norm[0] = '/';
+    for (p, 0..) |ch, i| norm[i + 1] = if (ch == '\\') '/' else std.ascii.toLower(ch);
+    norm[p.len + 1] = '/';
+    for (pats) |pat| {
+        const needle = gpa.alloc(u8, pat.len + 2) catch continue;
+        defer gpa.free(needle);
+        needle[0] = '/';
+        for (pat, 0..) |ch, i| needle[i + 1] = if (ch == '\\') '/' else std.ascii.toLower(ch);
+        needle[pat.len + 1] = '/';
+        if (std.mem.indexOf(u8, norm, needle) != null) return true;
+    }
+    return false;
+}
 fn collectFiles(
     gpa: std.mem.Allocator,
     path: []const u8,
     out: *std.ArrayList([]const u8),
     missing: *std.ArrayList([]const u8),
+    excludes: []const []const u8,
+    excluded: *usize,
 ) !void {
     // Try as a directory first: on Windows statFile() fails on directories.
     var dir = std.fs.cwd().openDir(path, .{ .iterate = true }) catch {
@@ -541,7 +589,11 @@ fn collectFiles(
             try missing.append(gpa, try gpa.dupe(u8, path));
             return;
         };
-        if (std.mem.endsWith(u8, path, ".ring")) try out.append(gpa, try gpa.dupe(u8, path));
+        if (std.mem.endsWith(u8, path, ".ring")) {
+            if (pathExcluded(gpa, path, excludes)) {
+                excluded.* += 1;
+            } else try out.append(gpa, try gpa.dupe(u8, path));
+        }
         return;
     };
     defer dir.close();
@@ -551,6 +603,11 @@ fn collectFiles(
         if (e.kind != .file) continue;
         if (!std.mem.endsWith(u8, e.basename, ".ring")) continue;
         const full = try std.fs.path.join(gpa, &.{ path, e.path });
+        if (pathExcluded(gpa, full, excludes)) {
+            excluded.* += 1;
+            gpa.free(full);
+            continue;
+        }
         try out.append(gpa, full);
     }
 }

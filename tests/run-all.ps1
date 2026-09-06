@@ -141,6 +141,22 @@ $r24dok = ($r24d -match "_nMissing_") -and ($r24d -match "1 warn") -and ($r24d -
 "{0} {1,-16} {2}" -f $(if ($r24dok) { "PASS" } else { "FAIL" }), "T1 R24 dynamic", "loadlib no longer silences it; a transparent eval declares its target"
 if (-not $r24dok) { $fail++ }
 
+# --exclude, and what it is FOR. One unparseable file empties the definition
+# universe for the whole run -- so a broken draft in a corner silences every
+# set-wide rule on the code that matters. Measured on Softanza: 59 unparsed
+# files, all of them tests and drafts, kept rpp/undefined-function and its
+# family silent across 6,038 files; scoped away, the library scanned clean at
+# 0 unparsed and the rules produced 14 real arity defects.
+#
+# Both directions, because the silent half is the whole argument.
+$exA = & $ringpp check "tests\fixtures\exclude_demo" 2>&1 | Out-String
+$exB = & $ringpp check "tests\fixtures\exclude_demo" --exclude drafts 2>&1 | Out-String
+$exOk = ($exA -match "rpp/unparsed") -and ($exA -notmatch "rpp/undefined-function") -and
+        ($exB -match "rpp/undefined-function") -and ($exB -match "Greeet") -and
+        ($exB -match "kept out by --exclude: drafts")
+"{0} {1,-16} {2}" -f $(if ($exOk) { "PASS" } else { "FAIL" }), "T1 exclude", "a draft hides the typo; --exclude reveals it, and names what it skipped"
+if (-not $exOk) { $fail++ }
+
 # R11/R15 at check time: the class typo and the function-as-class fire, the
 # missing-parent fires as the QUIET R15, and the two legal shapes stay
 # silent (exactly 3 errors, no more).
