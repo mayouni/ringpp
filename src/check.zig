@@ -91,6 +91,22 @@ pub const Report = struct {
     }
 };
 
+/// Does this string literal's CONTENT end in an odd number of backslashes?
+///
+/// `text` still carries its delimiters, and the delimiter is one byte in all
+/// three of Ring's literal forms. An odd run is the signature of a `\"` that
+/// closed the literal instead of escaping: the backslash stayed in, the quote
+/// went out. An even run is a deliberate pair and means nothing here, because
+/// Ring does not collapse them either.
+fn endsInOddBackslash(text: []const u8) bool {
+    if (text.len < 3) return false;
+    const body = text[1 .. text.len - 1];
+    var run: usize = 0;
+    var i = body.len;
+    while (i > 0 and body[i - 1] == '\\') : (i -= 1) run += 1;
+    return run % 2 == 1;
+}
+
 fn eqIgnoreCase(a: []const u8, b: []const u8) bool {
     return std.ascii.eqlIgnoreCase(a, b);
 }
@@ -362,6 +378,54 @@ const Walker = struct {
         if (n.isError() and !self.unparsed_reported) {
             self.unparsed_reported = true;
             try self.report.add(self.gpa, self.file, n, .note, "rpp/unparsed", "could not parse from here — no rules were applied to this file", .{}, "Either the file is not valid Ring, or the vendored grammar is behind Ring. Run `ring <file> -norun` to find out which. If Ring accepts it, that is a grammar bug for us to fix, not a problem with your code.");
+        }
+
+        // FINDINGS F-55: Ring has NO string escapes, in any of the three
+        // delimiters. Measured on 1.27: "a\nb" is FOUR characters and "a\\b"
+        // is four as well -- the backslash is never special. So `\"` does not
+        // escape the quote; the quote closes the literal and the backslash
+        // stays inside it.
+        //
+        // Two shapes of that are detectable with certainty, and one is not.
+        //
+        // (a) An IDENTIFIER carrying a backslash. `? "say \"hi\""` parses as
+        //     a string `"say \`, then `hi\` as a statement of its own, then
+        //     `""`. No identifier in Ring can legitimately contain a
+        //     backslash, so this is never anything else. It raises R24 at run
+        //     time, but only once that line is reached.
+        if (std.mem.eql(u8, kind, "identifier") and
+            std.mem.indexOfScalar(u8, n.text(), '\\') != null)
+        {
+            try self.report.add(self.gpa, self.file, n, .err, "rpp/string-escape", "`{s}` is an identifier holding a backslash — a string literal above it ended early", .{n.text()}, "Ring has no escape sequences: measured on 1.27, the backslash in \"a\\nb\" is a literal backslash and the string is four characters. So \\\" does not escape the quote -- the quote CLOSES the literal, and what follows is parsed as code. Write the quote with RppStr(\"say \\q hi \\q\") from rpp/str.ring, or switch the delimiter: Ring's single-quote and backtick literals both hold a double quote, and a backtick literal spans lines. See FINDINGS F-55.");
+        }
+
+        // (b) Two string literals in one expression, each ENDING in an odd
+        //     run of backslashes. `c = "a\" + "b\"` is the intended
+        //     `a" + "b` written with escapes; it parses as two literals,
+        //     concatenates to a\b\, raises nothing, and is simply the wrong
+        //     string. A single literal ending in a backslash is NOT reported
+        //     -- "C:\GitHub\" is an ordinary Windows path and means exactly
+        //     what it says. It is the PAIR that cannot be a coincidence.
+        //
+        //     What is deliberately NOT reported: "line1\nline2". It is very
+        //     probably a wanted newline and is silently a literal backslash
+        //     and an n -- but it is indistinguishable from the path "C:\new",
+        //     and a rule that cannot tell those apart would cry wolf on every
+        //     Windows path in the tree. That case is what RppStr() is for.
+        if (std.mem.eql(u8, kind, "binary_expression")) {
+            var lit_count: usize = 0;
+            var first: ?ts.Node = null;
+            var ci: u32 = 0;
+            while (ci < n.namedChildCount()) : (ci += 1) {
+                const ch = n.namedChild(ci);
+                if (std.mem.eql(u8, ch.kind(), "string") and endsInOddBackslash(ch.text())) {
+                    lit_count += 1;
+                    if (first == null) first = ch;
+                }
+            }
+            if (lit_count >= 2) {
+                try self.report.add(self.gpa, self.file, first.?, .err, "rpp/string-escape", "two string literals in a row, each ending in a backslash — these are escaped quotes that did not escape", .{}, "Ring has no escape sequences (FINDINGS F-55). `\"a\\\" + \"b\\\"` was meant to be one string, a\" + \"b; it parses as the two literals a\\ and b\\, concatenates to a\\b\\, and raises nothing. A SINGLE literal ending in a backslash is not reported -- \"C:\\GitHub\\\" is an ordinary path. Build the string with RppStr() from rpp/str.ring, which decodes \\q, \\n, \\t and \\xNN at run time and which `ringpp expand` folds away.");
+            }
         }
 
         // FINDINGS F-49 / charter 6.7: on Ring 1.27 a keyed READ of a hash

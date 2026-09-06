@@ -87,18 +87,39 @@ pub fn transform(
         return Refused.CacheRefused;
     }
 
-    // PASS 1 -- defaults: rewrite short call sites. The text changes, so
-    // the cache pass re-parses; every offset from tree1 is stale after this.
     var src: []const u8 = src_in;
     var owned: ?[]u8 = null;
-    if (try applyDefaults(gpa, w, path, tree1.root(), src_in, defaults, dyn)) |t| {
+
+    // PASS 0 -- F-55: fold RppStr() over a literal into plain Ring. Done
+    // first, because it only ever replaces a call with a constant expression
+    // and the later passes should see the same text a reader would.
+    var tree_f: ?ts.Tree = null;
+    defer if (tree_f) |t| t.deinit();
+    var root0 = tree1.root();
+    if (try foldStrings(gpa, w, path, tree1.root(), src_in)) |t| {
         owned = t;
         src = t;
+        tree_f = parser.parse(src) orelse {
+            try w.print("ringpp expand: {s}: folding RppStr() produced text that does not parse -- a ringpp bug, please report it\n", .{path});
+            gpa.free(t);
+            return Refused.CacheRefused;
+        };
+        root0 = tree_f.?.root();
+    }
+
+    // PASS 1 -- defaults: rewrite short call sites. The text changes, so
+    // the cache pass re-parses; every offset from the tree above is stale.
+    var defaulted = false;
+    if (try applyDefaults(gpa, w, path, root0, src, defaults, dyn)) |t| {
+        if (owned) |o| gpa.free(o);
+        owned = t;
+        src = t;
+        defaulted = true;
     }
     var tree2: ?ts.Tree = null;
     defer if (tree2) |t| t.deinit();
-    var root = tree1.root();
-    if (owned != null) {
+    var root = root0;
+    if (defaulted) {
         tree2 = parser.parse(src) orelse {
             try w.print("ringpp expand: {s}: the default-parameter rewrite produced text that does not parse -- a ringpp bug, please report it\n", .{path});
             return Refused.CacheRefused;
@@ -589,6 +610,164 @@ fn hasDynamicCall(n: ts.Node) bool {
 /// -- field("arguments") is always null -- and it is optional, so a
 /// zero-argument call has none at all. The first draft asked for the field,
 /// found nothing on every call, and rewrote nothing while reporting success.
+/// FINDINGS F-55. `RppStr("He said \q5\q")` over a LITERAL is known at build
+/// time, so it is folded into the plain Ring an author would have written by
+/// hand:
+///
+///     "He said " + char(34) + "5" + char(34)
+///
+/// Measured (bench/str.ring, 100,000 evaluations, minima of 3): decoding at
+/// run time costs 8.08 us per call over the folded form, because RppStr walks
+/// the string and rebuilds it on EVERY evaluation. Folding removes that
+/// entirely and changes nothing about what the program means -- which is the
+/// whole point of RppStr being a function and not a new literal form. The
+/// source still runs, correctly, under plain ring.exe with no ringpp at all.
+///
+/// Only a single string-literal argument is folded. RppStr(cVar) is left
+/// exactly as it is: its value is not known here, and the run-time decoder
+/// is still there to do the work.
+fn foldStrings(gpa: std.mem.Allocator, w: anytype, path: []const u8, root: ts.Node, src: []const u8) !?[]u8 {
+    var sites = std.ArrayList(ts.Node){};
+    defer sites.deinit(gpa);
+    try collectRppStrCalls(gpa, root, &sites);
+    if (sites.items.len == 0) return null;
+
+    var out = std.ArrayList(u8){};
+    errdefer out.deinit(gpa);
+    var cursor: usize = 0;
+    var folded: usize = 0;
+
+    for (sites.items) |call| {
+        const args = argsOf(call) orelse continue;
+        if (args.namedChildCount() != 1) continue;
+        const lit = args.namedChild(0);
+        if (!std.mem.eql(u8, lit.kind(), "string")) continue;
+
+        const text = lit.text();
+        if (text.len < 2) continue;
+        const body = text[1 .. text.len - 1];
+
+        var decoded = std.ArrayList(u8){};
+        defer decoded.deinit(gpa);
+        decodeEscapes(gpa, body, &decoded) catch |e| {
+            // A build-time error is strictly better than the run-time raise
+            // it would otherwise become, so this is reported and the file is
+            // left alone rather than half-rewritten.
+            try w.print("ringpp expand: {s}: RppStr() at line {d} has {s} -- not folded, and it will raise at run time.\n", .{ path, lit.start().row + 1, @errorName(e) });
+            continue;
+        };
+
+        if (call.startByte() < cursor) continue;
+        try out.appendSlice(gpa, src[cursor..call.startByte()]);
+        try emitRingLiteral(gpa, decoded.items, &out);
+        cursor = call.endByte();
+        folded += 1;
+    }
+
+    if (folded == 0) {
+        out.deinit(gpa);
+        return null;
+    }
+    try out.appendSlice(gpa, src[cursor..]);
+    return try out.toOwnedSlice(gpa);
+}
+
+fn collectRppStrCalls(gpa: std.mem.Allocator, n: ts.Node, out: *std.ArrayList(ts.Node)) !void {
+    if (std.mem.eql(u8, n.kind(), "call_expression") and n.childCount() > 0) {
+        const head = n.child(0);
+        // F-18: Ring identifiers are case-insensitive, so rppstr() is the
+        // same function and has to fold the same way.
+        if (std.mem.eql(u8, head.kind(), "identifier") and
+            std.ascii.eqlIgnoreCase(head.text(), "RppStr"))
+        {
+            try out.append(gpa, n);
+            return; // no nesting: the argument is a literal or it is not folded
+        }
+    }
+    var i: u32 = 0;
+    while (i < n.childCount()) : (i += 1) try collectRppStrCalls(gpa, n.child(i), out);
+}
+
+/// The same vocabulary rpp/str.ring decodes, and it MUST stay the same: a
+/// build that folded differently from the run time would be the worst of all
+/// the defects this project chases.
+fn decodeEscapes(gpa: std.mem.Allocator, body: []const u8, out: *std.ArrayList(u8)) !void {
+    var i: usize = 0;
+    while (i < body.len) {
+        if (body[i] != '\\') {
+            try out.append(gpa, body[i]);
+            i += 1;
+            continue;
+        }
+        if (i + 1 >= body.len) return error.a_lone_trailing_backslash;
+        const e = body[i + 1];
+        const b: u8 = switch (e) {
+            '\\' => '\\',
+            'n' => '\n',
+            't' => '\t',
+            'r' => '\r',
+            '0' => 0,
+            'q', '"' => '"',
+            's', '\'' => '\'',
+            'g', '`' => '`',
+            'x' => {
+                if (i + 3 >= body.len) return error.an_x_escape_without_two_hex_digits;
+                const hi = hexDigit(body[i + 2]) orelse return error.an_x_escape_without_two_hex_digits;
+                const lo = hexDigit(body[i + 3]) orelse return error.an_x_escape_without_two_hex_digits;
+                try out.append(gpa, hi * 16 + lo);
+                i += 4;
+                continue;
+            },
+            else => return error.an_unknown_escape,
+        };
+        try out.append(gpa, b);
+        i += 2;
+    }
+}
+
+fn hexDigit(c: u8) ?u8 {
+    return switch (c) {
+        '0'...'9' => c - '0',
+        'a'...'f' => c - 'a' + 10,
+        'A'...'F' => c - 'A' + 10,
+        else => null,
+    };
+}
+
+/// Write `bytes` as a plain Ring expression: printable runs inside a
+/// double-quoted literal, everything else through char(). The delimiter
+/// itself always goes through char(34), because Ring cannot escape it --
+/// which is the finding this whole path exists for.
+fn emitRingLiteral(gpa: std.mem.Allocator, bytes: []const u8, out: *std.ArrayList(u8)) !void {
+    if (bytes.len == 0) {
+        try out.appendSlice(gpa, "\"\"");
+        return;
+    }
+    var open = false;
+    var first = true;
+    for (bytes) |b| {
+        const plain = b >= 32 and b < 127 and b != '"';
+        if (plain) {
+            if (!open) {
+                if (!first) try out.appendSlice(gpa, " + ");
+                try out.append(gpa, '"');
+                open = true;
+                first = false;
+            }
+            try out.append(gpa, b);
+        } else {
+            if (open) {
+                try out.append(gpa, '"');
+                open = false;
+            }
+            if (!first) try out.appendSlice(gpa, " + ");
+            try out.writer(gpa).print("char({d})", .{b});
+            first = false;
+        }
+    }
+    if (open) try out.append(gpa, '"');
+}
+
 fn argsOf(call: ts.Node) ?ts.Node {
     var i: u32 = 0;
     while (i < call.namedChildCount()) : (i += 1) {

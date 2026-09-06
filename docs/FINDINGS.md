@@ -2456,3 +2456,71 @@ before F-54 existed, and it was blamed on the socket, on the redirect and
 on a race before the finding explained it. The terminal renderers never
 call that function, which is why nothing else showed it — and the fix is
 `substr(cStr, ":")`, which means the same thing on both runtimes.
+
+### F-55. Ring has no string escapes at all, and `\"` fails without saying so
+
+Measured 2026-09-05 on Ring 1.27. A string literal has **no escape
+processing of any kind**, in any of the three delimiters:
+
+```
+  "a\nb"     len 4     a, backslash, n, b
+  "a\tb"     len 4
+  "a\\b"    len 4     backslashes are not collapsed either
+```
+
+The backslash is never special. What each delimiter can hold:
+
+```
+  "..."   holds ' and ` and \        cannot hold "
+  '...'   holds " and `              cannot hold '
+  `...`   holds " and ' and a REAL newline, and spans lines
+```
+
+So exactly two kinds of string cannot be written as a literal: one that
+needs all three quote characters, and one that needs a control character
+other than a newline.
+
+**And the failure is silent in the dangerous direction.** `\"` does not
+escape the quote — the quote closes the literal and the backslash stays
+inside it — but it does not reliably raise either:
+
+```
+  c = "a\" + "b\"        -->  c is  a\b\
+```
+
+Two literals, `a\` and `b\`, concatenated. It parses, it runs, it
+raises nothing, and it is not the string anyone wrote. The sibling shape
+`? "say \"hi\""` splits one statement into three and reaches R24 on an
+identifier `hi\` — loud, but only once that line runs.
+
+Ring++ answers it in `rpp/str.ring`: `RppStr()` decodes `\\`, `\n`, `\t`,
+`\r`, `\0`, `\q` `\s` `\g` (the three quote characters, named, for when
+the delimiter itself cannot be typed) and `\xNN`, and **raises on an
+unknown escape** rather than leaving it in the string. It is a function
+and not a new literal form on purpose: a file using it still loads and
+still works under plain `ring.exe`, and `ringpp expand` folds it into a
+plain concatenation so the tool removes the cost without being required
+for the meaning.
+
+Cost, `bench/str.ring`, 100,000 evaluations, minima of 3:
+
+```
+  plain literal                  5 ms
+  hand-written concatenation    12 ms      <- what expand folds to
+  RppStr(), with escapes       820 ms      8.08 us per call
+  RppStr(), nothing to decode   94 ms      0.89 us, the early out
+```
+
+**Where it loses:** 8 us a call is a hot loop's whole budget, so RppStr
+is for strings built once and the fold is for the rest. The obvious
+optimisation was tried and rejected: collecting runs in a list and
+joining once measured 7.52 us against 6.65 for the plain character loop
+on a 22-character string, and won only 1.13x (161 vs 182 us) at 880
+characters. Not worth the shape.
+
+`ringpp check` reports the two detectable shapes as `rpp/string-escape`:
+an identifier carrying a backslash, and two literals in one expression
+each ending in an odd run of them. It deliberately says nothing about
+`"line1\nline2"` — very probably a wanted newline, silently a backslash
+and an n, and indistinguishable from the path `"C:\new"`. Measured over
+530 files and 11.6 MB of Softanza: zero reports.

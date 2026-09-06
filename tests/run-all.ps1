@@ -29,6 +29,11 @@ Gate "P3 idioms"    "idioms.ring"       "0 failed"
 # The rest of the suite could not see this bug -- fuzz_bounds.ring even
 # contains a live collision and passed anyway.
 Gate "P2 collision" "name_collision.ring" "0 failed"
+# FINDINGS F-55: Ring performs NO escape processing in a string literal, so
+# the sequences reach run time as typed and RppStr() decodes them there.
+# The half that matters is what RAISES: an unknown escape left silently in
+# the string is exactly the defect the feature exists to remove.
+Gate "P3 str"       "str.ring"          "0 failed"
 # FINDINGS F-31: every gate above asks whether an access RAISES or returns the
 # right LENGTH. This one asks whether the BYTES match what plain Ring would
 # have produced, which is how the "NULL"-prefix crash was found after the
@@ -156,6 +161,46 @@ $exOk = ($exA -match "rpp/unparsed") -and ($exA -notmatch "rpp/undefined-functio
         ($exB -match "kept out by --exclude: drafts")
 "{0} {1,-16} {2}" -f $(if ($exOk) { "PASS" } else { "FAIL" }), "T1 exclude", "a draft hides the typo; --exclude reveals it, and names what it skipped"
 if (-not $exOk) { $fail++ }
+
+# rpp/string-escape (F-55). The gate is the COUNT, and it is the two cases
+# that must stay SILENT that make the rule usable: a literal ending in a
+# backslash is an ordinary Windows path, and "line1\nline2" cannot be told
+# apart from the path "C:\new" by anything in the source. Measured over 530
+# files and 11.6 MB of Softanza, the rule reports nothing at all.
+$escOut = & $ringpp check "tests\fixtures\string_escape.ring" 2>&1 | Out-String
+$escN = ([regex]::Matches($escOut, [regex]::Escape('rpp/string-escape'))).Count
+# 2 findings, each printing its rule name twice (heading and detail line is
+# one line here) -- so assert on the reported COUNT line instead, which is
+# the only number that cannot drift with the wording.
+$escOk = ($escN -ge 2) -and ($escOut -match "2 error, 1 warn") -and
+         ($escOut -match "11:") -and ($escOut -match "15:") -and
+         ($escOut -notmatch "18:") -and ($escOut -notmatch "22:")
+"{0} {1,-16} {2}" -f $(if ($escOk) { "PASS" } else { "FAIL" }), "T1 escape", "the escaped-quote pair and the backslashed identifier fire; a real Windows path and a backslash-n literal stay silent"
+if (-not $escOk) { $fail++ }
+
+# F-55, the fold. RppStr() over a LITERAL is known at build time, so expand
+# turns it into the plain Ring an author would have written by hand and the
+# 8.08 us per call it costs at run time goes away. Inspecting the emitted
+# text is not the gate: a fold that is fast and DIFFERENT is the one failure
+# this must not have, so Ring runs both and the bytes are compared.
+$foldSrc = "tests\fixtures\str_fold.ring"
+$foldGen = Join-Path $env:TEMP "rpp_fold_gate.ring"
+$foldTxt = & $ringpp expand $foldSrc 2>&1 | Out-String
+# WriteAllText with a BOM-less UTF-8, never Set-Content: Set-Content would
+# add a BOM and Ring would choke on the first line, and Get-Content -Raw
+# would decode the UTF-8 back as Windows-1252. See CLAUDE.md on encoding.
+[IO.File]::WriteAllText($foldGen, $foldTxt, [Text.UTF8Encoding]::new($false))
+$foldA = & $Ring $foldSrc 2>&1 | Out-String
+$foldB = & $Ring $foldGen 2>&1 | Out-String
+# byte-identical output FIRST, then the evidence that anything was folded
+# at all -- otherwise a transform that did nothing would pass this gate.
+$foldOk = ($foldA -eq $foldB) -and ($foldA -match 'He said ' + [char]34 + '5' + [char]34) -and
+          ($foldTxt -match [regex]::Escape('char(34)')) -and
+          ($foldTxt -match [regex]::Escape('char(9)')) -and
+          ($foldTxt -notmatch [regex]::Escape('RppStr(' + [char]34)) -and
+          ($foldTxt -match [regex]::Escape('RppStr(cVar)'))
+"{0} {1,-16} {2}" -f $(if ($foldOk) { "PASS" } else { "FAIL" }), "T1 fold", "every literal RppStr folds to plain Ring, byte-identical output; a variable argument is left to the run time"
+if (-not $foldOk) { $fail++ }
 
 # `#rpp:` anchors. A cache returns the first call's answer forever, and a
 # wrong one never raises -- so the impure cases are ERRORS, and the two pure

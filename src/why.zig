@@ -477,6 +477,36 @@ pub const catalog = [_]Entry{
             "where meaning changes, not an accusation.",
     },
     .{
+        .rule = "rpp/string-escape",
+        .findings = &.{"F-55"},
+        .title = "Ring has no string escapes, and \\\" fails without saying so",
+        .symptom = "A string that is not the string you wrote — an extra backslash in it, or " ++
+            "R24 on an identifier you never named, or a line that silently became three.",
+        .cause = "Measured on 1.27: a Ring literal has NO escape processing in any of the three " ++
+            "delimiters. \"a\\nb\" is four characters, a backslash and an n among them; \"a\\\\b\" " ++
+            "is four as well. So \\\" does not escape the quote. The quote closes the literal and " ++
+            "the backslash stays inside it, and whatever follows is parsed as code. `? \"say " ++
+            "\\\"hi\\\"\"` becomes three statements; `\"a\\\" + \"b\\\"` becomes two literals that " ++
+            "concatenate to a\\b\\ and raise nothing at all.",
+        .fix = "Load rpp/str.ring and wrap the literal: RppStr(\"He said \\q5\\q\") decodes \\\\ " ++
+            "\\n \\t \\r \\0 \\q \\s \\g and \\xNN at run time, and raises on an unknown escape " ++
+            "rather than leaving it in the string. `ringpp expand` folds any RppStr() over a " ++
+            "literal into a plain concatenation, so the tool removes the cost without being " ++
+            "needed for the meaning. Where one delimiter is enough, just switch: '...' and " ++
+            "`...` both hold a double quote, and a backtick literal spans lines.",
+        .evidence = "bench/str.ring — minima of 3, 100,000 evaluations. Plain literal 5 ms, " ++
+            "folded concatenation 12 ms, RppStr with escapes 820 ms, RppStr with nothing to " ++
+            "decode 94 ms: 8.08 us per call over the folded form, 0.89 us for the early out.",
+        .hurts = "RppStr decodes on EVERY evaluation, so a literal inside a hot loop pays 8 us " ++
+            "a pass where a plain literal pays 0.05 — use it for strings built once, or let " ++
+            "expand fold it. The rule itself is deliberately narrow: it reports an identifier " ++
+            "carrying a backslash, and two literals in one expression that each end in one. It " ++
+            "says nothing about \"line1\\nline2\", which is probably a wanted newline and is " ++
+            "silently a backslash and an n — because it cannot be told apart from the path " ++
+            "\"C:\\new\", and a rule that fires on every Windows path is a rule people turn off. " ++
+            "Measured over 530 files and 11.6 MB of Softanza: zero reports.",
+    },
+    .{
         .rule = "rpp/substr-in-loop",
         .findings = &.{ "F-6", "F-8" },
         .title = "substr() copies the whole string before taking the slice",
