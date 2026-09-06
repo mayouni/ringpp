@@ -379,6 +379,9 @@ pub fn check(
         }
     }
 
+    var anchors = std.AutoHashMap(u32, []const u8).init(arena);
+    try collectAnchors(root, &anchors);
+
     var w = Walker{
         .gpa = gpa,
         .arena = arena,
@@ -389,10 +392,28 @@ pub fn check(
         .classes = &classes,
         .loads_hints = loads_hints,
         .ctx = ctx,
+        .anchors = &anchors,
     };
     try w.visit(root, false);
 }
 
+/// Every `#rpp:` comment in the file, by row.
+///
+/// The anchor is a COMMENT on purpose: Ring ignores it, so an annotated
+/// file is still an ordinary Ring file that loads and runs -- just without
+/// whatever the annotation was going to add. That is the whole compatibility
+/// contract, and it is why the feature is spelled this way rather than as
+/// syntax Ring would reject.
+fn collectAnchors(n: ts.Node, out: *std.AutoHashMap(u32, []const u8)) !void {
+    if (std.mem.eql(u8, n.kind(), "comment")) {
+        const t = n.text();
+        if (std.mem.startsWith(u8, t, "#rpp:")) {
+            try out.put(n.start().row, std.mem.trim(u8, t[5..], " \t"));
+        }
+    }
+    var i: u32 = 0;
+    while (i < n.childCount()) : (i += 1) try collectAnchors(n.child(i), out);
+}
 const Walker = struct {
     gpa: std.mem.Allocator,
     arena: std.mem.Allocator,
@@ -413,6 +434,10 @@ const Walker = struct {
     classes: *std.StringHashMap(ClassInfo),
     /// the class whose body we are inside, if any
     current_class: ?ClassInfo = null,
+    /// row -> the text of a `#rpp:` anchor comment on that row. Built once
+    /// per file, because an anchor may sit on the function's OWN line or on
+    /// the line above it and both are ordinary comment nodes in the tree.
+    anchors: *const std.AutoHashMap(u32, []const u8),
     /// Inside a class METHOD, consider only `$`-prefixed reads.
     ///
     /// F-47 kept this rule out of class bodies because a method reads
@@ -467,6 +492,10 @@ const Walker = struct {
         // nodes are visited in their own right, and a method span stops at
         // the next class, so each class sees only its own methods.
         if (isClass(n)) try self.checkUninitMethods(n);
+
+        // `#rpp:` anchors, on functions AND methods -- a method is as
+        // cacheable as a function and its anchor reads the same.
+        if (std.mem.eql(u8, kind, "function_definition")) try self.checkAnchor(n);
 
         // The grammar nests class_definition nodes, so entering one both
         // sets the current class AND must restore the previous on the way
@@ -796,6 +825,73 @@ const Walker = struct {
     /// name anywhere in the function suppresses -- no flow or order
     /// analysis, so a read-before-later-assign bug (verified R24 on 1.27)
     /// is deliberately missed rather than risk a branch-order guess.
+
+    /// `#rpp:` annotations on a function, and whether the function can bear
+    /// them. Today one verb: `cache`.
+    ///
+    /// A cache is only sound on a function whose answer depends on nothing
+    /// but its arguments. Ring gives three cheap, decisive signals that it
+    /// does not -- writing a global, printing, and calling something whose
+    /// value moves on its own -- and each is a refusal rather than a
+    /// warning, because a wrong cache does not fail loudly. It returns a
+    /// stale answer forever.
+    fn checkAnchor(self: *Walker, fn_node: ts.Node) !void {
+        const row = fn_node.start().row;
+        const verb = self.anchors.get(row) orelse
+            (if (row > 0) self.anchors.get(row - 1) else null) orelse return;
+
+        if (!std.mem.eql(u8, verb, "cache")) {
+            try self.report.add(self.gpa, self.file, fn_node, .err, "rpp/anchor-unknown", "#rpp: {s} is not a verb this version knows", .{verb}, "An anchor Ring++ does not recognise is reported rather than ignored: a silently skipped annotation looks like a feature that is working. The verbs are listed by `ringpp why rpp/anchor-unknown`.");
+            return;
+        }
+
+        var why: []const u8 = "";
+        var at = fn_node;
+        self.impurity(fn_node, &why, &at);
+        if (why.len > 0) {
+            try self.report.add(self.gpa, self.file, at, .err, "rpp/cache-impure", "#rpp: cache on a function that {s} -- its answer does not depend on its arguments alone", .{why}, "A cache replaces the second call with the first call's answer. That is only the same answer when the function is pure. Writing a global, printing, or reading a clock all mean the second call was supposed to do something the cache will now skip -- and a stale cached answer never raises, it just stays wrong. Remove the anchor, or move the impure part out of the function.");
+        }
+    }
+
+    /// The first reason this function is not pure, or "".
+    fn impurity(self: *Walker, n: ts.Node, why: *[]const u8, at: *ts.Node) void {
+        if (why.len > 0) return;
+        const k = n.kind();
+        if (std.mem.eql(u8, k, "see_statement")) {
+            why.* = "prints";
+            at.* = n;
+            return;
+        }
+        if (std.mem.eql(u8, k, "assignment_expression") and n.childCount() > 0) {
+            const t = n.child(0);
+            if (std.mem.eql(u8, t.kind(), "identifier") and
+                t.text().len > 0 and t.text()[0] == '$')
+            {
+                why.* = "writes a global";
+                at.* = n;
+                return;
+            }
+        }
+        if (std.mem.eql(u8, k, "call_expression") and n.childCount() > 0) {
+            const h = n.child(0);
+            if (std.mem.eql(u8, h.kind(), "identifier")) {
+                if (lower(self.arena, h.text())) |lk| {
+                    for ([_][]const u8{ "random", "clock", "date", "time", "epochtime",
+                        "read", "write", "fopen", "fwrite", "fread", "remove",
+                        "system", "eval", "loadlib", "loadlibfile", "input" }) |bad|
+                    {
+                        if (std.mem.eql(u8, lk, bad)) {
+                            why.* = std.fmt.allocPrint(self.arena, "calls {s}()", .{h.text()}) catch "calls something whose value moves on its own";
+                            at.* = n;
+                            return;
+                        }
+                    }
+                } else |_| {}
+            }
+        }
+        var i: u32 = 0;
+        while (i < n.childCount()) : (i += 1) self.impurity(n.child(i), why, at);
+    }
     fn checkUninit(self: *Walker, fn_node: ts.Node) !void {
         if (!self.ctx.assert_undefined_vars) return;
         const globals = self.ctx.all_globals_vars orelse return;

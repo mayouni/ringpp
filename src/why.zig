@@ -143,6 +143,45 @@ pub const catalog = [_]Entry{
             "slot back was not isolated. Reporting beats guessing at a line.",
     },
     .{
+        .rule = "rpp/cache-impure",
+        .codes = &.{},
+        .findings = &.{},
+        .title = "#rpp: cache on a function whose answer is not its arguments",
+        .symptom = "No symptom at run time, ever -- which is the reason this is an error and " ++
+            "not a warning. A wrong cache does not raise. It returns the first call's answer " ++
+            "for the rest of the process.",
+        .cause = "A cache replaces the second call with the first call's result. That is the " ++
+            "same result only when the function depends on nothing but its arguments. Three " ++
+            "signals say it does not: writing a $global, printing, and calling something whose " ++
+            "value moves on its own (random, clock, date, read, system, eval).",
+        .fix = "Remove the anchor, or move the impure part out of the function and cache the " ++
+            "pure half. A function that prints AND computes is two functions.",
+        .evidence = "bench/memo.ring: fib(28) 95 ms -> below the 1 ms timer floor, > 95x. The " ++
+            "cache is worth having, which is exactly why it must not be put where it is unsound.",
+        .hurts = "The purity test is three signals, not a proof. A function that calls another " ++
+            "function which prints is NOT caught -- the analysis does not follow calls yet. So " ++
+            "silence here means nothing obvious was found, not that the function is pure.",
+        .upstream = "Not applicable: a Ring++ annotation, not a Ring behaviour.",
+    },
+    .{
+        .rule = "rpp/anchor-unknown",
+        .codes = &.{},
+        .findings = &.{},
+        .title = "a #rpp: verb this version does not know",
+        .symptom = "Nothing at run time. Ring ignores comments, so an anchor with a typo in it " ++
+            "reads exactly like one that is working.",
+        .cause = "The anchor is a comment on purpose -- it keeps an annotated file loadable by " ++
+            "plain Ring -- and the price of that is that nothing else will ever tell you the " ++
+            "verb was misspelled. So the checker does.",
+        .fix = "Correct the verb. This version knows one: cache.",
+        .evidence = "#rpp: is unused across Softanza's 6,038 files, which is why it was chosen " ++
+            "over #@ (126 uses) and #! (10).",
+        .hurts = "It reports an anchor it cannot act on, so a file written for a LATER Ring++ " ++
+            "reports errors on this one. That is the intended direction: a skipped annotation " ++
+            "must never look like a working one.",
+        .upstream = "Not applicable: a Ring++ annotation, not a Ring behaviour.",
+    },
+    .{
         .rule = "rpp/method-shadows-builtin",
         .findings = &.{"F-17"},
         .codes = &.{"R20"},

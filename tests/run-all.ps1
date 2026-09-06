@@ -157,6 +157,22 @@ $exOk = ($exA -match "rpp/unparsed") -and ($exA -notmatch "rpp/undefined-functio
 "{0} {1,-16} {2}" -f $(if ($exOk) { "PASS" } else { "FAIL" }), "T1 exclude", "a draft hides the typo; --exclude reveals it, and names what it skipped"
 if (-not $exOk) { $fail++ }
 
+# `#rpp:` anchors. A cache returns the first call's answer forever, and a
+# wrong one never raises -- so the impure cases are ERRORS, and the two pure
+# ones must stay silent or the feature is unusable. The last case matters as
+# much as the rest: an impure function with NO anchor is ordinary code.
+$anc = & $ringpp check "tests\fixtures\anchors.ring" 2>&1 | Out-String
+# EXACTLY 4: the three impure anchored functions and the bad verb. The two
+# pure forms and the unanchored impure one are proved silent by the count,
+# not by a name search -- the rule's own explanation contains the word
+# "pure", so -notmatch on it always matched and the gate passed for the
+# wrong reason on its first draft.
+$ancOk = ($anc -match "rpp/cache-impure") -and ($anc -match "rpp/anchor-unknown") -and
+         ($anc -match "prints") -and ($anc -match "writes a global") -and
+         ($anc -match "clock\(\)") -and ($anc -match "4 error, 0 warn")
+"{0} {1,-16} {2}" -f $(if ($ancOk) { "PASS" } else { "FAIL" }), "T1 anchors", "3 impurities and a bad verb fire; both pure forms and an unanchored impure one stay silent"
+if (-not $ancOk) { $fail++ }
+
 # R11/R15 at check time: the class typo and the function-as-class fire, the
 # missing-parent fires as the QUIET R15, and the two legal shapes stay
 # silent (exactly 3 errors, no more).
