@@ -2754,8 +2754,31 @@
       "value": "bye"
     },
     "expression_statement": {
-      "type": "SYMBOL",
-      "name": "_stmt_expression"
+      "type": "CHOICE",
+      "members": [
+        {
+          "type": "SYMBOL",
+          "name": "_stmt_expression"
+        },
+        {
+          "type": "SEQ",
+          "members": [
+            {
+              "type": "ALIAS",
+              "content": {
+                "type": "SYMBOL",
+                "name": "_stmt_call_expression"
+              },
+              "named": true,
+              "value": "call_expression"
+            },
+            {
+              "type": "STRING",
+              "value": "."
+            }
+          ]
+        }
+      ]
     },
     "_expression": {
       "type": "CHOICE",

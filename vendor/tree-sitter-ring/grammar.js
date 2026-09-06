@@ -500,7 +500,29 @@ module.exports = grammar({
 
 		bye_statement: ($) => keyword("bye"),
 
-		expression_statement: ($) => $._stmt_expression,
+		// A statement may carry a trailing period. Ring accepts it after a
+		// CALL and rejects it elsewhere -- verified on 1.27, where
+		// `Foo("x").` inside a function parses AND runs (Foo is called,
+		// the statement returns normally), while `? "x".`, `see "x".`,
+		// `x = "a".` and a bare `.` are all C27/C28.
+		//
+		// Restricted to a call for a second reason beyond matching Ring: a
+		// blanket `optional(".")` does not generate. It makes `new T().`
+		// ambiguous against `new T().Method()` and tree-sitter refuses the
+		// conflict between new_expression and new_with_parens. Narrow is
+		// both more faithful and the only version that builds.
+		//
+		// Why it is worth a production at all: rejecting a period Ring
+		// accepts made base/common/stzFuncs.ring unparsable, and that one
+		// file emptied the definition universe for all 6,038 files of the
+		// corpus -- two characters against every set-wide rule.
+		//
+		// See upstream/tree-sitter-ring-notes.md, Defect B.
+		expression_statement: ($) =>
+			choice(
+				$._stmt_expression,
+				seq(alias($._stmt_call_expression, $.call_expression), "."),
+			),
 
 		// Expressions
 		_expression: ($) =>

@@ -347,7 +347,39 @@ initial import.
 Accounts for `base/data/stzCharData.ring` (the `ſ` on line 1321) and
 `base/test/char/47_showshortxtnl.ring` (line 25).
 
-### Defect B — a statement terminated by a period — AND IT GATES THE WHOLE CORPUS
+### Defect B — a statement terminated by a period — CLOSED 2026-09-05
+
+**Fixed in the vendored grammar, one production.** `expression_statement`
+now accepts a trailing `.` after a CALL, which is exactly what Ring accepts:
+
+```
+                        Ring 1.27    grammar before    grammar now
+  Foo("x").  in a func  parses+RUNS  rejects           accepts
+  ? "x".                C27          rejects           rejects
+  see "x".              C27          rejects           rejects
+  x = "a".              C27          rejects           rejects
+  a bare . on a line    C27          rejects           rejects
+```
+
+The earlier table in this file was WRONG about the last four: it recorded
+Ring as accepting `? "x".`, `x = "a".` and a bare `.`, and Ring rejects all
+three. Only the call form is accepted, and it does not merely parse -- the
+call runs and the statement returns normally, verified by executing the
+branch. The grammar was behind Ring for one shape, not five.
+
+A blanket `optional(".")` does NOT generate: it makes `new T().` ambiguous
+against `new T().Method()` and tree-sitter refuses the new_expression /
+new_with_parens conflict. Narrow is both more faithful and the only version
+that builds. Regenerated with tree-sitter v0.25.10 -- the same version that
+produced the vendored parser -- so the diff is this change and nothing else:
+STATE_COUNT 7610 -> 7648, SYMBOL_COUNT unchanged.
+
+**What it bought.** `base/common/stzFuncs.ring` parses in place, untouched,
+and the corpus went from 60 unparsed files to 59. Every one of the 59 that
+remain is in `max/`, `base/test`, `core/test`, `doc` or `future` -- not one
+is in the library proper. The definition universe is still closed by those
+59, so the set-wide rules stay silent until they parse or leave the scan;
+what changed is that the LIBRARY no longer contains the blocker.
 
 **Measured 2026-09-05, and this is the reason to fix it.** Two trailing
 periods in ONE file silence every set-wide rule across all of Softanza.
