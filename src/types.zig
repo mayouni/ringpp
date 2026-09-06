@@ -476,6 +476,43 @@ fn impurityHere(arena: std.mem.Allocator, n: ts.Node) ?Impurity {
     }
     return null;
 }
+/// One `name = expr` from a `#rpp: default` anchor.
+pub const DefaultArg = struct { name: []const u8, expr: []const u8 };
+
+/// Parse `a = 1, b = \"x\"` into pairs. Splitting on commas at depth zero,
+/// because a default may itself be a list or a call: `aOpts = [1, 2]` is one
+/// default, not two.
+pub fn parseDefaults(arena: std.mem.Allocator, body: []const u8, out: *std.ArrayList(DefaultArg)) !void {
+    var depth: i32 = 0;
+    var in_str: u8 = 0;
+    var start: usize = 0;
+    var i: usize = 0;
+    while (i <= body.len) : (i += 1) {
+        const at_end = i == body.len;
+        const c: u8 = if (at_end) ',' else body[i];
+        if (!at_end and in_str != 0) {
+            if (c == in_str) in_str = 0;
+            continue;
+        }
+        if (!at_end and (c == '\'' or c == '"')) { in_str = c; continue; }
+        if (c == '[' or c == '(') depth += 1;
+        if (c == ']' or c == ')') depth -= 1;
+        if (c == ',' and depth <= 0) {
+            const piece = std.mem.trim(u8, body[start..i], " \t");
+            if (piece.len > 0) {
+                if (std.mem.indexOfScalar(u8, piece, '=')) |eq| {
+                    try out.append(arena, .{
+                        .name = std.mem.trim(u8, piece[0..eq], " \t"),
+                        .expr = std.mem.trim(u8, piece[eq + 1 ..], " \t"),
+                    });
+                } else {
+                    try out.append(arena, .{ .name = piece, .expr = "" });
+                }
+            }
+            start = i + 1;
+        }
+    }
+}
 /// The byte where the next function or class begins after `after`, or
 /// `limit` when there is none.
 ///
@@ -1027,6 +1064,49 @@ const Walker = struct {
         const row = fn_node.start().row;
         const verb = self.anchors.get(row) orelse
             (if (row > 0) self.anchors.get(row - 1) else null) orelse return;
+
+        // `#rpp: default b = 10, c = "x"` -- a default per trailing parameter.
+        // Ring has strict arity, so this is honoured by rewriting CALL SITES
+        // in `ringpp build`; here it is only checked. Two things can be wrong
+        // with the anchor itself, and both are the kind that would otherwise
+        // surface as an R19/R20 far from the declaration.
+        if (std.mem.startsWith(u8, verb, "default")) {
+            const body = std.mem.trim(u8, verb["default".len..], " \t");
+            var defs = std.ArrayList(DefaultArg){};
+            parseDefaults(self.arena, body, &defs) catch return;
+            const params = paramsOf(self.arena, fn_node) catch return;
+            // 1. every name must be a parameter
+            for (defs.items) |d| {
+                var found = false;
+                for (params) |pp| {
+                    if (std.ascii.eqlIgnoreCase(pp.name, d.name)) { found = true; break; }
+                }
+                if (!found) {
+                    try self.report.add(self.gpa, self.file, fn_node, .err, "rpp/default-unknown-param", "#rpp: default names {s}, which is not a parameter of this function", .{d.name}, "A default has to belong to a parameter, and a typo here would otherwise be honoured as silence: the call sites would keep raising R19 while the annotation looked like it was working.");
+                    return;
+                }
+                if (d.expr.len == 0) {
+                    try self.report.add(self.gpa, self.file, fn_node, .err, "rpp/default-missing-value", "#rpp: default {s} has no value -- write {s} = <expr>", .{ d.name, d.name }, "A default without a value cannot be filled in at a call site.");
+                    return;
+                }
+            }
+            // 2. defaults must be TRAILING: once a parameter has one, every
+            //    parameter after it must too, or a caller could not omit it
+            //    positionally
+            var seen_default = false;
+            for (params) |pp| {
+                var has = false;
+                for (defs.items) |d| {
+                    if (std.ascii.eqlIgnoreCase(pp.name, d.name)) { has = true; break; }
+                }
+                if (has) seen_default = true;
+                if (seen_default and !has) {
+                    try self.report.add(self.gpa, self.file, fn_node, .err, "rpp/default-not-trailing", "#rpp: default leaves {s} without one after a parameter that has one -- defaults must run to the end of the list", .{pp.name}, "Arguments are positional. A caller can omit the LAST parameters, never one in the middle, so a default on b with none on c cannot be honoured: F(a) has no way to say which of b or c it meant to skip.");
+                    return;
+                }
+            }
+            return;
+        }
 
         if (!std.mem.eql(u8, verb, "cache")) {
             try self.report.add(self.gpa, self.file, fn_node, .err, "rpp/anchor-unknown", "#rpp: {s} is not a verb this version knows", .{verb}, "An anchor Ring++ does not recognise is reported rather than ignored: a silently skipped annotation looks like a feature that is working. The verbs are listed by `ringpp why rpp/anchor-unknown`.");

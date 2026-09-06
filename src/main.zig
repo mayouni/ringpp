@@ -27,7 +27,7 @@ fn usage(w: anytype) void {
         \\Analyse
         \\
         \\  ringpp check [path] [--advise]  Type-check and lint; --advise names every place a measured Ring++ idiom is faster
-        \\  ringpp cache <file.ring>    Rewrite every #rpp: cache function; prints, writes nothing
+        \\  ringpp expand <file.ring>   Apply every #rpp: anchor (cache, default); prints, writes nothing
         \\  ringpp why <thing>          Explain a rule, a finding, or a Ring error code
         \\  ringpp version              Show version
         \\  ringpp help                 This screen
@@ -208,10 +208,10 @@ pub fn main() !u8 {
         }
         return try runCheck(gpa, w, path, advise, excludes.items);
     }
-    if (std.mem.eql(u8, cmd, "cache")) {
+    if (std.mem.eql(u8, cmd, "expand") or std.mem.eql(u8, cmd, "cache")) {
         if (args.len < 3) {
-            try w.print("usage: ringpp cache <file.ring>\n", .{});
-            try w.print("  prints the file with every #rpp: cache function rewritten.\n", .{});
+            try w.print("usage: ringpp expand <file.ring>\n", .{});
+            try w.print("  prints the file with every #rpp: anchor applied -- cache wrappers, default parameters.\n", .{});
             try w.print("  Nothing is written: redirect it, or read it first.\n", .{});
             return 1;
         }

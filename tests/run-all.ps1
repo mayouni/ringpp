@@ -217,6 +217,36 @@ $cpOk = ($cpLog -match "staged and transformed") -and ($cpRan -match "fib\(28\) 
 "{0} {1,-16} {2}" -f $(if ($cpOk) { "PASS" } else { "FAIL" }), "T1 cache build", "a two-file program with an anchor packages, and the package prints the right answer"
 if (-not $cpOk) { $fail++ }
 
+# `#rpp: default` at CHECK time: three malformed anchors fire, the good one
+# stays silent, and the COUNT proves the silence -- exactly 3.
+$dfc = & $ringpp check "tests\fixtures\defaults_check.ring" 2>&1 | Out-String
+$dfcOk = ($dfc -match "rpp/default-unknown-param") -and ($dfc -match "rpp/default-not-trailing") -and
+         ($dfc -match "rpp/default-missing-value") -and ($dfc -match "3 error, 0 warn")
+"{0} {1,-16} {2}" -f $(if ($dfcOk) { "PASS" } else { "FAIL" }), "T1 defaults", "typo, non-trailing and valueless defaults fire; the well-formed one stays silent"
+if (-not $dfcOk) { $fail++ }
+
+# `#rpp: default` through `ringpp build`, end to end, in the ORDINARY shape:
+# declared in the library, called short in the entry. The package is RUN and
+# its four lines are the assertion. Sum() is a zero-argument call, which has
+# no `arguments` node in the tree at all -- the first draft mishandled it.
+# And a file with a dynamic `call x(...)` must be REFUSED with a non-zero exit,
+# not half-served: no rewrite can reach a target chosen at run time.
+$dpOut = Join-Path $env:TEMP "rpp_default_proj_out"
+if (Test-Path $dpOut) { Remove-Item -Recurse -Force $dpOut }
+$dpLog = & $ringpp build "tests\fixtures\default_proj\app.ring" --out $dpOut 2>&1 | Out-String
+$dpRan = ""
+if (Test-Path (Join-Path $dpOut "app.exe")) {
+    Push-Location $dpOut
+    $dpRan = & ".\app.exe" app.ringo 2>&1 | Out-String
+    Pop-Location
+}
+$null = & $ringpp expand "tests\fixtures\default_dyn.ring" 2>&1
+$dynRc = $LASTEXITCODE
+$dpOk = ($dpRan -match "hello, Mansour\.") -and ($dpRan -match "salam, Mansour\.") -and
+        ($dpRan -match "salam, Mansour!") -and ($dpRan -match "(?m)^42\s*$") -and ($dynRc -ne 0)
+"{0} {1,-16} {2}" -f $(if ($dpOk) { "PASS" } else { "FAIL" }), "T1 default build", "declared in lib, filled in app, zero-arg filled too; a dynamic call is refused"
+if (-not $dpOk) { $fail++ }
+
 # R11/R15 at check time: the class typo and the function-as-class fire, the
 # missing-parent fires as the QUIET R15, and the two legal shapes stay
 # silent (exactly 3 errors, no more).

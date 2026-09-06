@@ -166,6 +166,49 @@ pub const catalog = [_]Entry{
         .upstream = "Not applicable: a Ring++ annotation, not a Ring behaviour.",
     },
     .{
+        .rule = "rpp/default-unknown-param",
+        .codes = &.{},
+        .findings = &.{},
+        .title = "#rpp: default names something that is not a parameter",
+        .symptom = "None at check time, and the dangerous kind at run time: the call sites " ++
+            "keep raising R19 while the annotation looks like it is working.",
+        .cause = "A default belongs to a parameter. A typo in the name would otherwise be " ++
+            "honoured as silence.",
+        .fix = "Spell the parameter as the signature spells it (case does not matter).",
+        .evidence = "Softanza emulates defaults by hand at 215 sites and alternative forms at " ++
+            "1,061 -- the family that produced most of the 77 name defects fixed on 2026-09-05.",
+        .hurts = "Nothing. This one is a pure check.",
+        .upstream = "Not applicable: a Ring++ annotation, not a Ring behaviour.",
+    },
+    .{
+        .rule = "rpp/default-not-trailing",
+        .codes = &.{"R19"},
+        .findings = &.{},
+        .title = "a default on a parameter that is followed by one without",
+        .symptom = "R19 at the call site, because the caller had no way to skip the middle one.",
+        .cause = "Arguments are positional. A caller can omit the LAST parameters and never " ++
+            "one in the middle: F(a) cannot say which of b or c it meant to leave out, so a " ++
+            "default on b with none on c cannot be honoured.",
+        .fix = "Give every parameter after the first defaulted one a default too, or reorder " ++
+            "the parameters so the optional ones come last.",
+        .evidence = "The rule every language with defaults shares, for the same reason.",
+        .hurts = "Nothing. This one is a pure check.",
+        .upstream = "Not applicable: a Ring++ annotation, not a Ring behaviour.",
+    },
+    .{
+        .rule = "rpp/default-missing-value",
+        .codes = &.{},
+        .findings = &.{},
+        .title = "#rpp: default with a name but no value",
+        .symptom = "None -- and no call site can be filled in.",
+        .cause = "Write name = expr. The expression is copied VERBATIM into every short call, " ++
+            "so it is evaluated where the call is, not where the declaration is.",
+        .fix = "Add the value.",
+        .evidence = "",
+        .hurts = "Nothing. This one is a pure check.",
+        .upstream = "Not applicable: a Ring++ annotation, not a Ring behaviour.",
+    },
+    .{
         .rule = "rpp/cache-impure",
         .codes = &.{},
         .findings = &.{},
