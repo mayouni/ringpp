@@ -1,47 +1,70 @@
 # Ring++
 
-**Ring++ is dependency-free.** It needs nothing but Ring itself:
-no other package, no extension, no DLL, no sibling repository. It is
-developed alongside Softanza and used by it, and is not part of it.
+**Ring++ is dependency-free, and becoming independent.** The library half
+needs nothing but a Ring VM: no other package, no extension, no DLL, no
+sibling repository. Ring++ now builds that VM itself. It is developed
+alongside Softanza and used by it, and is not part of it.
 
 If you are an AI session working here, this file is the whole brief.
 
 ---
 
-## The mission — restated by Mansour, 2026-08-23
+## The mission — restated by Mansour, 2026-09-07
+
+**Ring++ is a bridge, and it is named as one.** Its job is to carry the
+Softanza codebase and the customers depending on it off a platform whose
+decisions sit with a single maintainer, and onto ground Mansour controls.
+The destination is **Haro**, a new language built on the VM this project
+produces. Ring++ is what keeps ~300K lines of existing Ring working while
+that is built.
 
 Five commitments, in order. Review every change against them.
 
-1. **More performant Ring, in Ring itself** — never by leaving the language.
-2. **Build on Mahmoud's internal design** and take maximum advantage of it,
-   keeping the tradeoff *equilibrated* between plain Ring and Ring++ code.
-   Never fight the design, never break its culture.
-3. **An educational framework with comparative testability** — same task,
-   Ring and Ring++, side by side, byte-identical, measured — teaching the
-   internal design of Ring *and its rationale*. For learners of low-level
-   programming, the project is schoolcase material in Mahmoud Fayed's
-   **patterns of thinking**, not in his implementation.
-4. **Type safety for large Ring projects**, through the vendored
-   tree-sitter checker and Ring's own `typehints` channel. This is the
-   strategic centre: it is the practical answer to a real bank engineering
-   team whose remaining concern about Ring at scale was exactly this.
-   (The team is not named in public documents.)
-5. **One shipped binary.** The CLI is a single prebuilt Zig binary that
-   ships with the package. No C compiler, no clang, no toolchain is ever
-   required or suggested to a user. The Zig *source* is provided; only an
-   adapter of the CLI installs the Zig compiler.
+1. **Sovereignty over the runtime.** Nothing the project depends on may be
+   withdrawn by anyone else. The VM is built here, from source, per
+   platform. Every remaining reach outside this repository is a defect to
+   be closed, not a convenience to be relied on.
+2. **The existing estate keeps running.** Softanza's code is the
+   compatibility specification. That is what makes this a bridge rather
+   than a rewrite, and it is why compatibility is decided **per defect** --
+   keep, fix silently, break with a checker rule, or drop with a stated
+   constraint -- never as a blanket promise.
+3. **Performance and portability.** The two pillars upstream removed from
+   the package description. They are the engineering case and they are
+   measured, never asserted.
+4. **Type safety for large projects**, through the vendored tree-sitter
+   checker and the `typehints` channel. Still the strategic centre: it is
+   the practical answer to a real bank engineering team whose remaining
+   concern at scale was exactly this. (The team is not named in public
+   documents.)
+5. **One shipped binary.** The CLI is a single prebuilt Zig binary. No C
+   compiler, no clang, no toolchain is ever required or suggested to a
+   user. The Zig *source* is provided; only an adapter of the CLI installs
+   the Zig compiler.
 
-Strategically: Ring++ makes Ring projects in business domains **more
-governable** (static analysis) and **more efficient**, relying on nothing
-but Ring. And because it builds on internals that may change, it maintains
-an **abstract interface** — [docs/VM-CONTRACT.md](docs/VM-CONTRACT.md),
-machine-checked by `rpp/probe.ring` on every load — kept small enough to
-one day propose to Mahmoud as a contract both parties agree on.
+**The validation ladder, in order:** Softanza first, then RingServ,
+RingScript and MicroRing. Each migrates to Ring++ and cuts its relation to
+Ring. A release means those run, not that a registry accepts a manifest.
 
-**Descoped, 2026-08-23:** the compiled-kernel half (old T4–T7). The
-headroom measurements stay as research (`bench/headroom/`,
-`DESIGN_TOOLCHAIN.md`), but no compilation is promised, suggested, or
-required. If it returns, it returns as its own proposal.
+**Where the runtime actually stands, 2026-09-07.** `runtime/` holds five
+Ring VM binaries built by `zig cc` from Ring's C source, one per platform,
+with mimalloc linked (the Android allocator fix, `fa939f7`). Windows x64
+and Linux x64 are *executed* and diffed against Ring's own build; the other
+three are compiled and format-checked, and `runtime/README.md` keeps that
+distinction visible. **The source is not yet vendored** --
+`tests/b2_runtimes.ps1` still defaults to `D:\ring127\language\src`, so a
+clean clone produces no VM. That is the open independence gap and the
+first thing worth closing.
+
+**Open source, and not a strategy.** The projects stay public so the Ring
+team can learn from the documented defects and their fixes if they choose
+to. That is a courtesy, not a goal, and no work here is planned around
+whether they do.
+
+[docs/VM-CONTRACT.md](docs/VM-CONTRACT.md), machine-checked by
+`rpp/probe.ring` on every load, is no longer a proposal to anyone. It is
+the boundary this project owns and may change deliberately -- and the probe
+is what tells you the day a change moved it.
 
 ## The thesis, and why it is not "pointers are fast"
 
@@ -57,6 +80,13 @@ It exists because of one structural fact, measured in `docs/FINDINGS.md`:
 `RING_VM_STACK_PUSHCVAR` (`vm.h:230`) is a byte copy onto the VM stack.
 Everything expensive about data-heavy work in Ring traces to that macro, and
 everything Ring++ can honestly offer is a way of not paying it.
+
+That one is the deepest, and it is no longer the only one. The full defect
+catalogue -- safety hazards, internal design, ergonomics, governance -- is in
+`softanza/memos/2026-08-30-ringpp-design-charter.md`, each defect turned
+into a design principle. More are recoverable from the Softanza repository
+and its archive, where every workaround is a defect whose cost was already
+paid.
 
 The target is banking, government and consumer platforms — high data volumes,
 complex processing, optimisation, ML and AI. **Never gate the project on a
@@ -175,17 +205,25 @@ any of them from the command line.
   every iteration and each evaluation copies the whole string into `len()`;
   `while i <= len(s)` is worse. Hoist the bound (F-41). Lists are exempt —
   they pass by reference. Caught by `rpp/len-in-loop-header`.
+- **`s[i]` on a string is a character on Ring and a CODE on Ring++** (F-54).
+  `ascii(s[i])` agrees on both, which is why every bench hid it for weeks.
+  Now that two runtimes exist, this is the trap most likely to bite.
+- **Ring has NO string escapes, in any delimiter** (F-55). `"a\nb"` is four
+  characters. `\"` does not escape the quote — it closes the literal and
+  leaves the backslash in, sometimes without raising at all. Use
+  `RppStr()` from `rpp/str.ring`; `ringpp expand` folds it away.
+- **`char()` wraps modulo 256, silently** (F-56). `char(0x4E2D)` is byte 45,
+  an ASCII hyphen; `char(0x1F600)` is byte 0, which F-14 then turns into a
+  process death. A codepoint needs `RppStr("\uNNNN")`.
 
 ## Working rules
 
-**Upstream.** *Never open a pull request or an issue on `ring-lang/ring`.*
-Findings go to the Ring Google Group and **Mansour posts them himself**.
-Prepare the text; do not send it. The single exception is an explicit
-instruction from him after he has reviewed it. A **finding travels better than
-a patch** — Mahmoud develops Ring in PWCT, so C patches get reimplemented
-rather than merged, and the one contribution that merged was framed as a
-finding with the diff offered as illustration. **A closed PR is not the
-outcome; the commit is** — check the commits before concluding anything.
+**Upstream.** *Never open a pull request or an issue on `ring-lang/ring`,
+and never campaign anywhere.* The reason is no longer diplomacy: this
+project has left. Anything that goes out at all goes out because **Mansour
+sends it himself** — prepare text if asked, never send it. Strategic
+documents about replacing Ring stay private. Credit generously in anything
+public; the engineering argument is the only one this project makes.
 
 **Encoding.** *Never round-trip text through PowerShell `Get-Content` /
 `Set-Content`.* `Get-Content -Raw` decodes UTF-8 as Windows-1252 and
@@ -205,5 +243,17 @@ powershell -File tests\run-all.ps1
 ```
 
 Runs the Ring gates, the Zig unit tests, the lint and type gates, and all
-eight examples. One optional gate scans an external corpus when present and
-prints `SKIP` with its reason when not.
+fifteen examples. One optional gate scans an external corpus when present
+and prints `SKIP` with its reason when not.
+
+**What the suite does not yet check** — and both gaps are the same shape,
+a gate that passes because it runs where the files happen to exist:
+
+- **No gate installs the package.** `package.ring`'s `:files` omits
+  `rpp/tui.ring`, which `ringpp.ring` loads, so a package built from that
+  manifest cannot complete `load "ringpp.ring"`. `rpp/str.ring` and
+  `rpp/memo.ring` are missing from it too, and 7 of the 15 examples: it
+  lists 8. Proven by copying exactly `:files` into a clean tree and
+  loading it — `Error (E9) : Can't open file rpp/tui.ring`.
+- **No gate builds the VM from vendored source**, because there is none to
+  build from yet. Nothing fails when `D:\ring127` is absent.
