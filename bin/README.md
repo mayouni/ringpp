@@ -12,11 +12,12 @@ binary here. A shipped binary that disagrees with the vendored source about
 what parses is the kind of inconsistency nobody finds until a user reports
 it -- so all five are rebuilt whenever the grammar moves.
 
-**Rebuilt 2026-09-05 for F-55.** The grammar did not move, but the CLI did:
-`rpp/string-escape` and the `RppStr()` fold in `ringpp expand` are new, and a
-shipped binary without them would report and rewrite differently from the
-source in this repository. The rule is the same either way -- what ships and
-what is checked in have to agree.
+**Rebuilt 2026-09-06 for F-55 and F-56.** The grammar did not move, but the
+CLI did: `rpp/string-escape`, `rpp/char-truncates`, and the `RppStr()` fold
+in `ringpp expand` (including `\u`, which folds to the character itself) are
+new, and a shipped binary without them would report and rewrite differently
+from the source in this repository. The rule is the same either way -- what
+ships and what is checked in have to agree.
 
 **That failed once, and the gate is what caught it.** The regeneration on
 2026-08-31 also removed the `U+017F` / `U+212A` lexer exclusions (Defect A in
@@ -31,7 +32,7 @@ fixed it; update the notes" and it was right. Rebuilt 2026-09-05.
 | `linux-x64/ringpp` | ELF x86-64, **statically linked** | 8.3 MB | **run** under WSL Ubuntu — see below |
 | `linux-arm64/ringpp` | ELF aarch64, **statically linked** | 8.5 MB | built and format-checked only |
 | `macos-x64/ringpp` | Mach-O x86_64 | 3.4 MB | built and format-checked only |
-| `macos-arm64/ringpp` | Mach-O arm64 | 3.3 MB | built and format-checked only |
+| `macos-arm64/ringpp` | Mach-O arm64 | 3.4 MB | built and format-checked only |
 
 ## What "verified" means here, exactly
 

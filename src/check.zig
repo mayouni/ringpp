@@ -91,6 +91,50 @@ pub const Report = struct {
     }
 };
 
+/// An integer literal argument, decimal or 0x-hex, negated or not. Null for
+/// anything computed -- a name, an expression, a float -- because only a
+/// literal lets the value be known here, and a rule that guessed at char(n)
+/// would be wrong on every one of the 618 deliberate byte calls in Softanza.
+fn literalByte(n: ts.Node) ?i64 {
+    var node = n;
+    var neg = false;
+    if (std.mem.eql(u8, node.kind(), "unary_expression")) {
+        const t = node.text();
+        if (t.len == 0 or t[0] != '-') return null;
+        if (node.namedChildCount() != 1) return null;
+        neg = true;
+        node = node.namedChild(0);
+    }
+    if (!std.mem.eql(u8, node.kind(), "number")) return null;
+
+    const t = node.text();
+    if (t.len == 0) return null;
+    var v: i64 = 0;
+    if (t.len > 2 and t[0] == '0' and (t[1] == 'x' or t[1] == 'X')) {
+        for (t[2..]) |c| {
+            const d = hexVal(c) orelse return null;
+            v = v * 16 + d;
+            if (v > 0x7FFFFFFF) return null;
+        }
+    } else {
+        for (t) |c| {
+            if (c < '0' or c > '9') return null; // a float, or a suffix
+            v = v * 10 + (c - '0');
+            if (v > 0x7FFFFFFF) return null;
+        }
+    }
+    return if (neg) -v else v;
+}
+
+fn hexVal(c: u8) ?i64 {
+    return switch (c) {
+        '0'...'9' => c - '0',
+        'a'...'f' => c - 'a' + 10,
+        'A'...'F' => c - 'A' + 10,
+        else => null,
+    };
+}
+
 /// Does this string literal's CONTENT end in an odd number of backslashes?
 ///
 /// `text` still carries its delimiters, and the delimiter is one byte in all
@@ -461,6 +505,28 @@ const Walker = struct {
                 }
                 if (insideLoop(n)) {
                     try self.report.add(self.gpa, self.file, n, .perf, "rpp/varptr-in-loop", "varptr() inside a loop", .{}, "varptr costs ~790 ns per call — 12x an ordinary function call — because it does a name lookup and builds a C-pointer list. Take the pointer once, outside the loop. See FINDINGS F-4.");
+                }
+            }
+
+            // FINDINGS F-56: char() is byte-wise and takes its argument
+            // MODULO 256, with no error of any kind. Measured on 1.27:
+            // char(256) is byte 0, char(257) is 1, char(511) is 255, and
+            // char(0x4E2D) -- a CJK character -- is byte 45, an ASCII
+            // hyphen. char(0x1F600), an emoji, is byte 0, which F-14 then
+            // turns into a process death if it ever reaches memcpy.
+            //
+            // Only a LITERAL is reported, because only a literal is certain.
+            // char(n) for a computed n may well be in range, and a rule that
+            // guessed would be wrong on the 618 calls in Softanza that pass
+            // a byte on purpose.
+            if (eqIgnoreCase(callee, "char")) {
+                if (argAt(n, 0)) |a| {
+                    if (literalByte(a)) |v| {
+                        if (v < 0 or v > 255) {
+                            const wrapped = @mod(v, 256);
+                            try self.report.add(self.gpa, self.file, a, .err, "rpp/char-truncates", "char({s}) is byte {d}, not that codepoint — char() takes its argument modulo 256", .{ a.text(), wrapped }, "char() is byte-wise on Ring 1.27 and says nothing when the value does not fit: char(256) is byte 0, char(0x4E2D) is byte 45 (an ASCII hyphen), char(0x1F600) is byte 0 -- and a NUL is what F-14 turns into a process death at memcpy. Ring has no way to write a codepoint; a Ring string is a byte string, and the literal CJK character is 3 bytes. Use RppStr(\"\\u4E2D\") from rpp/str.ring, which encodes UTF-8 and which `ringpp expand` folds to the character itself. See FINDINGS F-56.");
+                        }
+                    }
                 }
             }
 

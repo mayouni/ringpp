@@ -477,6 +477,31 @@ pub const catalog = [_]Entry{
             "where meaning changes, not an accusation.",
     },
     .{
+        .rule = "rpp/char-truncates",
+        .findings = &.{ "F-56", "F-14" },
+        .title = "char() is byte-wise and wraps modulo 256, without a word",
+        .symptom = "A character that arrives as something else entirely — a CJK glyph as an " ++
+            "ASCII hyphen, an emoji as a zero byte — or a crash in memcpy several files away.",
+        .cause = "char() takes its argument modulo 256 on Ring 1.27 and reports nothing. " ++
+            "Measured: char(256) is byte 0 (it WRAPS, it does not clamp), char(257) is 1, " ++
+            "char(511) is 255, char(0x4E2D) is byte 45, char(0x1F600) is byte 0, char(-1) is " ++
+            "255. A Ring string is a byte string, so there is no way to write a codepoint at " ++
+            "all; ascii() is loud where char() is silent — ascii() on a 3-byte character " ++
+            "RAISES rather than returning anything — so the round trip cannot even be closed.",
+        .fix = "RppStr(\"\\u4E2D\") from rpp/str.ring encodes the codepoint as UTF-8 and " ++
+            "refuses a surrogate half; \\u{N...} covers the range to 10FFFF. `ringpp expand` " ++
+            "folds it to the character itself, so the built program carries a plain literal.",
+        .evidence = "bench/str.ring and docs/FINDINGS.md F-56 — the wrap table is measured " ++
+            "value by value on Ring 1.27.",
+        .hurts = "Only a LITERAL outside 0..255 is reported, because only a literal is " ++
+            "certain: char(n) for a computed n may well be a byte on purpose. Softanza's " ++
+            "base/ holds 618 char(NNN) calls with a three-digit literal and NOT ONE is above " ++
+            "255 — the commonest values are 226, 148 and 240, UTF-8 lead and continuation " ++
+            "bytes assembled by hand, three calls to a character. So this rule reports zero " ++
+            "times on that corpus. That is the finding rather than a failure of it: people " ++
+            "route around this trap after meeting it once, and the rule is for the first time.",
+    },
+    .{
         .rule = "rpp/string-escape",
         .findings = &.{"F-55"},
         .title = "Ring has no string escapes, and \\\" fails without saying so",
@@ -498,10 +523,12 @@ pub const catalog = [_]Entry{
             "Where one delimiter is enough, just switch: '...' and `...` both hold a double " ++
             "quote, and a backtick literal spans lines.",
         .evidence = "bench/str.ring — minima of 3, 100,000 evaluations. Plain literal 5 ms, " ++
-            "folded concatenation 12 ms, RppStr with escapes 854 ms, RppStr with nothing to " ++
-            "decode 91 ms, RppStr with two \\u escapes 2005 ms: 8.42 us per call over the " ++
-            "folded form, 0.86 us for the early out, 20.05 us when a codepoint is encoded.",
-        .hurts = "RppStr decodes on EVERY evaluation, so a literal inside a hot loop pays 8 us " ++
+            "folded concatenation 12 ms, RppStr with escapes 800 ms, RppStr with nothing to " ++
+            "decode 85 ms, RppStr with two \\u escapes 2000 ms: 7.9 us per call over the " ++
+            "folded form, 0.85 us for the early out, 20 us when a codepoint is encoded. Two " ++
+            "significant figures on purpose: across runs the escape arm measured 798-854 ms " ++
+            "and the codepoint arm 1939-2005, about 7% spread.",
+        .hurts = "RppStr decodes on EVERY evaluation, so a literal inside a hot loop pays 7.9 us " ++
             "a pass — 20 for a codepoint — where a plain literal pays 0.05. Use it for strings " ++
             "built once, or let " ++
             "expand fold it. The rule itself is deliberately narrow: it reports an identifier " ++

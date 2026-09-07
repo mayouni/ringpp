@@ -178,6 +178,21 @@ $escOk = ($escN -ge 2) -and ($escOut -match "2 error, 1 warn") -and
 "{0} {1,-16} {2}" -f $(if ($escOk) { "PASS" } else { "FAIL" }), "T1 escape", "the escaped-quote pair and the backslashed identifier fire; a real Windows path and a backslash-n literal stay silent"
 if (-not $escOk) { $fail++ }
 
+# rpp/char-truncates (F-56). char() wraps modulo 256 in silence: char(0x4E2D)
+# is byte 45, char(0x1F600) is byte 0 -- and a NUL is what F-14 turns into a
+# process death at memcpy. The SILENT half is what makes the rule usable:
+# Softanza's base/ holds 618 char(NNN) calls with a three-digit literal and
+# not one is above 255, so a rule that guessed at char(n) would be wrong on
+# every one of them. Assert the count, and the lines that must stay quiet.
+$chOut = & $ringpp check "tests\fixtures\char_truncates.ring" 2>&1 | Out-String
+$chOk = ($chOut -match "3 error, 0 warn") -and
+        ($chOut -match "byte 45") -and ($chOut -match "byte 0") -and
+        ($chOut -match "byte 255") -and
+        ($chOut -match "10:") -and ($chOut -match "14:") -and ($chOut -match "17:") -and
+        ($chOut -notmatch "21:") -and ($chOut -notmatch "24:") -and ($chOut -notmatch "28:")
+"{0} {1,-16} {2}" -f $(if ($chOk) { "PASS" } else { "FAIL" }), "T1 char", "a codepoint, an emoji and a negative fire with the byte each really makes; hand-assembled UTF-8 bytes and a computed argument stay silent"
+if (-not $chOk) { $fail++ }
+
 # F-55, the fold. RppStr() over a LITERAL is known at build time, so expand
 # turns it into the plain Ring an author would have written by hand and the
 # 8.08 us per call it costs at run time goes away. Inspecting the emitted

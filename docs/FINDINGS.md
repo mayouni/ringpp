@@ -2498,36 +2498,37 @@ Ring++ answers it in `rpp/str.ring`: `RppStr()` decodes `\\`, `\n`, `\t`,
 the delimiter itself cannot be typed) and `\xNN`, and **raises on an
 unknown escape** rather than leaving it in the string.
 
-**And a codepoint, which Ring cannot write at all.** `char()` is byte-wise
-and truncates without a word — measured, `char(0x4E2D)` returns byte 45, an
-ASCII hyphen, for the CJK character asked for. A Ring string is a byte
-string (e-acute 2 bytes, CJK 3, an emoji 4), and `char(0xC3) + char(0xA9)`
-compares EQUAL to a pasted e-acute, so a codepoint is written by producing
-its UTF-8 bytes. `\uNNNN` takes four hex digits and `\u{N...}` one to six,
-to 10FFFF. A surrogate half (D800–DFFF) is **refused**: it is not a
-character, it exists only inside UTF-16, and encoding one produces UTF-8
-nothing downstream can read back. Each case is gated against the PASTED
-character, so the gate fails the day the encoder and a source file
-disagree — and `ringpp expand` folds `\u4E2D` to a literal 中, which is
-both correct and readable where `char(228) + char(184) + char(173)` is
-only correct. It is a function
-and not a new literal form on purpose: a file using it still loads and
-still works under plain `ring.exe`, and `ringpp expand` folds it into a
-plain concatenation so the tool removes the cost without being required
-for the meaning.
+**And a codepoint, which Ring cannot write at all** — `char()` is byte-wise
+and wraps modulo 256 in silence, which is **F-56** and has its own entry.
+`\uNNNN` takes four hex digits, `\u{N...}` one to six, to 10FFFF; a
+surrogate half (D800–DFFF) is **refused**, because it is not a character and
+encoding one produces UTF-8 nothing downstream can read back. Each case is
+gated against the PASTED character, so the gate fails the day the encoder
+and a source file disagree, and `ringpp expand` folds `\u4E2D` to a literal
+中 — both correct and readable, where `char(228) + char(184) + char(173)` is
+only correct.
+
+It is a function and not a new literal form on purpose: a file using it
+still loads and still works under plain `ring.exe`, and `ringpp expand`
+folds it into a plain concatenation so the tool removes the cost without
+being required for the meaning.
 
 Cost, `bench/str.ring`, 100,000 evaluations, minima of 3:
 
 ```
-  plain literal                  5 ms
-  hand-written concatenation    12 ms      <- what expand folds to
-  RppStr(), with escapes       854 ms      8.42 us per call
-  RppStr(), nothing to decode   91 ms      0.86 us, the early out
-  RppStr(), two \u escapes    2005 ms     20.05 us per call
+  plain literal                  5 ms      0.05 us per call
+  hand-written concatenation    12 ms      0.12 us   <- what expand folds to
+  RppStr(), with escapes       800 ms      7.9  us
+  RppStr(), nothing to decode   85 ms      0.85 us   <- the early out
+  RppStr(), two \u escapes    2000 ms     20    us   <- a codepoint costs most
 ```
 
-**Where it loses:** 8 us a call is a hot loop's whole budget -- and a
-codepoint is 20, because it is parsed as hex and then encoded -- so RppStr
+Two significant figures, and deliberately so: across runs the escape arm
+measured 798-854 ms and the codepoint arm 1939-2005, a spread of about 7%.
+Anything finer would be reporting noise.
+
+**Where it loses:** 7.9 us a call is a hot loop's whole budget -- and a
+codepoint is 20, because it is parsed as hex and THEN encoded -- so RppStr
 is for strings built once and the fold is for the rest. The obvious
 optimisation was tried and rejected: collecting runs in a list and
 joining once measured 7.52 us against 6.65 for the plain character loop
@@ -2540,3 +2541,62 @@ each ending in an odd run of them. It deliberately says nothing about
 `"line1\nline2"` — very probably a wanted newline, silently a backslash
 and an n, and indistinguishable from the path `"C:\new"`. Measured over
 530 files and 11.6 MB of Softanza: zero reports.
+
+### F-56. `char()` is byte-wise and takes its argument modulo 256, silently
+
+Measured 2026-09-06 on Ring 1.27, while adding `\u` to `RppStr()`.
+
+```
+  char(65)       byte 65     A
+  char(255)      byte 255
+  char(256)      byte 0      <- not 255: it WRAPS, it does not clamp
+  char(257)      byte 1
+  char(511)      byte 255
+  char(512)      byte 0
+  char(0x4E2D)   byte 45     the CJK character, delivered as an ASCII hyphen
+  char(0x1F600)  byte 0      an emoji, delivered as a NUL
+  char(-1)       byte 255    negatives wrap too
+  char(65.7)     byte 65     the fraction is dropped
+```
+
+**No error, no warning, no truncation notice.** The emoji case is the worst
+of them: `char(0x1F600)` is byte **0**, and a NUL is exactly what F-14 turns
+into a process death the moment it reaches `memcpy`. A codepoint that looked
+like a character becomes a crash three files away.
+
+`ascii()` is loud where `char()` is silent, which is the asymmetry that hides
+this. `ascii("中")` does not return 20013 and does not return 228 either --
+it RAISES, *Bad parameters value, error in length!*, because the string is 3
+bytes and it wants 1. So the round trip does not close and cannot be made to:
+
+```
+  ascii(char(0x4E2D))  =  45        wanted 20013
+```
+
+**There is no way to write a codepoint in Ring.** A Ring string is a byte
+string -- the literal e-acute is 2 bytes, CJK is 3, an emoji is 4, and
+`char(0xC3) + char(0xA9)` compares EQUAL to the literal. Softanza's own code
+already knows this: of **618** `char(NNN)` calls with a three-digit literal
+in `base/`, **zero** are above 255, and the commonest values are 226, 148 and
+240 -- UTF-8 lead and continuation bytes, assembled by hand, three calls to a
+character. That is not an accident, it is what people do after being bitten
+once.
+
+Ring++ answers it with `\uNNNN` and `\u{N...}` in `RppStr()` (F-55), which
+encode UTF-8 properly and refuse a surrogate half. The bytes are
+indistinguishable from a pasted character -- the gate compares them against
+pasted literals for e-acute, CJK, emoji and Arabic. `ringpp expand` folds
+the call to the character itself.
+
+**What it costs:** a `\u` escape is the dearest thing `RppStr()` does --
+20 us per call against 7.9 for the plain escapes and 0.12 for the folded
+form (`bench/str.ring`, 100,000 evaluations, minima of 3). Hex parsing plus
+UTF-8 encoding on every evaluation. Which is the argument for the fold, not
+against the escape.
+
+`ringpp check` reports a LITERAL argument outside 0..255 as
+`rpp/char-truncates`, naming the byte it actually produces. A computed
+`char(n)` is not reported: it may well be in range, and guessing would be
+wrong on all 618 of those deliberate byte calls. Measured over 530 files and
+11.7 MB of Softanza: zero reports -- which is the finding, not a failure of
+the rule. Nobody writes `char(0x4E2D)` twice.
