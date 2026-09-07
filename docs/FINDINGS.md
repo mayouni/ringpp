@@ -2496,7 +2496,21 @@ identifier `hi\` — loud, but only once that line runs.
 Ring++ answers it in `rpp/str.ring`: `RppStr()` decodes `\\`, `\n`, `\t`,
 `\r`, `\0`, `\q` `\s` `\g` (the three quote characters, named, for when
 the delimiter itself cannot be typed) and `\xNN`, and **raises on an
-unknown escape** rather than leaving it in the string. It is a function
+unknown escape** rather than leaving it in the string.
+
+**And a codepoint, which Ring cannot write at all.** `char()` is byte-wise
+and truncates without a word — measured, `char(0x4E2D)` returns byte 45, an
+ASCII hyphen, for the CJK character asked for. A Ring string is a byte
+string (e-acute 2 bytes, CJK 3, an emoji 4), and `char(0xC3) + char(0xA9)`
+compares EQUAL to a pasted e-acute, so a codepoint is written by producing
+its UTF-8 bytes. `\uNNNN` takes four hex digits and `\u{N...}` one to six,
+to 10FFFF. A surrogate half (D800–DFFF) is **refused**: it is not a
+character, it exists only inside UTF-16, and encoding one produces UTF-8
+nothing downstream can read back. Each case is gated against the PASTED
+character, so the gate fails the day the encoder and a source file
+disagree — and `ringpp expand` folds `\u4E2D` to a literal 中, which is
+both correct and readable where `char(228) + char(184) + char(173)` is
+only correct. It is a function
 and not a new literal form on purpose: a file using it still loads and
 still works under plain `ring.exe`, and `ringpp expand` folds it into a
 plain concatenation so the tool removes the cost without being required
@@ -2507,11 +2521,13 @@ Cost, `bench/str.ring`, 100,000 evaluations, minima of 3:
 ```
   plain literal                  5 ms
   hand-written concatenation    12 ms      <- what expand folds to
-  RppStr(), with escapes       820 ms      8.08 us per call
-  RppStr(), nothing to decode   94 ms      0.89 us, the early out
+  RppStr(), with escapes       854 ms      8.42 us per call
+  RppStr(), nothing to decode   91 ms      0.86 us, the early out
+  RppStr(), two \u escapes    2005 ms     20.05 us per call
 ```
 
-**Where it loses:** 8 us a call is a hot loop's whole budget, so RppStr
+**Where it loses:** 8 us a call is a hot loop's whole budget -- and a
+codepoint is 20, because it is parsed as hex and then encoded -- so RppStr
 is for strings built once and the fold is for the rest. The obvious
 optimisation was tried and rejected: collecting runs in a list and
 joining once measured 7.52 us against 6.65 for the plain character loop

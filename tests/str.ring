@@ -38,6 +38,17 @@ func Main()
 	nFail += Chk("\x22\x27\x60", char(34) + char(39) + char(96))
 	nFail += Chk("\x00",         char(0))
 
+	# CODEPOINTS. Ring gives no other way to write one: char() is byte-wise
+	# and truncates silently -- char(0x4E2D) is byte 45, an ASCII hyphen.
+	# Each of these is compared against the PASTED character, so the gate
+	# fails if the UTF-8 encoder and the source file ever disagree.
+	nFail += Chk("\u00e9",     "é")
+	nFail += Chk("\u4E2D",     "中")
+	nFail += Chk("\u{1F600}",  "😀")
+	nFail += Chk("\u{41}",     "A")
+	nFail += Chk("\u0645\u0631\u062D\u0628\u0627", "مرحبا")
+	nFail += Chk("\u{0}",      char(0))
+
 	# untouched when there is nothing to decode: the early-out path
 	nFail += Chk("plain text", "plain text")
 	nFail += Chk("", "")
@@ -47,6 +58,15 @@ func Main()
 	nFail += Bad("ends" + char(92), "lone")
 	nFail += Bad("\xZZ",            "hex digits")
 	nFail += Bad("\x4",             "ends first")
+	# a surrogate half is not a character -- it exists only inside UTF-16,
+	# and encoding one produces UTF-8 nothing can read back
+	nFail += Bad("\uD800",         "surrogate")
+	nFail += Bad("\u{110000}",     "not a codepoint")
+	nFail += Bad("\u12",           "four hex digits")
+	nFail += Bad("\uZZZZ",         "is not one")
+	nFail += Bad("\u{12",          "never closed")
+	nFail += Bad("\u{}",           "one to six")
+	nFail += Bad("\u{1234567}",    "one to six")
 
 	? ""
 	? "" + nFail + " failed"

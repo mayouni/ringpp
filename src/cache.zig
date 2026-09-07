@@ -718,6 +718,43 @@ fn decodeEscapes(gpa: std.mem.Allocator, body: []const u8, out: *std.ArrayList(u
                 i += 4;
                 continue;
             },
+            // A CODEPOINT, encoded as UTF-8 bytes. RppUtf8() in rpp/str.ring
+            // is the same function written in Ring, and the T1 fold gate runs
+            // both paths and compares the bytes -- a build that encoded
+            // differently from the run time would be the worst defect this
+            // project could ship.
+            'u' => {
+                var v: u32 = 0;
+                if (i + 2 < body.len and body[i + 2] == '{') {
+                    var j = i + 3;
+                    var digits: usize = 0;
+                    while (j < body.len and body[j] != '}') : (j += 1) {
+                        const d = hexDigit(body[j]) orelse return error.a_non_hex_digit_in_a_u_escape;
+                        v = v * 16 + d;
+                        digits += 1;
+                        if (digits > 6) return error.a_u_escape_with_more_than_six_digits;
+                    }
+                    if (j >= body.len) return error.an_unclosed_u_brace;
+                    if (digits == 0) return error.an_empty_u_brace;
+                    i = j + 1;
+                } else {
+                    if (i + 5 >= body.len) return error.a_u_escape_without_four_hex_digits;
+                    var k: usize = 2;
+                    while (k <= 5) : (k += 1) {
+                        const d = hexDigit(body[i + k]) orelse return error.a_non_hex_digit_in_a_u_escape;
+                        v = v * 16 + d;
+                    }
+                    i += 6;
+                }
+                if (v > 0x10FFFF) return error.a_codepoint_past_10FFFF;
+                var buf: [4]u8 = undefined;
+                // utf8Encode refuses a surrogate half, which is exactly right:
+                // D800-DFFF are not characters, they exist only inside UTF-16,
+                // and encoding one produces UTF-8 nothing can read back.
+                const n = std.unicode.utf8Encode(@intCast(v), &buf) catch return error.a_surrogate_half_which_is_not_a_character;
+                try out.appendSlice(gpa, buf[0..n]);
+                continue;
+            },
             else => return error.an_unknown_escape,
         };
         try out.append(gpa, b);
@@ -746,7 +783,12 @@ fn emitRingLiteral(gpa: std.mem.Allocator, bytes: []const u8, out: *std.ArrayLis
     var open = false;
     var first = true;
     for (bytes) |b| {
-        const plain = b >= 32 and b < 127 and b != '"';
+        // A byte >= 0x80 goes in RAW. A .ring file is UTF-8 and a literal
+        // e-acute IS those two bytes -- measured: char(0xC3) + char(0xA9)
+        // compares EQUAL to the literal on 1.27. So folding 中 to the
+        // CJK character itself is both correct and readable, where
+        // char(228) + char(184) + char(173) is only correct.
+        const plain = (b >= 32 and b < 127 and b != '"') or b >= 128;
         if (plain) {
             if (!open) {
                 if (!first) try out.appendSlice(gpa, " + ");

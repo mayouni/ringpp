@@ -26,6 +26,12 @@ func Main()
 	nBestCat  = 999999
 	nBestEsc  = 999999
 	nBestPlain = 999999
+	nBestUni   = 999999
+
+	# The codepoint arm builds its own expected value, because the point of
+	# \u is that its bytes are indistinguishable from a pasted character.
+	cWantUni = "He said " + char(0xE4) + char(0xB8) + char(0xAD) + "5" +
+		   char(0xE4) + char(0xB8) + char(0xAD) + " and left"
 
 	for r = 1 to nReps
 
@@ -60,6 +66,16 @@ func Main()
 		n = Ms(t)
 		if n < nBestPlain nBestPlain = n ok
 
+		# 5. two CODEPOINT escapes. The same shape as arm 3, but each one is
+		#    parsed as hex and then encoded to UTF-8, so it is the dearest.
+		t = clock()
+		for i = 1 to nIter
+			c = RppStr("He said \u4E2D5\u4E2D and left")
+		next
+		n = Ms(t)
+		if n < nBestUni nBestUni = n ok
+		Assert(c, cWantUni, "RppStr with codepoints")
+
 	next
 
 	? "" + nIter + " evaluations, minimum of " + nReps + ":"
@@ -68,6 +84,7 @@ func Main()
 	? "   2  hand-written concatenation   " + Fmt(nBestCat) + "   <- what expand folds to"
 	? "   3  RppStr(), with escapes       " + Fmt(nBestEsc)
 	? "   4  RppStr(), nothing to decode  " + Fmt(nBestPlain) + "   <- early out"
+	? "   5  RppStr(), two \u escapes     " + Fmt(nBestUni) + "   <- a codepoint costs most"
 	? ""
 	? "   per call, RppStr with escapes over the folded form: " +
 	  Us(nBestEsc - nBestCat)
@@ -87,8 +104,12 @@ func Fmt(n)
 	if n < 1 return "below the 1 ms timer floor" ok
 	return "" + floor(n) + " ms"
 
+# ms over 100,000 calls -> us per call. This divided by 1,000,000 where it
+# needed 1,000 and printed every per-call figure a THOUSAND times too large
+# -- 8080 us for what is 8.08. Caught by reading the output instead of the
+# code, which is the only way that kind of error is ever caught.
 func Us(nMs)
-	return "" + (floor(nMs / 100000 * 1000000 * 100) / 100) + " us"
+	return "" + (floor(nMs / 100000 * 1000 * 100) / 100) + " us"
 
 func Assert(cGot, cWant, cArm)
 	if cGot != cWant or len(cGot) != len(cWant)

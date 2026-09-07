@@ -490,15 +490,20 @@ pub const catalog = [_]Entry{
             "concatenate to a\\b\\ and raise nothing at all.",
         .fix = "Load rpp/str.ring and wrap the literal: RppStr(\"He said \\q5\\q\") decodes \\\\ " ++
             "\\n \\t \\r \\0 \\q \\s \\g and \\xNN at run time, and raises on an unknown escape " ++
-            "rather than leaving it in the string. `ringpp expand` folds any RppStr() over a " ++
-            "literal into a plain concatenation, so the tool removes the cost without being " ++
-            "needed for the meaning. Where one delimiter is enough, just switch: '...' and " ++
-            "`...` both hold a double quote, and a backtick literal spans lines.",
+            "rather than leaving it in the string. \\uNNNN and \\u{N...} write a CODEPOINT as " ++
+            "UTF-8, which Ring has no other way to express — char() is byte-wise and truncates " ++
+            "silently, so char(0x4E2D) returns byte 45, an ASCII hyphen, for the CJK character " ++
+            "asked for. `ringpp expand` folds any RppStr() over a literal into a plain " ++
+            "concatenation, so the tool removes the cost without being needed for the meaning. " ++
+            "Where one delimiter is enough, just switch: '...' and `...` both hold a double " ++
+            "quote, and a backtick literal spans lines.",
         .evidence = "bench/str.ring — minima of 3, 100,000 evaluations. Plain literal 5 ms, " ++
-            "folded concatenation 12 ms, RppStr with escapes 820 ms, RppStr with nothing to " ++
-            "decode 94 ms: 8.08 us per call over the folded form, 0.89 us for the early out.",
+            "folded concatenation 12 ms, RppStr with escapes 854 ms, RppStr with nothing to " ++
+            "decode 91 ms, RppStr with two \\u escapes 2005 ms: 8.42 us per call over the " ++
+            "folded form, 0.86 us for the early out, 20.05 us when a codepoint is encoded.",
         .hurts = "RppStr decodes on EVERY evaluation, so a literal inside a hot loop pays 8 us " ++
-            "a pass where a plain literal pays 0.05 — use it for strings built once, or let " ++
+            "a pass — 20 for a codepoint — where a plain literal pays 0.05. Use it for strings " ++
+            "built once, or let " ++
             "expand fold it. The rule itself is deliberately narrow: it reports an identifier " ++
             "carrying a backslash, and two literals in one expression that each end in one. It " ++
             "says nothing about \"line1\\nline2\", which is probably a wanted newline and is " ++
