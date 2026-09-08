@@ -39,8 +39,12 @@ out of answering all three, without ever leaving Ring.
 
 ## Install
 
+Ring++ ships as a repository, not a package. Clone it, or copy the folder
+anywhere you like — the library is relocatable, and `rpp/*.ring` load
+relative to `ringpp.ring`.
+
 ```
-ringpm install ringpp
+git clone https://github.com/mayouni/ringpp
 ```
 
 Then, from anywhere:
@@ -56,7 +60,7 @@ oBuf.Poke(0, "hello")
 That's one method of four classes — [every method on all four is on one
 page](site/reference.html), each with a real example.
 
-The same install puts the `ringpp` **CLI** on your machine — one prebuilt
+The same clone brings the `ringpp` **CLI** with it — one prebuilt
 binary, made with Zig:
 
 ```

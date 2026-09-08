@@ -255,15 +255,19 @@ Runs the Ring gates, the Zig unit tests, the lint and type gates, and all
 fifteen examples. One optional gate scans an external corpus when present
 and prints `SKIP` with its reason when not.
 
-**What the suite does not yet check** — and both gaps are the same shape,
-a gate that passes because it runs where the files happen to exist:
+Both gaps this section used to name are **closed, 2026-09-07**:
 
-- **No gate installs the package.** `package.ring`'s `:files` omits
-  `rpp/tui.ring`, which `ringpp.ring` loads, so a package built from that
-  manifest cannot complete `load "ringpp.ring"`. `rpp/str.ring` and
-  `rpp/memo.ring` are missing from it too, and 7 of the 15 examples: it
-  lists 8. Proven by copying exactly `:files` into a clean tree and
-  loading it — `Error (E9) : Can't open file rpp/tui.ring`.
-- ~~No gate builds the VM from vendored source~~ — **closed 2026-09-07**.
-  `vendored VM` checks the manifest and `b2 runtimes` builds all five
-  platforms from it.
+- ~~No gate builds the VM from vendored source~~ — `vendored VM` checks the
+  manifest and `b2 runtimes` builds all five platforms from it.
+- ~~No gate installs the package~~ — **there is no package.** `package.ring`
+  was deleted: Ring++ ships as a repository, cloned or copied, and the
+  library is relocatable. The manifest had drifted badly enough to prove the
+  point — its `:files` omitted `rpp/tui.ring`, which `ringpp.ring` loads, so
+  an install from it could not complete `load "ringpp.ring"` (`Error (E9)`),
+  and `str.ring`, `memo.ring` and 7 of the 15 examples were missing too.
+
+**The shape both had is worth remembering**, because the next one will look
+like this: a gate that passes because it runs where the files happen to
+exist. If a claim is about a machine that is not this one — an install, a
+clean clone, another platform — build that condition and test it, or say
+plainly that it is untested.

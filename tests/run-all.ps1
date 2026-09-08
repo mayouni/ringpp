@@ -671,13 +671,15 @@ foreach ($f in (Get-ChildItem $root -Recurse -File -Filter *.ps1 |
 if ($fossils.Count) { $fail++; $fossils | ForEach-Object { "       $_ hardcodes a temp path -- make it a parameter" } }
 Pop-Location
 
-# The package manifest promises a prebuilt binary per platform, and a
-# promise nobody checks is how `ringpm install` starts failing on a machine
-# nobody here owns. This asserts that every file the manifest lists exists,
-# and -- because a file existing says nothing about what is IN it -- that
-# each platform binary carries the right magic bytes for its target. A
-# Windows .exe copied into bin/linux-x64 would pass an existence check and
-# fail on the user's machine.
+# bin/README.md promises a prebuilt CLI per platform, and a promise nobody
+# checks is how a download starts failing on a machine nobody here owns.
+# This asserts each one exists and -- because a file existing says nothing
+# about what is IN it -- that it carries the right magic bytes for its
+# target. A Windows .exe copied into bin/linux-x64 would pass an existence
+# check and fail on the user's machine.
+#
+# It used to read package.ring first, to check the manifest LISTED each
+# file. That manifest is gone: Ring++ ships as a repository, not a package.
 Push-Location $root
 $magic = @{
     "bin/win64/ringpp.exe"    = @(0x4D, 0x5A)                    # MZ   -- PE
@@ -689,10 +691,8 @@ $magic = @{
 # .NET rather than Get-Content: -AsByteStream is PowerShell 7 and this
 # machine runs 5.1, where the same read needs -Encoding Byte. Reading the
 # bytes directly works on both and cannot be silently decoded as text.
-$pkg = [IO.File]::ReadAllText((Join-Path $root "package.ring"))
 $binBad = @()
 foreach ($f in $magic.Keys) {
-    if (-not $pkg.Contains($f)) { $binBad += "$f not listed in package.ring"; continue }
     $p = Join-Path $root $f
     if (-not (Test-Path $p)) { $binBad += "$f listed but missing"; continue }
     $fs = [IO.File]::OpenRead($p)
@@ -715,7 +715,7 @@ foreach ($a in $arrays) {
     }
 }
 "{0} {1,-16} {2}" -f $(if ($binBad.Count -eq 0) { "PASS" } else { "FAIL" }), "pkg binaries",
-    $(if ($binBad.Count -eq 0) { "5 platform binaries listed, present, and the right format" } else { "" })
+    $(if ($binBad.Count -eq 0) { "5 platform binaries present, and each the right format for its target" } else { "" })
 if ($binBad.Count) { $fail++; $binBad | Select-Object -Unique | ForEach-Object { "       $_" } }
 Pop-Location
 
