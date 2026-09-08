@@ -76,23 +76,25 @@ how these four were found.
 
 ---
 
-## A note on `ab-known.txt`
+## Where `ab-known.txt` is
 
 `docs/FINDINGS.md` refers three times to divergences "registered in
 `bench/ab-known.txt`" — `map:M10` and `map:M11` at line 2151, `bi:BI_IDX` at
-line 2438, and "29 of them" at line 2211. **That file is not in this
-repository and never has been**: `bench/` exists and has 30 other entries,
-but no commit in the full history of ringpp ever added, moved or deleted it,
-and it is not in `softanza` or `stzlib` either.
+line 2438, and "29 of them" at line 2211. That file is **not in this
+repository**. It is `rnx-spike/bench/ab-known.txt` — 66 lines, in the
+private repository that holds the new VM and the `rnxc` compiler, which
+FINDINGS.md names by that repository name in the same findings.
 
-The likely account is that it belonged to the **compiled-kernel A/B
-harness** — the line at 2211 is about `rnxc` refusing functions — which was
-**descoped on 2026-08-23**, along with the workspace it lived in. So those
-three citations point at a registry that is gone rather than one that is
-elsewhere.
+It is the compiler's list of functions the prototype does not yet run,
+each with a reason, plus entries marked `DIVERGENCE` for behaviour built
+differently on purpose — `hd:D1`, for one: Ring inserts a key when you read
+a missing one; Ring++ reads and leaves the list alone. Those `DIVERGENCE`
+entries are corrections in everything but name, and belong here as `C-n`
+entries with verdicts. They are not copied yet; when they are, each needs
+its cost stated, which `ab-known.txt` does not record.
 
-Until someone says otherwise, **this file is the register**, and those three
-divergences should be restated here as entries so there is one place rather
-than three pointers to a file nobody can open. They are not restated
-already because doing it from the prose alone would be guessing at verdicts
-that were never recorded.
+*(An earlier version of this note said the file was gone, descoped with the
+2026-08-23 compiled-kernel design. Wrong on both counts: the file exists,
+and `rnx-spike` began on 2026-08-29, six days after that descoping, as a
+different thing. Left visible because the register should show its own
+corrections.)*
