@@ -123,6 +123,15 @@ publishing**. Example 08 disagreed by 13× and the gap turned out to be the
 safety wrapper; example 07 disagreed by two orders of magnitude and the gap
 was sub-state creation. Both became the useful half of their example.
 
+**A divergence from Ring is not a finding — it is a decision, and it goes in
+`docs/CORRECTIONS.md`.** `FINDINGS.md` records what Ring does;
+`CORRECTIONS.md` records where Ring++ deliberately does something else, with
+the verdict (keep / fix silently / break with a rule / drop with a
+constraint), who decided, and **what the choice costs**. Every entry names
+its cost, because a correction with no stated cost is a correction nobody
+audited. Mansour decides these, one defect at a time — never as a blanket
+policy.
+
 ## Examples are gates, not brochures
 
 Each `examples/NN-*/example.ring` holds the raw-Ring path and the Ring++ path

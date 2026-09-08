@@ -10,6 +10,10 @@ lied to me).*
 Read this before the design. The design is downstream of it, and two of
 these findings killed the design I would otherwise have written.
 
+This file records what Ring **does**. Where Ring++ deliberately does
+something else, the decision — verdict, owner, date and cost — is in
+[CORRECTIONS.md](CORRECTIONS.md).
+
 ---
 
 ## The short version
@@ -2658,8 +2662,8 @@ read as a serious divergence; running the OFFICIAL VM against ITSELF showed
 30 of the 37 were not reproducible at all. **Establish the noise floor
 before attributing a difference to the thing you changed.**
 
-Not yet decided: whether Ring++ should match Ring's tie-breaking (a
-compatibility choice, since the estate's recorded outputs assume it) or keep
-the IEEE default (a correctness choice). It is the first place where
-"compatible with the old Ring" and "better than the old Ring" actually
-conflict, and per CLAUDE.md it is decided per defect, by Mansour.
+It is the first place where "compatible with the old Ring" and "better
+than the old Ring" actually conflict. **Decided 2026-09-07 by Mansour:
+keep IEEE correctness** -- half to even, and re-record the handful of
+expected outputs that contain a formatted tie. Recorded as **C-1** in
+[CORRECTIONS.md](CORRECTIONS.md), with what the choice costs.
