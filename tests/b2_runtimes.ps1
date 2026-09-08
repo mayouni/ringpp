@@ -9,22 +9,38 @@
 # official build: three are FORMAT-CHECKED ONLY, because this machine cannot
 # run aarch64 or macOS code, and compiled is not the same claim as correct.
 
+# The VM source is VENDORED, under vendor/ring-vm/. That is what lets a
+# clean clone build its own runtime -- the first commitment in CLAUDE.md.
+# -RingSrc / -RingInc still take an external Ring, for comparing this
+# build against another one.
 param(
     [string]$Ring    = "D:\ring127\bin\ring.exe",
-    [string]$RingSrc = "D:\ring127\language\src",
-    [string]$RingInc = "D:\ring127\language\include",
+    [string]$RingSrc = "",
+    [string]$RingInc = "",
     [string]$OutDir  = "",
     [switch]$Quiet
 )
 
 $root = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
+if (-not $RingSrc) { $RingSrc = Join-Path $root "vendor\ring-vm\src" }
+if (-not $RingInc) { $RingInc = Join-Path $root "vendor\ring-vm\include" }
 if (-not $OutDir) { $OutDir = Join-Path $root "runtime" }
 
 function Say([string]$s) { if (-not $Quiet) { $s } }
 
 $zig = Get-Command zig -EA SilentlyContinue
 if (-not $zig) { "SKIP b2 runtimes     no zig on PATH to cross-compile"; exit 0 }
-if (-not (Test-Path $RingSrc)) { "SKIP b2 runtimes     Ring VM sources not at $RingSrc"; exit 0 }
+# A missing VENDORED source is a FAILURE, never a skip. Absent zig is a
+# skip -- the compiler is the developer's to install. Absent source means
+# this repository has lost the thing that makes it independent.
+if (-not (Test-Path $RingSrc)) {
+    if ($RingSrc -like "*vendor*") {
+        "FAIL b2 runtimes     vendored VM source missing at $RingSrc"
+        exit 1
+    }
+    "SKIP b2 runtimes     Ring VM sources not at $RingSrc"
+    exit 0
+}
 
 # label, zig target triple, output filename, executable on THIS machine
 $targets = @(
@@ -73,6 +89,13 @@ foreach ($t in $targets) {
     $dir = Join-Path $OutDir $t.Plat
     New-Item -ItemType Directory -Force $dir | Out-Null
     $out = Join-Path $dir $t.Out
+    # Remove the previous binary FIRST. zig cc that fails leaves it in
+    # place, Test-Path passes, and the magic-byte check below then
+    # validates yesterday's file -- a build that did not happen reading
+    # as a build that did. Found when the macOS targets started failing
+    # and the other three 'rebuilt' to byte-identical output.
+    if (Test-Path $out) { Remove-Item -Force $out }
+
     $extra = @("-DRING_VM_COMPUTEDGOTO=1", $cgoto)
     if ($t.Triple -like "*-musl" -and (Test-Path $miSrc)) {
         $extra += @("-DMI_MALLOC_OVERRIDE=1", "-I", $miInc, $miSrc)

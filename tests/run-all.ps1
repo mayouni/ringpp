@@ -529,6 +529,36 @@ if (-not $cliOk) { $fail++; $cli -split "`n" | Select-Object -Last 8 | ForEach-O
 # committed binary, which is the point -- runtime/ is gitignored output, not
 # vendored state, so there is nothing here that CAN go silently stale.
 Push-Location $root
+# The VENDORED VM source, checked against its own manifest. Needs no Ring,
+# no compiler and no network -- it reads files and hashes them -- which is
+# the whole point: this is the gate that fails the day the thing making
+# this project independent goes missing or gets edited by accident.
+#
+# 80 files, byte-identical to Ring 1.27's language/src, language/include
+# and language/build/vmcgoto when they were vendored. Ring's MIT licence
+# travels with them.
+$vsrc = Join-Path $root "vendor\ring-vm"
+$vman = Join-Path $vsrc "SHA256SUMS"
+if (-not (Test-Path $vman)) {
+    "FAIL {0,-16} {1}" -f "vendored VM", "no vendor\ring-vm\SHA256SUMS"
+    $fail++
+} else {
+    $vbad = 0; $vn = 0
+    # ReadAllLines, not Get-Content: the project does not round-trip text
+    # through Get-Content/Set-Content anywhere, and a manifest is exactly the
+    # kind of file where a decoding surprise would be invisible.
+    foreach ($line in [IO.File]::ReadAllLines($vman)) {
+        if (-not $line.Trim()) { continue }
+        $vn++
+        $want, $rel = $line -split '  ', 2
+        $f = Join-Path $vsrc $rel.Replace('/', [IO.Path]::DirectorySeparatorChar)
+        if (-not (Test-Path $f)) { $vbad++; continue }
+        if ((Get-FileHash $f -Algorithm SHA256).Hash -ne $want.ToUpper()) { $vbad++ }
+    }
+    "{0} {1,-16} {2}" -f $(if ($vbad -eq 0) { "PASS" } else { "FAIL" }), "vendored VM", "$vn file(s) of Ring's VM source, every hash matching -- a clean clone can build its own runtime"
+    if ($vbad -ne 0) { $fail++ }
+}
+
 $b2 = & powershell -File (Join-Path $root "tests\b2_runtimes.ps1") -Quiet 2>&1 | Out-String
 $b2line = ($b2 -split "`n" | Where-Object { $_ -match '^(PASS|FAIL|SKIP) b2' } | Select-Object -First 1)
 if ($b2line) { $b2line.TrimEnd() } else { "FAIL {0,-16} {1}" -f "b2 runtimes", "no verdict line" }
