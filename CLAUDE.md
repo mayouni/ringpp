@@ -51,10 +51,19 @@ Ring VM binaries built by `zig cc` from Ring's C source, one per platform,
 with mimalloc linked (the Android allocator fix, `fa939f7`). Windows x64
 and Linux x64 are *executed* and diffed against Ring's own build; the other
 three are compiled and format-checked, and `runtime/README.md` keeps that
-distinction visible. **The source is not yet vendored** --
-`tests/b2_runtimes.ps1` still defaults to `D:\ring127\language\src`, so a
-clean clone produces no VM. That is the open independence gap and the
-first thing worth closing.
+distinction visible. **The source is vendored** under `vendor/ring-vm/` --
+80 files from Ring 1.27.0, byte-identical to upstream, MIT licence and
+copyright carried with them -- so a clean clone builds its own runtime.
+The gate `vendored VM` checks all 81 hashes on every run, and needs no
+Ring, no compiler and no network to do it.
+
+**Never verify a runtime change by comparing binaries.** The toolchain is
+not deterministic: two `zig cc` builds of identical source on this machine
+gave `3D177B27...` and `53FE874A...`. Compare the SOURCE, and test the
+BEHAVIOUR -- `b2_runtimes.ps1` runs the result and diffs its output against
+Ring's own build, for the two targets this machine can execute. And note
+that `build/vmcgoto/vmcgoto.c` is part of the source, not an extra: without
+it, `-DRING_VM_COMPUTEDGOTO=1` leaves `ring_vm_computedgoto` undefined.
 
 **Open source, and not a strategy.** The projects stay public so the Ring
 team can learn from the documented defects and their fixes if they choose
@@ -255,5 +264,6 @@ a gate that passes because it runs where the files happen to exist:
   `rpp/memo.ring` are missing from it too, and 7 of the 15 examples: it
   lists 8. Proven by copying exactly `:files` into a clean tree and
   loading it — `Error (E9) : Can't open file rpp/tui.ring`.
-- **No gate builds the VM from vendored source**, because there is none to
-  build from yet. Nothing fails when `D:\ring127` is absent.
+- ~~No gate builds the VM from vendored source~~ — **closed 2026-09-07**.
+  `vendored VM` checks the manifest and `b2 runtimes` builds all five
+  platforms from it.
