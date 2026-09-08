@@ -2600,3 +2600,66 @@ against the escape.
 wrong on all 618 of those deliberate byte calls. Measured over 530 files and
 11.7 MB of Softanza: zero reports -- which is the finding, not a failure of
 the rule. Nobody writes `char(0x4E2D)` twice.
+
+### F-57. Our VM rounds exact ties the other way from Ring's official build
+
+Measured 2026-09-07, running Softanza on `runtime/win64/ring.exe` -- the VM
+Ring++ builds from `vendor/ring-vm/` -- beside Ring's own libraries, against
+Ring 1.27's official `bin/ring.exe`. Same source, same library files, two
+compilers.
+
+```
+                     official      ours
+  decimals(2)
+    0.125      ->      0.13        0.12
+    1/8        ->      0.13        0.12
+    0.135      ->      0.14        0.14
+    0.145      ->      0.14        0.14
+  decimals(0)
+    0.5        ->      1           0
+    1.5        ->      2           2
+    2.5        ->      3           2
+```
+
+**Only EXACT ties differ.** 0.125, 0.5 and 2.5 are exactly representable in
+binary, and the two C runtimes break the tie by different rules: Ring's
+official build rounds **half away from zero**, ours rounds **half to even**
+-- the IEEE default that glibc, musl and LLVM's `printf` implement. 0.135
+and 0.145 are not really ties in binary, so both builds agree on them, which
+is why this hides: it looks like an occasional disagreement rather than a
+rule.
+
+**This is a rounding difference, not a computation difference.** The
+arithmetic is identical; only the decimal formatting of a tie differs. But
+it reaches output, and the domains this project targets are banking and
+government, where a half-cent rule is not a detail.
+
+**How it surfaced.** `hashlist/17_numberofklasses.ring` prints class
+frequencies: `[ 0.25, 0.38, 0.25, 0.13 ]` on Ring, `[ ..., 0.12 ]` on ours.
+One value in four, from 1/8.
+
+**The scale of the divergence, measured over 90 Softanza test files run on
+both VMs:**
+
+```
+  53   byte-identical output, raw
+  37   differed -- and of those:
+       30   also differ from THEMSELVES on the official VM (timings)
+       12   match once timing numbers are normalised
+       25   still differ: 21 in perf/ (measured rates and latencies --
+            838.65 /s vs 690.52 /s, noise of the same kind), and FOUR
+            in hashlist/ and stats/, which is this finding.
+```
+
+**The lesson about the metric, which cost more than the finding.** Comparing
+program output between two VMs is worthless until the output's own
+determinism is known. The first pass reported 53/90 and `perf 1/25`, which
+read as a serious divergence; running the OFFICIAL VM against ITSELF showed
+30 of the 37 were not reproducible at all. **Establish the noise floor
+before attributing a difference to the thing you changed.**
+
+Not yet decided: whether Ring++ should match Ring's tie-breaking (a
+compatibility choice, since the estate's recorded outputs assume it) or keep
+the IEEE default (a correctness choice). It is the first place where
+"compatible with the old Ring" and "better than the old Ring" actually
+conflict, and per CLAUDE.md it is decided per defect, by Mansour.
