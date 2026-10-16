@@ -86,40 +86,19 @@ cWord = <span class="s">"<span class="ar" lang="ar">&#1587;&#1604;&#1575;&#1605;
   <p>The technical limits alone would have been work. What made them a reason to leave is that there is no way to change
   them.</p>
   <ul class="plain">
-    <li><b>One person decides everything.</b> That is a legitimate way to run a language, and it served Ring for a decade. It
-    is not a basis on which a bank, or anyone else who builds on Softanza, can plan critical software for the next five
-    years.</li>
-    <li><b>A design question gets a reply, not a decision.</b> Ring's GitHub repository has its issue tracker, its
-    discussions and its pull requests switched off (checked on 16 October 2026). The only place left to raise a design
-    question is the Google Group, and nothing there records what was asked, what is still open, or what was decided.</li>
-    <li><b>One example.</b> On 7 August 2026 I showed in the group, with measurements, that Ring copies every string passed
-    to a function, and proposed three ways to avoid it. <a href="https://groups.google.com/g/ring-lang/c/1vG3wQgGaDY"
-    target="_blank" rel="noopener">The whole reply</a> was "Thanks for your suggestions". Eight days later, my pull request
-    on the same subject, <a href="https://github.com/ring-lang/ring/pull/1648" target="_blank" rel="noopener">#1648</a>, was
-    closed as a duplicate of that post. The question was never discussed, and Ring 1.27 still copies every string.</li>
-    <li><b>Defects are welcome; design revisions are not.</b> Of five reports I made in early 2021, the one narrow defect was
-    fixed within 24 hours. The four that needed a design decision &mdash; which line an unclosed string's error points at,
-    what a range of two strings should be, whether comments nest, what serialising an object means &mdash; were answered
-    kindly, and are still open on Ring 1.27, five years later.</li>
-    <li><b>A contribution cannot be merged.</b> Ring is developed in a visual tool, so a C patch is rewritten rather than
-    merged: a contributor's diff is an illustration, not a contribution.</li>
-    <li><b>A foundation, proposed.</b> In February 2024 I proposed that Ring be organised
-    <a href="https://groups.google.com/g/ring-lang/c/1FuKRgX46CA" target="_blank" rel="noopener">as other languages are, in a
-    foundation</a>, with people and resources for its governance, its roadmap and its outreach. The one reply said it was
-    not the time, and nothing followed.</li>
-    <li><b>A direction, proposed.</b> Years before AI and machine learning became mainstream, I pleaded for turning Ring
-    towards them, by investing in what makes it unique: its simplicity and its natural-language programming
-    (<a href="https://groups.google.com/g/ring-lang/c/5DLGY9761C8" target="_blank" rel="noopener">April 2021</a>, and after).
-    Ring stayed attached to application development, and left everything else to libraries and to C and C++
-    extensions.</li>
-    <li><b>The package.</b> In August 2026 Ring++ was published in Ring's package manager. Its description was trimmed and
-    left out two of the three pillars it was built on &mdash; performance, static analysis and portability &mdash; and two
-    days after publication it was removed. My name was later removed from the list of Ring's core team.</li>
+    <li><b>One person decides.</b> Ring is designed and developed by its author alone. That is a legitimate way to run a
+    language, and it served Ring for a decade. The customers Softanza serves &mdash; banks, governments, platforms &mdash;
+    raised it as a risk they could not carry: a dependency whose every decision sits with one person, through no process a
+    user can take part in, and whose behaviour cannot be fenced by a strict mode.</li>
+    <li><b>A design question has no place to become a decision.</b> Ring's repository has its issue tracker, its discussions
+    and its pull requests switched off; the Google Group is the only channel, and it holds conversations, not decisions.
+    Defects are fixed, often within days. Design questions are answered, and stay where they were.</li>
+    <li><b>We diverged on the project's governance.</b> Over the years I argued for a different way of running it &mdash;
+    production use as a goal, a strict mode, a foundation around the language &mdash; and the project did not take that
+    direction. That is the author's right, and it is a fact a production user has to act on.</li>
   </ul>
-  <p>There is, in short, no mechanism by which a design concern from a production user can change Ring. For a hobby that is a
-  style. For the domains Softanza serves &mdash; banking, government, platforms &mdash; a dependency whose direction cannot be
-  influenced, and whose behaviour cannot be fenced, fails due diligence twice. So on 14 October 2026 I retired Ring from all
-  my projects.</p>
+  <p>A project built for customers cannot depend on a direction it has no way to influence. So on 14 October 2026 I retired
+  Ring from all my projects.</p>
 </section>
 
 <section class="wrap narrow">

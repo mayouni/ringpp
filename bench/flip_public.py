@@ -15,7 +15,9 @@ history stay private); and nothing public changes until he says go. The steps, i
      ringpp-old, and step 2 must have succeeded first)
   5. the repository's About says what Ring++ is now: its description, the site as its website, its topics
   6. publish the release: the two packages, packed afresh (Windows a zip, Linux a tar.gz), as assets of v2.0.0
-GitHub Pages redeploys the site by itself when main changes (.github/workflows/pages.yml)."""
+DONE 2026-10-16 (6f6eaaa on mayouni/ringpp main, v2.0.0 released). Run again, step 1 refuses: origin/main is no longer the
+library era. And the one thing it got wrong: pages.yml runs on a push touching site/**, and the force push that replaced the
+history did NOT trigger it, so the site was redeployed by its workflow_dispatch -- which step 4 now runs after the push."""
 import os, shutil, subprocess, sys, tarfile, tempfile, time, zipfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -136,6 +138,8 @@ def main():
     sh(['git', 'add', '-A'], cwd=work)
     sh(['git', 'commit', '-q', '-m', 'Ring++ 2: the register VM and the compiler for Ring, in one binary'], cwd=work)
     sh(['git', 'push', '--force', 'https://github.com/%s.git' % NEW_REPO, 'main:main'], cwd=work)
+    # a push that replaces the history does not trigger pages.yml's path filter: start the deploy by hand
+    sh(['gh', 'workflow', 'run', 'pages.yml', '--repo', NEW_REPO, '--ref', 'main'])
 
     step(5, "%s's About: what Ring++ is now" % NEW_REPO)
     print('    description: ' + ABOUT)
