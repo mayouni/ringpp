@@ -1,0 +1,10 @@
+load "bi.ring"
+? TestChar()
+? TestLower()
+? TestTrim()
+? TestLeftRight()
+? TestCopy()
+? TestMaxMin()
+? TestFabs()
+? TestNumber()
+? BI_IDX()

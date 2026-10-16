@@ -1,0 +1,66 @@
+# Functions the Ring++ prototype does not yet run, with the reason.
+# Named here so they are reported, never silently passed over.
+# Format:  module:Func   reason
+
+kernels:Sum32       takes a list; `call` can only pass integers
+kernels:BinSearchAll takes a list; `call` can only pass integers
+
+# Deliberate differences -- built this way on purpose, reason on the record.
+hd:D1       DIVERGENCE: Ring INSERTS a key when you READ a missing one (len 3->4). Ring++ reads it and leaves the list alone. See the hash-pair commit.
+
+# Multi-value `on`. Ring accepts `on 1, 2, 3` and matches ONLY the first
+# value -- M(1) is 100, M(2) and M(3) fall to `other`, silently. The
+# grammar has no notion of the form either: it parses the commas into an
+# empty identifier node and stray expression_statements. There is no
+# correct tree to compile, so Ring++ refuses rather than invent a
+# semantics from a malformed parse. Supporting it needs a front-end
+# grammar change, priced separately.
+mo:M        DIVERGENCE: Ring matches only the FIRST value of `on 1,2,3` and routes the rest to `other` (100 300 300); Ring++ matches any (100 100 100)
+
+# The engine shim needs its DLL built first:
+#   cd bench && zig build-lib -dynamic -OReleaseFast engine_shim.zig --name rppdemo
+# Ring cannot run these at all -- rppdemo.dll speaks the Ring++ ABI, not
+# Ring's -- so there is no A/B to make. They are checked by hand.
+engine:E1   Ring++-only: the native ABI has no Ring counterpart to compare against
+engine:E2   Ring++-only: the native ABI has no Ring counterpart to compare against
+engine:E3   Ring++-only: the native ABI has no Ring counterpart to compare against
+engine:E4   Ring++-only: a LIST crossing the native ABI (read, nested). ABI 2, 2026-09-10.
+engine:E5   Ring++-only: a list BUILT by the engine and returned -- list_new/push/transfer.
+engine:E6   Ring++-only: a list in and a list out, the shape 21 of Softanza's bridges have.
+
+# String ordering. Ring's < and > coerce to number first, so "abc" > "abd"
+# is R41 and "10" > "9" is 1 (numeric). Ring++ orders lexicographically.
+# A divergence, kept deliberately -- see bench/string_order.ring.
+string_order:ALL   DIVERGENCE: Ring has no string ordering; Ring++ compares lexicographically
+
+# try/catch on §2.17's model. Ring binds the caught error to a PROCESS
+# GLOBAL, so a callee -- including the logging call a handler makes
+# first -- overwrites the error its caller is handling, and an inner
+# catch overwrites an outer's. Ring++ binds each handler its own
+# register, so neither can happen. Both are deliberate.
+tryc:E3     DIVERGENCE: Ring's cCatchError is overwritten by a callee (0); Ring++ binds per handler (1)
+tryc:E4     DIVERGENCE: Ring's inner catch overwrites the outer's error (0); Ring++ keeps them separate (1)
+
+# Ring++-only syntax: `finally` and `catch(e)` are not Ring keywords, so
+# Ring rejects the file outright and there is no A/B to make. Checked by
+# hand: A=11 (catch then finally), B=105 (no error, finally still runs),
+# C=1 (catch(e) binds by name), D=11 (finally ran and the error escaped).
+g3:A        Ring++-only syntax: finally
+g3:B        Ring++-only syntax: finally
+g3:C        Ring++-only syntax: catch(e)
+g3:D        Ring++-only syntax: finally with no catch
+
+# Closures. Ring's anonymous functions see GLOBALS only -- not the locals
+# of the function that defines them, nor of the one that calls them
+# (both R24, measured). Ring++ captures lexically, so every one of these
+# works where Ring raises. C1 agrees (42); the rest are Ring++-only.
+clos:C2     DIVERGENCE: Ring cannot see a local of the defining function (R24); Ring++ captures it
+clos:C3     DIVERGENCE: same, through a function parameter
+clos:C4     DIVERGENCE: the environment survives the return -- R24 in Ring
+clos:C5     DIVERGENCE: two captures from the defining scope -- R24 in Ring
+map:M10     DIVERGENCE, deliberate: Ring INSERTS a missing key on a READ (len 1 -> 2);
+map:M10     Ring++ leaves the list alone (len 1). Charter 6.7: a read never writes.
+map:M11     DIVERGENCE, deliberate, and Ring is the one at fault: after a POSITIONAL write of a
+map:M11     pair, Ring key index is STALE -- the new key reads as empty, the OLD key answers with
+map:M11     the new pair value unverified, and the failed read inserts. Ring++ drops the index on a
+map:M11     positional write and re-checks the key on every hit. Measured on 1.27, scratchpad/stale.ring.

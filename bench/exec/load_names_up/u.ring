@@ -1,0 +1,2 @@
+func fu
+	raise("boom")

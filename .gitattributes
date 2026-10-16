@@ -1,0 +1,57 @@
+# The shipped CLI binaries must never be touched by line-ending conversion.
+#
+# core.autocrlf is true on the maintainer's machine, and without this file
+# git decides "is it binary?" by looking for NUL bytes in the first 8 KB. It
+# gets it right for these files today -- but a heuristic is the wrong thing
+# to stake a user's install on, and the Linux and macOS binaries carry no
+# .exe to hint with. A single CRLF rewrite inside an ELF header produces a
+# file that still looks fine in `git status` and fails on someone else's
+# machine with no diagnosis available from here.
+#
+# The binaries are named, rather than globbing bin/** and exempting the
+# README: `binary` is a macro for `-text -diff`, and clawing `diff` back
+# afterwards is easy to get subtly wrong. Naming them leaves every text
+# file in bin/ completely untouched.
+bin/**/ringpp     binary
+bin/**/ringpp.exe binary
+
+# Vendored third-party sources check out BYTE-EXACT, never line-ending
+# converted. These are someone else's release artefacts and the project makes
+# provenance claims about them -- upstream/tree-sitter-ring-notes.md quotes
+# sha cb5bb1e7 for v1.1.1's parser.c and invites the maintainer to check it.
+#
+# Without this, core.autocrlf rewrote parser.c on checkout from 21,848,802
+# bytes to 22,412,612, so the working copy no longer matched the release it
+# claimed to be. Git had stored the file correctly; only the checkout was
+# wrong, which is the version anyone would actually compare.
+vendor/** -text
+
+# Ring sources check out LF, which is what 68 of the 76 .ring files in this
+# repository already were. The other eight -- one per example -- sat CRLF in
+# the working tree against LF in the index, so `git status` called them
+# modified on every single command while `git diff` showed nothing at all,
+# because normalisation hid the only difference there was. Verified identical
+# before pinning: same md5 after stripping CR, 139 lines, no BOM, no mixed
+# endings. A file that reports modified forever trains you to stage around it,
+# which is how a real edit gets committed by accident or missed entirely.
+*.ring text eol=lf
+
+# ...except vendored ones. The `*.ring` rule above comes AFTER `vendor/**
+# -text`, and in this file the later rule wins -- so Ring's own standard
+# library (vendor/ring-stdlib, 2026-09-09) was stored LF in the index while
+# it sat CRLF on disk and in SHA256SUMS. A clean clone would have checked
+# out LF and failed the `vendored stdlib` gate on the first run -- the gate
+# that passes only where the files happen to exist. Vendored bytes are bytes.
+vendor/**/*.ring -text
+
+# Image assets: same reasoning as the CLI binaries above, extended before
+# it was needed rather than after a corrupted checkout was found. JPEGs
+# and PNGs are binary-heavy enough that git's heuristic almost always
+# gets this right on its own -- "almost always" is exactly the standard
+# this file exists to not rely on.
+*.jpg binary
+*.png binary
+
+# The demo APK is a signed archive: a single line-ending rewrite invalidates
+# the signature, and the failure appears only on someone else's phone.
+*.apk binary

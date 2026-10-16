@@ -1,0 +1,1 @@
+$gFromSub = 42

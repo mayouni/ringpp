@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ring++ -- Ring's issues that Ring++ solves</title>
+<meta name="description" content="Each issue of Ring that Ring++ solves, shown by a small program run on Ring 1.27 and on Ring++, with what each printed.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://mayouni.github.io/ringpp/issues.html">
+<meta property="og:title" content="Ring++ -- Ring's issues that Ring++ solves">
+<meta property="og:description" content="Each issue of Ring that Ring++ solves, shown by a small program run on Ring 1.27 and on Ring++, with what each printed.">
+<meta property="og:image" content="https://mayouni.github.io/ringpp/ringpp-logo.jpg">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="style.css?v=2.0.1">
+</head>
+<body>
+
+<nav>
+  <div class="wrap">
+    <a class="brand" href="index.html"><img src="favicon.svg" alt="">Ring<span>++</span></a>
+    <a href="why.html">Why we left Ring</a><a href="issues.html" class="active">Ring's issues, solved</a><a href="how.html">How it works</a><a href="start.html">Start here</a>
+    <a class="repo" href="https://github.com/mayouni/ringpp" target="_blank" rel="noopener" aria-label="Ring++ on GitHub"><svg viewBox="0 0 16 16" width="22" height="22" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg></a>
+    <a class="cta" href="https://github.com/mayouni/ringpp/releases/latest" target="_blank" rel="noopener">Get it <span class="newtab" aria-hidden="true">&#8599;</span></a>
+  </div>
+</nav>
+
+<header class="page wrap narrow">
+  <h1>Ring's issues that <em>Ring++</em> solves</h1>
+  <p class="lead">Each issue below is a small Ring program, run on official Ring 1.27 and on Ring++ (16 October 2026). You read the
+  program first, then what each runtime printed. Nothing here is a promise: it is what the two printed.</p>
+  <div class="filter"><label for="theme">Show</label>
+    <select id="theme">
+      <option value="all">every issue</option>
+      <option value="crash">Programs that die</option>
+      <option value="wrong">Wrong answers, given silently</option>
+      <option value="changed">The language changed under you</option>
+      <option value="late">Found only when the line runs</option>
+      <option value="speed">Speed</option>
+
+    </select>
+  </div>
+</header>
+<section class="wrap theme" data-theme="crash" id="crash"><h2>Programs that die</h2>
+<article class="issue">
+<h3>An object taken from a list ends the program, with no message</h3>
+<p class="status"><span class="st st-solved">Solved</span><a class="ref" href="https://github.com/mayouni/ringpp/blob/main/docs/FINDINGS.md#f-100-an-object-read-from-a-list-as-the-right-operand-of-an-overloaded-operator-ends-ring-with-no-message" target="_blank" rel="noopener">F-100</a><a class="ref" href="https://github.com/mayouni/ringpp/blob/main/docs/CORRECTIONS.md#c-24--an-object-from-a-list-as-an-operators-right-operand-is-dispatched" target="_blank" rel="noopener">C-24</a></p>
+<p class="who"><b>Ring 1.27</b> Adding two objects through their <code>operator</code> method works -- unless the right one comes from a list: then the program stops, exit code 1, no error printed, and no <code>try</code> can catch it.</p>
+<p class="who"><b>Ring++</b> The operator is called, and the program goes on.</p>
+<pre class="code"><span class="c"># Two prices: one in a variable, one inside a list</span>
+oPrice  = new Money { nAmount = 10 }
+aPrices = [ new Money { nAmount = 5 } ]
+
+<span class="c"># Add them: the class tells Ring how to add two Money objects</span>
+oTotal = oPrice + aPrices[1]
+? oTotal.nAmount
+<span class="res">#--&gt; Ring 1.27: nothing at all -- the program ends here, exit code 1,</span>
+<span class="res">#    with no error message, and no try/catch can stop it</span>
+<span class="res">#--&gt; Ring++: 15</span>
+
+? "done"
+
+class Money
+	nAmount = 0
+
+	func operator cOp, oOther
+		oSum = new Money
+		oSum.nAmount = nAmount + oOther.nAmount
+		return oSum</pre>
+<div class="printed"><div><span>Ring 1.27 printed</span><pre>(nothing)
+(the program stops, exit code 1)</pre></div><div><span>Ring++ printed</span><pre>15
+done</pre></div></div>
+</article>
+<article class="issue">
+<h3>Empty catch blocks fill the stack until the program dies</h3>
+<p class="status"><span class="st st-solved">Solved</span><a class="ref" href="https://github.com/mayouni/ringpp/blob/main/docs/FINDINGS.md#f-16-an-empty-catch-block-leaks-a-vm-stack-slot" target="_blank" rel="noopener">F-16</a></p>
+<p class="who"><b>Ring 1.27</b> Each empty <code>catch</code> leaves one slot on the VM's stack. A loop that expects failures dies with Stack Overflow.</p>
+<p class="who"><b>Ring++</b> Nothing is left behind; the loop runs to the end.</p>
+<pre class="code"><span class="c"># Try something that fails, 3,000 times, and ignore the failure</span>
+for nTry = 1 to 3000
+	try
+		raise("a failure we expect")
+	catch
+<span class="c">		# nothing to do: the failure is expected</span>
+	done
+next
+
+? "3,000 failures handled"
+<span class="res">#--&gt; Ring 1.27: Error (R4) : Stack Overflow -- every empty catch</span>
+<span class="res">#    leaves one slot behind, until there is no room left</span>
+<span class="res">#--&gt; Ring++: 3,000 failures handled</span></pre>
+<div class="printed"><div><span>Ring 1.27 printed</span><pre>Line 2 Error (R4) : Stack Overflow
+(the program stops, exit code 1)</pre></div><div><span>Ring++ printed</span><pre>3,000 failures handled</pre></div></div>
+</article>
+</section>
+<section class="wrap theme" data-theme="wrong" id="wrong"><h2>Wrong answers, given silently</h2>
+<article class="issue">
+<h3>Reading a missing key adds it</h3>
+<p class="status"><span class="st st-solved">Solved</span><a class="ref" href="https://github.com/mayouni/ringpp/blob/main/docs/CORRECTIONS.md#c-13--reading-ahashk-does-not-insert-it" target="_blank" rel="noopener">C-13</a><a class="ref" href="https://github.com/mayouni/ringpp/blob/main/docs/FINDINGS.md#f-49-a-keyed-read-inserts-and-a-positional-write-leaves-rings-key-index-stale--the-two-hash-list-defects-the-map-type-was-built-against" target="_blank" rel="noopener">F-49</a></p>
+<p class="who"><b>Ring 1.27</b> Asking a hash list for a key it does not have inserts that key. A read changes the data it reads.</p>
+<p class="who"><b>Ring++</b> A read never writes.</p>
+<pre class="code"><span class="c"># A hash list with two entries</span>
+aHash = [ :a = 1, :b = 2 ]
+
+<span class="c"># Read an entry that does not exist</span>
+nValue = aHash[:c]
+
+<span class="c"># How many entries are there now?</span>
+? len(aHash)
+<span class="res">#--&gt; Ring 1.27: 3 -- reading :c silently ADDED it to the list</span>
+<span class="res">#--&gt; Ring++: 2 -- a read never writes</span></pre>
+<div class="printed"><div><span>Ring 1.27 printed</span><pre>3</pre></div><div><span>Ring++ printed</span><pre>2</pre></div></div>
+</article>
+<article class="issue">
+<h3>A method overwrites the program's variable</h3>
+<p class="status"><span class="st st-solved">Solved</span><a class="ref" href="https://github.com/mayouni/ringpp/blob/main/docs/CORRECTIONS.md#c-2--a-bare-name-at-the-top-level-is-a-global" target="_blank" rel="noopener">C-2</a></p>
+<p class="who"><b>Ring 1.27</b> A method that assigns a name the program also uses writes the program's variable, silently. Softanza spells its own variables <code>_name_</code> at 175,797 places to avoid it.</p>
+<p class="who"><b>Ring++</b> A method's variables are its own. A global is written <code>$name</code>.</p>
+<pre class="code"><span class="c"># A variable of the program</span>
+cName = "Mansour"
+
+<span class="c"># An object whose method uses a variable with the same name</span>
+oGreeter = new Greeter
+oGreeter.Greet()
+
+<span class="c"># Is the program's variable unchanged?</span>
+? cName
+<span class="res">#--&gt; Ring 1.27: a visitor -- the method silently overwrote it</span>
+<span class="res">#--&gt; Ring++: Mansour -- a method's variables are its own</span>
+
+class Greeter
+	def Greet()
+		cName = "a visitor"</pre>
+<div class="printed"><div><span>Ring 1.27 printed</span><pre>a visitor</pre></div><div><span>Ring++ printed</span><pre>Mansour</pre></div></div>
+</article>
+<article class="issue">
+<h3><code>switch</code> ignores the second value of an <code>on</code></h3>
+<p class="status"><span class="st st-solved">Solved</span></p>
+<p class="who"><b>Ring 1.27</b> <code>on 6, 7</code> is accepted without a word, but only 6 is ever compared.</p>
+<p class="who"><b>Ring++</b> <code>on 6, 7</code> matches either value.</p>
+<pre class="code">nDay = 7
+
+switch nDay
+on 6, 7
+	? "weekend"
+other
+	? "weekday"
+off
+<span class="res">#--&gt; Ring 1.27: weekday -- `on 6, 7` is accepted,</span>
+<span class="res">#    but only its first value is ever compared</span>
+<span class="res">#--&gt; Ring++: weekend</span></pre>
+<div class="printed"><div><span>Ring 1.27 printed</span><pre>weekday</pre></div><div><span>Ring++ printed</span><pre>weekend</pre></div></div>
+</article>
+<article class="issue">
+<h3>A range of two strings answers a string</h3>
+<p class="status"><span class="st st-solved">Solved</span></p>
+<p class="who"><b>Ring 1.27</b> <code>"1":"12"</code> is neither a list nor an error: it is a string, and the program goes on with it.</p>
+<p class="who"><b>Ring++</b> An operator that cannot do what it is asked says so.</p>
+<pre class="code"><span class="c"># A range of numbers is a list</span>
+aNumbers = 1:3
+? type(aNumbers)
+<span class="res">#--&gt; LIST, on both</span>
+
+<span class="c"># A range of two strings that are not single letters</span>
+xRange = "1":"12"
+? type(xRange)
+<span class="res">#--&gt; Ring 1.27: STRING -- no list, and no error</span>
+<span class="res">#--&gt; Ring++: Bad parameter type! -- the operator says it cannot do this</span></pre>
+<div class="printed"><div><span>Ring 1.27 printed</span><pre>LIST
+STRING</pre></div><div><span>Ring++ printed</span><pre>LIST
+Line 7 Bad parameter type!
+(the program stops, exit code 1)</pre></div></div>
+</article>
+</section>
+<section class="wrap theme" data-theme="changed" id="changed"><h2>The language changed under you</h2>
+<article class="issue">
+<h3><code>TRUE</code> can be reassigned</h3>
+<p class="status"><span class="st st-refused">Refused</span></p>
+<p class="who"><b>Ring 1.27</b> After <code>TRUE = 0</code>, every <code>if TRUE</code> in the program takes the other branch.</p>
+<p class="who"><b>Ring++</b> Assigning a constant of the language is refused: the line is not compiled, and the program stops there and says why.</p>
+<pre class="code"><span class="c"># TRUE is a constant of the language... or is it?</span>
+TRUE = 0
+
+if TRUE
+	? "TRUE is true"
+else
+	? "TRUE is false now"
+ok
+<span class="res">#--&gt; Ring 1.27: TRUE is false now</span>
+<span class="res">#--&gt; Ring++: refuses the first line, before anything runs</span></pre>
+<div class="printed"><div><span>Ring 1.27 printed</span><pre>TRUE is false now</pre></div><div><span>Ring++ printed</span><pre>Line 2 is refused: TRUE = 0
+(the line is not compiled; the program stops there)</pre></div></div>
+</article>
+<article class="issue">
+<h3>A program can rename the language's keywords</h3>
+<p class="status"><span class="st st-refused">Refused</span><a class="ref" href="https://github.com/mayouni/ringpp/blob/main/docs/CORRECTIONS.md#c-28--rings-features-that-only-rings-own-programs-use-are-not-reproduced-and-they-stay-loud" target="_blank" rel="noopener">C-28</a></p>
+<p class="who"><b>Ring 1.27</b> <code>ChangeRingKeyword</code> renames a keyword from that line on, silently, for whoever reads the file next.</p>
+<p class="who"><b>Ring++</b> It is refused, by name: a reader of the file sees the language it was written in.</p>
+<pre class="code"><span class="c"># Rename the keyword `see` to `show`, from this line on</span>
+ChangeRingKeyword see show
+
+show "the keyword see is now spelt show"
+<span class="res">#--&gt; Ring 1.27: accepts it, silently, for the rest of the file</span>
+<span class="res">#--&gt; Ring++: refuses it, by name</span></pre>
+<div class="printed"><div><span>Ring 1.27 printed</span><pre>the keyword see is now spelt show</pre></div><div><span>Ring++ printed</span><pre>Line 2 is refused: ChangeRingKeyword see show
+(the line is not compiled; the program stops there)</pre></div></div>
+</article>
+<article class="issue">
+<h3>A loop variable keeps a value the loop never gave it</h3>
+<p class="status"><span class="st st-refused">Refused</span><a class="ref" href="https://github.com/mayouni/ringpp/blob/main/docs/CORRECTIONS.md#c-11--the-loop-variable-is-scoped-to-its-loop" target="_blank" rel="noopener">C-11</a></p>
+<p class="who"><b>Ring 1.27</b> After <code>for nIndex = 1 to 5</code>, <code>nIndex</code> is 6. Four kinds of loop leave four kinds of value behind.</p>
+<p class="who"><b>Ring++</b> The variable belongs to its loop, and reading it afterwards is refused. Run over Softanza, the rule found two real bugs.</p>
+<pre class="code">func Main
+	for nIndex = 1 to 5
+<span class="c">		# the loop's work</span>
+	next
+
+<span class="c">	# What is nIndex once the loop is over?</span>
+	nAfter = nIndex
+	? nAfter
+<span class="res">	#--&gt; Ring 1.27: 6 -- a value the loop never took</span>
+<span class="res">	#--&gt; Ring++: refuses the read -- the variable belongs to its loop</span></pre>
+<div class="printed"><div><span>Ring 1.27 printed</span><pre>6</pre></div><div><span>Ring++ printed</span><pre>Line 7 is refused: loop variable read after its loop: nIndex
+(the line is not compiled; the program stops there)</pre></div></div>
+</article>
+</section>
+<section class="wrap theme" data-theme="late" id="late"><h2>Found only when the line runs</h2>
+<article class="issue">
+<h3>A missing function is found only when its line runs</h3>
+<p class="status"><span class="st st-solved">Solved</span><a class="ref" href="https://github.com/mayouni/ringpp/blob/main/docs/FINDINGS.md#f-46-only-functions-are-bare-callable-in-ring--five-resolution-facts-verified-and-what-it-took-to-turn-them-into-a-zero-false-positive-r3-rule" target="_blank" rel="noopener">F-46</a></p>
+<p class="who"><b>Ring 1.27</b> The program runs up to the call, then fails -- in production, on the day that line is reached.</p>
+<p class="who"><b>Ring++</b> <code>rnxc check</code> reports it, with its line, before anything runs.</p>
+<pre class="code">? "Starting the payroll"
+SendPayslips()
+<span class="res">#--&gt; Ring 1.27: prints the first line, then fails on the second</span>
+<span class="res">#--&gt; Ring++: `rnxc check` reports it before anything runs</span></pre>
+<div class="printed"><div><span>Ring 1.27 printed</span><pre>Starting the payroll
+Line 2 Error (R3) : Calling Function without definition: sendpayslips
+(the program stops, exit code 1)</pre></div><div><span>Ring++ printed</span><pre>rnxc check p.ring, before running it:
+line 2: SendPayslips() is not defined anywhere this file can reach — Error (R3) the moment this line runs</pre></div></div>
+</article>
+</section>
+<section class="wrap theme" data-theme="speed" id="speed"><h2>Speed</h2>
+<p class="lead">Three choices in Ring's design cost it the most: strings copied at every call, lists that are
+linked, and methods found by name at every call. Ring++ replaces all three. The same programs, on the same machine, minima
+of three runs, every answer checked equal:</p>
+<table class="perf"><thead><tr><th>the program</th><th>Ring 1.27</th><th>Ring++</th><th>why</th></tr></thead><tbody>
+<tr><td>A 1 MB string, passed to a function 2,000 times</td><td class="num" data-label="Ring 1.27">1,348 ms</td><td class="num" data-label="Ring++"><b>below 1 ms</b></td><td data-label="why">Ring copies a string at every call; Ring++ passes it by reference.</td></tr>
+<tr><td>Binary search: 150,000 lookups in 200,000 numbers</td><td class="num" data-label="Ring 1.27">188,741 ms</td><td class="num" data-label="Ring++"><b>93 ms</b></td><td data-label="why">A Ring list is linked, so reaching item n walks to it; a Ring++ list is an array.</td></tr>
+<tr><td>Merge sort of 200,000 numbers</td><td class="num" data-label="Ring 1.27">5,222 ms</td><td class="num" data-label="Ring++"><b>242 ms</b></td><td data-label="why">Lists, appends and calls.</td></tr>
+<tr><td>Matrix multiplication, 220 by 220</td><td class="num" data-label="Ring 1.27">1,790 ms</td><td class="num" data-label="Ring++"><b>245 ms</b></td><td data-label="why">Nested lists and arithmetic.</td></tr>
+<tr><td>Sieve of Eratosthenes up to 4,000,000</td><td class="num" data-label="Ring 1.27">1,335 ms</td><td class="num" data-label="Ring++"><b>237 ms</b></td><td data-label="why">Integer arithmetic over a list.</td></tr>
+<tr><td>Recursive Fibonacci of 31</td><td class="num" data-label="Ring 1.27">433 ms</td><td class="num" data-label="Ring++"><b>100 ms</b></td><td data-label="why">Function calls.</td></tr>
+</tbody></table>
+<p>The first measurements of the VM, and what flatters them, are recorded in <a href="https://github.com/mayouni/ringpp/blob/main/NOTES.md">NOTES.md</a>.</p></section>
+<section class="wrap narrow" id="kept">
+  <h2>What Ring++ keeps from Ring, for now</h2>
+  <p>Some of Ring's behaviours are kept on purpose, so that existing programs keep their meaning: a list printed one item per
+  line, a named argument that arrives as a two-element list, <code>decimals()</code> as a setting for the whole program, a
+  string measured in bytes. They are not solved, so they are not listed above. They are decisions, explained below, and the
+  next language, Haro, is where they change.</p>
+</section>
+<section class="wrap narrow" id="decisions">
+  <h2>Every decision, explained</h2>
+  <p>Where Ring++ answers differently from Ring, it is never by accident. Each difference is a decision, taken for one defect
+  at a time and written down with what it costs. There are four kinds.</p>
+  <p><b>Keep Ring's answer</b>, so existing programs keep their meaning, even where Ring's choice is questionable.
+  <code>decimals(2)</code> still changes every number the program prints from then on. A bare name at the top level is still
+  a global. A <code>load</code> that names a missing file still stops the program before it starts, exactly as on Ring.</p>
+  <p><b>Fix it silently</b>, where no correct program can notice. Reading <code>aHash[:key]</code> no longer inserts the key.
+  An object taken from a list no longer ends the program when it meets an operator. Leaving a <code>try</code> through
+  <code>return</code> also leaves its handler, from a function as from a method.</p>
+  <p><b>Refuse, with a rule</b>, where Ring's behaviour is a trap. The program is refused before it runs, and
+  <code>rnxc check</code> names every place the rule applies: a loop variable read after its loop, a numeric
+  <code>for</code> whose bound changes while it runs.</p>
+  <p><b>Drop it, and say so</b>, for what only Ring's own programs use and Softanza never does: renaming keywords, packages,
+  raw memory pointers. Each is refused by name rather than half-built.</p>
+  <p>All 31 decisions are on record, each with its reasons and its cost, in
+  <a href="https://github.com/mayouni/ringpp/blob/main/docs/CORRECTIONS.md">the corrections register</a>.</p>
+</section>
+<section class="wrap narrow" id="findings">
+  <h2>Every finding, explained</h2>
+  <p>The findings are what Ring's VM was measured to do: 126 of them, each from a program that ran. They fall into four
+  families.</p>
+  <p><b>Costs the source does not show.</b> A string passed to a function is copied, every time. A loop written
+  <code>for i = 1 to len(s)</code> measures the string again at every turn, which makes it quadratic. How fast a list is read
+  depends on how it was built and on where it was read last. On identical programs, Ring measured 9 to 16 times behind Lua.</p>
+  <p><b>Traps.</b> <code>N</code> and <code>n</code> are the same variable. Every <code>func</code> written after the first
+  <code>class</code> of a file becomes a method of that class. A string has no escapes: <code>"\n"</code> is two characters.
+  <code>char(300)</code> is <code>char(44)</code>, silently.</p>
+  <p><b>Rules that Ring++ had to learn, to run Ring's programs as they are.</b> <code>:Name = value</code> is a two-element
+  list. Ring calls <code>Main()</code> by itself after the top level. Every operator on an object calls its
+  <code>operator()</code> method. <code>eval</code> runs in the scope of the function that calls it.</p>
+  <p><b>Ring's own failures.</b> <code>memcpy()</code> ending the process on a zero byte; empty catch blocks filling the stack;
+  an object from a list ending a program without a message; the Linux build crashing as it exits.</p>
+  <p>All 126, each with the program that shows it, are in <a href="https://github.com/mayouni/ringpp/blob/main/docs/FINDINGS.md">the findings</a>.</p>
+</section>
+<script>
+(function () {
+  var sel = document.getElementById('theme');
+  if (!sel) return;
+  function show() {
+    var v = sel.value;
+    document.querySelectorAll('section.theme').forEach(function (s) {
+      s.hidden = !(v === 'all' || s.getAttribute('data-theme') === v);
+    });
+  }
+  sel.addEventListener('change', show);
+  if (location.hash && document.querySelector('section.theme' + location.hash)) {
+    sel.value = location.hash.slice(1);
+  }
+  show();
+})();
+</script>
+
+<footer>
+  <div class="wrap">
+    <span>Ring++ &middot; MIT</span>
+    <span>Ring is the work of Mahmoud Fayed (MIT); its 1.27 VM is vendored here, unchanged, as the oracle Ring++ is measured against</span>
+    <a href="https://github.com/mayouni/ringpp-old" target="_blank" rel="noopener">The library era, archived</a>
+    <a class="sp" href="https://github.com/mayouni/ringpp" target="_blank" rel="noopener">GitHub</a>
+  </div>
+</footer>
+
+</body>
+</html>

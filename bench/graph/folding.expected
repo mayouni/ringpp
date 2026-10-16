@@ -1,0 +1,4 @@
+FILE|folding.ring
+FUNC|foo|1
+FUNC|Bar|3
+CALL|Bar|foo|static

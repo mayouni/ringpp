@@ -1,0 +1,66 @@
+# The Ring Standard Library
+# Common Functions and classes for applications
+# 2016-2017, Mahmoud Fayed <msfclipper@yahoo.com>
+# 2016-2017, CalmoSoft <calmosoft@gmail.com>
+
+# Constant used by the Sleep() function
+	$C_SECONDSIZE = ClocksPerSecond()  C_SECONDSIZE = $C_SECONDSIZE
+
+# Constant used by the ReadLine() function
+	$C_LINESIZE = 256  C_LINESIZE = $C_LINESIZE
+
+# Constants used by SystemSilent()
+	$C_WINDOWS_NOOUTPUTNOERROR = " >nul 2>nul"  C_WINDOWS_NOOUTPUTNOERROR = $C_WINDOWS_NOOUTPUTNOERROR
+	$C_LINUX_NOOUTPUTNOERROR   = " > /dev/null"  C_LINUX_NOOUTPUTNOERROR = $C_LINUX_NOOUTPUTNOERROR
+
+# Time Info Map
+	$aTimeInfoMap = [
+	        // Time info
+	        :hour_24      = 7,
+	        :hour_12      = 8,
+	        :minutes      = 11,
+	        :seconds      = 13,
+	        :time         = 17,
+	        // Date info
+	        :day_short    = 1,
+	        :day_long     = 2,
+		:month_short  = 3,
+	        :month_long   = 4,
+		:date_time    = 5,
+		:day          = 6,
+		:day_year     = 9,
+		:month_year   = 10,
+		:am_pm        = 12,
+		:week_year    = 14,
+		:day_week     = 15,
+	        :date         = 16,
+		:year_century = 18,
+	        :year         = 19,
+		:time_zone    = 20,
+		:percent_sign = 21
+	]  aTimeInfoMap = $aTimeInfoMap
+
+# List2Code Tabs Counter 
+	$List2CodeTabsCounter = 0
+
+# Parameters
+	$C_ERROR_EXPECTLIST = "Error: Bad parameter type - The function expect a list!"  C_ERROR_EXPECTLIST = $C_ERROR_EXPECTLIST
+	$C_ERROR_EMPTYLIST  = "Error: No items in the list"  C_ERROR_EMPTYLIST = $C_ERROR_EMPTYLIST
+
+# Flag used by MatrixMulti() function
+
+	$C_FLAGSHOWSOLUTION = 0  C_FLAGSHOWSOLUTION = $C_FLAGSHOWSOLUTION
+
+# ---------------------------------------------------------------------
+# RING++'S COPY of Ring's stdlib.rh (vendor/ring-stdlib, which the
+# ORACLE still loads unchanged). Every line number is Ring's; this note
+# is at the end so that none moves.
+#
+# stdlibcore's functions read these names BARE -- Sleep() reads
+# C_SECONDSIZE, List2Code() keeps its indent in List2CodeTabsCounter --
+# and under Rule A a bare name in a function is that function's local,
+# so Ring++ refused every one of those functions, and sleep() and
+# list2code(), which Softanza calls, raised. Each constant is defined
+# under its $ name, which stdlibcore reads, and the bare name is kept
+# beside it on the same line for a program that reads it. The counter is
+# mutable state of List2Code alone, so it is $ only. 2026-09-27.

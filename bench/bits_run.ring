@@ -1,0 +1,13 @@
+load "bits.ring"
+? BAnd(5, 1)
+? BAnd(255, 15)
+? BOr(6, 1)
+? BXor(5, 1)
+? BShl(1, 3)
+? BShl(1, 32)
+? BShr(16, 2)
+? BShr(-1, 1)
+? BNot(5)
+? BStr(3)
+? BFloat(1)
+? BMix(171, 205)

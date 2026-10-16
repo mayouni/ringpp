@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ring++</title>
+<meta name="description" content="Ring++ is a register VM and a compiler for Ring, in one binary: it runs the Ring code that exists, Softanza first, with no Ring underneath, and it is the bridge to Haro.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://mayouni.github.io/ringpp/">
+<meta property="og:title" content="Ring++">
+<meta property="og:description" content="Ring++ is a register VM and a compiler for Ring, in one binary: it runs the Ring code that exists, Softanza first, with no Ring underneath, and it is the bridge to Haro.">
+<meta property="og:image" content="https://mayouni.github.io/ringpp/ringpp-logo.jpg">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="style.css?v=2.0.1">
+</head>
+<body>
+
+<nav>
+  <div class="wrap">
+    <a class="brand" href="index.html"><img src="favicon.svg" alt="">Ring<span>++</span></a>
+    <a href="why.html">Why we left Ring</a><a href="issues.html">Ring's issues, solved</a><a href="how.html">How it works</a><a href="start.html">Start here</a>
+    <a class="repo" href="https://github.com/mayouni/ringpp" target="_blank" rel="noopener" aria-label="Ring++ on GitHub"><svg viewBox="0 0 16 16" width="22" height="22" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg></a>
+    <a class="cta" href="https://github.com/mayouni/ringpp/releases/latest" target="_blank" rel="noopener">Get it <span class="newtab" aria-hidden="true">&#8599;</span></a>
+  </div>
+</nav>
+
+<header class="hero wrap">
+  <img class="logo" src="ringpp-logo.jpg" alt="Ring++">
+  <h1>Your Ring programs, on a runtime <em>you control</em>.</h1>
+  <p class="sub">Ring++ runs programs written in the Ring language, without Ring. It is one program of 5&nbsp;MB, for Windows
+  and Linux, that compiles Ring code and runs it &mdash; faster than Ring, and refusing what it cannot run correctly instead of
+  giving a wrong answer. It is built for the code that already exists: <a href="https://github.com/mayouni/stzlib"
+  target="_blank" rel="noopener">Softanza</a>, its 300,000 lines, and the applications built on them.</p>
+  <div class="actions">
+    <a class="btn primary" href="start.html">Start here: one folder, one program</a>
+    <a class="btn ghost" href="why.html">Why Ring++ left Ring</a>
+  </div>
+</header>
+
+<section class="wrap narrow">
+  <h2>What changed</h2>
+  <p>Until August 2026, Ring++ was a library that ran inside Ring, and a contribution to it. It is now the runtime itself. On
+  14 October 2026 I retired Ring from all my projects: Softanza, and the customers who depend on it, run on Ring++, and the
+  work goes on towards Haro, the language that comes next.</p>
+  <p><a href="why.html">Why, technically and in how Ring is governed</a>, is a page of its own. <a href="issues.html">The
+  issues of Ring that Ring++ solves</a> are another, each shown by a program run on both. The library era is
+  <a href="https://github.com/mayouni/ringpp-old" target="_blank" rel="noopener">archived, read-only</a>.</p>
+</section>
+
+<section class="wrap">
+  <h2>What it is</h2>
+  <div class="grid">
+    <div class="card">
+      <h3>It runs Ring as it is</h3>
+      <p>Every answer is compared with Ring 1.27 itself, built from its own source. Where Ring++ answers differently, it is a
+      decision on record, never an accident.</p>
+    </div>
+    <div class="card">
+      <h3>It is fast by design</h3>
+      <p>Lists that are arrays, strings passed without copying, methods found once instead of at every call: the places where
+      Ring's design costs it most, replaced.</p>
+    </div>
+    <div class="card">
+      <h3>It refuses what it cannot run correctly</h3>
+      <p>The compiler is also the checker. A line it cannot run correctly is refused with its reason, instead of failing in
+      production on the day that line is reached.</p>
+    </div>
+    <div class="card">
+      <h3>It stands on its own ground</h3>
+      <p>One program, no C compiler, nothing downloaded at run time. Nothing it depends on can be withdrawn by anyone else,
+      which is why it exists.</p>
+    </div>
+  </div>
+</section>
+
+<section class="wrap narrow">
+  <h2>Measured, not promised</h2>
+  <table class="perf">
+    <thead><tr><th>what is measured, before every release</th><th>the result</th></tr></thead>
+    <tbody>
+      <tr><td>Softanza's own tests: the checks that pass on Ring, passing on Ring++</td><td data-label="the result">8,540 of 8,540 on Windows, 7,873 of 7,873 on Linux</td></tr>
+      <tr><td>Ring programs compared with Ring, line by line</td><td data-label="the result">5,112</td></tr>
+      <tr><td>Speed against Ring 1.27, on the same programs</td><td data-label="the result"><a href="issues.html#speed">4 to 2,000 times faster</a></td></tr>
+      <tr><td>What has to be installed beside it</td><td data-label="the result">nothing</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<section class="wrap narrow">
+  <h2>The road</h2>
+  <ol class="steps">
+    <li><b>Ring++, now.</b> The bridge: existing Ring code keeps running, Softanza first, on a runtime whose every decision
+    sits in one open repository.</li>
+    <li><b>Haro, next.</b> A new language on this VM. It keeps what makes Ring worth writing in &mdash; its simple syntax, its
+    many paradigms, the declarative brace block first among them &mdash; and leaves the rest behind. It will be announced on
+    its own.</li>
+  </ol>
+</section>
+
+<footer>
+  <div class="wrap">
+    <span>Ring++ &middot; MIT</span>
+    <span>Ring is the work of Mahmoud Fayed (MIT); its 1.27 VM is vendored here, unchanged, as the oracle Ring++ is measured against</span>
+    <a href="https://github.com/mayouni/ringpp-old" target="_blank" rel="noopener">The library era, archived</a>
+    <a class="sp" href="https://github.com/mayouni/ringpp" target="_blank" rel="noopener">GitHub</a>
+  </div>
+</footer>
+
+</body>
+</html>

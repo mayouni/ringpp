@@ -1,0 +1,5 @@
+FILE|unfinished.ring
+FUNC|Good|1
+FUNC|Bad|3
+UNFINISHED|Bad
+CALL|Bad|Good|static

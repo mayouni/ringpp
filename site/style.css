@@ -1,0 +1,190 @@
+/* Ring++ site -- one stylesheet for every page.
+
+   Set by the StzZui constitution (rules.json), and checked against it:
+     107  three sizes and no more -- the hero voice (h1), the title voice (h2) and ONE reading size for everything
+          else: prose, labels, tables, the menu, the footer. Monospace is set a little smaller ONLY so that it LOOKS
+          the reading size (optical parity), never to fit more in.
+     105  reading text is never below 1rem, and never lighter than 4.5:1 against its background (prose aims at 7:1).
+     113  a label sits beneath what it classifies, in the flow, the same at every width.
+     117  colour on a record is spent in one place: the status under an issue's title, from the success family.
+     110  nothing floats over the reading: the menu holds its own strip at the top and stops sticking on a phone.
+     114  long lines wrap; nothing scrolls sideways while the page has width to give. */
+
+:root {
+    color-scheme: light;
+    --bg: #ffffff;
+    --panel: #ffffff;
+    --ink: #1c2126;
+    --ink-soft: #4a5560;      /* 7.5:1 on white: prose may use it */
+    --accent: #d43e12;        /* the flame of the logo */
+    --accent-3: #f2790c;
+    --accent-2: #0c7d8f;      /* the ring of the logo */
+    --accent-soft: #fdefe7;
+    --accent-ink: #ffffff;
+    --flame: linear-gradient(135deg, var(--accent-2) 0%, var(--accent) 55%, var(--accent-3) 100%);
+    --border: #e2e8ee;
+    --rule: #c3cede;
+    --code-bg: #f7f9fc;
+    --code-ink: #24313f;
+    --code-border: #dbe3ec;
+    --k: #8b3fc9;   /* keywords */
+    --s: #0a7d4b;   /* strings */
+    --n: #a83a0f;   /* numbers */
+    --c: #5c6773;   /* comments: 5.9:1 on the code panel */
+    --res: #075e6b; /* what a line prints: 7.2:1 on the code panel */
+    --ok-bg: #e7f6ee; --ok-ink: #0a5c36; --ok-line: #bfe5cf;   /* the success family, the one status colour */
+    --mono: "Cascadia Code", Consolas, "SF Mono", monospace;
+
+    --read: 1.2rem;        /* 19.2px -- the one reading size */
+    --title: 1.6rem;       /* 25.6px -- the title voice */
+    --hero: clamp(2rem, 5vw, 2.6rem);   /* the hero voice */
+    --mono-size: 1.08rem;  /* optical parity with --read */
+}
+
+* { box-sizing: border-box; }
+body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font: var(--read)/1.75 system-ui, "Segoe UI", -apple-system, sans-serif;
+    -webkit-font-smoothing: antialiased;
+}
+.wrap { max-width: 66rem; margin: 0 auto; padding-left: 1.25rem; padding-right: 1.25rem; }
+.narrow { max-width: 46rem; }
+a { color: var(--accent); }
+
+/* ---------------------------------------------------------------- the menu */
+nav { position: sticky; top: 0; z-index: 20; background: var(--bg); border-bottom: 1px solid var(--border); }
+nav .wrap { display: flex; flex-wrap: wrap; align-items: center; gap: .3rem 1.4rem; padding-top: .6rem; padding-bottom: .6rem; }
+nav a { color: var(--ink-soft); text-decoration: none; }
+nav a:hover { color: var(--ink); }
+nav a.active { color: var(--accent); font-weight: 600; }
+nav .brand { margin-right: auto; font-weight: 700; color: var(--ink); display: inline-flex; align-items: center; }
+nav .brand img { width: 26px; height: 26px; display: block; flex: 0 0 auto; margin-right: .5rem; }
+nav .brand span { color: var(--accent); }
+nav a.repo { display: inline-flex; align-items: center; }
+nav a.repo svg { width: 1.1em; height: 1.1em; fill: currentColor; }
+nav .cta { background: var(--flame); color: var(--accent-ink); padding: .2rem 1rem; border-radius: 7px; font-weight: 600; }
+nav .cta:hover { color: var(--accent-ink); opacity: .9; }
+.newtab { display: inline-block; transform: translateY(-.06em); opacity: .8; }
+@media (max-width: 899px) {
+    nav { position: static; }
+    nav .brand { width: 100%; margin-right: 0; }
+}
+
+/* ---------------------------------------------------------------- the three voices */
+h1, h2, h3 { line-height: 1.25; text-wrap: balance; }
+h1 { font-size: var(--hero); letter-spacing: -.02em; margin: .3rem 0 1rem; }
+h1 em { font-style: normal; background: var(--flame); -webkit-background-clip: text; background-clip: text; color: transparent; }
+h2 { font-size: var(--title); letter-spacing: -.01em; margin: 0 0 .8rem; }
+h3 { font-size: var(--read); font-weight: 700; margin: 0 0 .4rem; }
+p { margin: 0 0 1.1rem; }
+.lead { color: var(--ink-soft); max-width: 46rem; margin: 0 0 1.6rem; text-wrap: pretty; }
+
+section { padding: 4rem 0 .5rem; }
+header.page { padding-top: 3.2rem; padding-bottom: .5rem; }
+
+/* ---------------------------------------------------------------- the home page */
+.hero { text-align: center; padding-top: 3.5rem; padding-bottom: 1rem; }
+.hero img.logo { width: 180px; height: auto; margin-bottom: .4rem; }
+.hero p.sub { color: var(--ink-soft); max-width: 44rem; margin: 0 auto 1.8rem; text-wrap: pretty; }
+.actions { display: flex; gap: .8rem; justify-content: center; flex-wrap: wrap; }
+.btn { display: inline-block; padding: .6rem 1.5rem; border-radius: 8px; text-decoration: none; font-weight: 600;
+       border: 1px solid var(--accent); }
+.btn.primary { background: var(--flame); border-color: transparent; color: var(--accent-ink); }
+.btn.ghost { color: var(--accent); background: transparent; }
+.btn:hover { opacity: .9; }
+
+/* A card reads; it does not act (Rule 119): no link inside one. */
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr)); gap: 1rem; }
+.grid > * { min-width: 0; }
+.card { background: var(--panel); border: 1px solid var(--rule); border-radius: 12px; padding: 1.3rem 1.4rem; }
+.card p { margin: 0; color: var(--ink-soft); }
+
+.steps { counter-reset: s; list-style: none; padding: 0; }
+.steps li { counter-increment: s; position: relative; padding-left: 3rem; margin-bottom: 1.2rem; color: var(--ink-soft); }
+.steps li::before {
+    content: counter(s); position: absolute; left: 0; top: .1rem;
+    width: 2.1rem; height: 2.1rem; border-radius: 50%;
+    background: var(--accent-soft); color: var(--accent); font-weight: 700; display: grid; place-items: center;
+}
+.steps li b, ul.plain li b { color: var(--ink); }
+ul.plain { padding-left: 1.2rem; margin: 0 0 1.4rem; }
+ul.plain li { margin-bottom: 1rem; color: var(--ink-soft); }
+
+/* ---------------------------------------------------------------- code */
+pre, code { font-family: var(--mono); font-variant-ligatures: none; tab-size: 4; }
+code { font-size: var(--mono-size); }
+pre.code {
+    background: var(--code-bg); color: var(--code-ink);
+    border: 1px solid var(--code-border); border-radius: 10px;
+    margin: 0 0 1.4rem; padding: 1.1rem 1.2rem;
+    font-size: var(--mono-size); line-height: 1.65;
+    white-space: pre-wrap; overflow-wrap: anywhere; overflow-x: hidden;
+}
+pre.code code { font-size: inherit; }
+pre.code .k { color: var(--k); font-weight: 600; }
+pre.code .s { color: var(--s); }
+pre.code .n { color: var(--n); }
+pre.code .c { color: var(--c); font-style: italic; }
+pre.code .res { color: var(--res); font-weight: 600; }
+/* Arabic in a code panel: a proportional face, sized to LOOK the reading size -- optical parity, Rule 107's own exception. */
+.ar { font-family: "Segoe UI", system-ui, sans-serif; font-size: 1.25em; line-height: 1; }
+
+/* ---------------------------------------------------------------- tables */
+table.perf { width: 100%; border-collapse: collapse; margin: 0 0 1.4rem; }
+table.perf th, table.perf td { text-align: left; padding: .6rem .7rem; border-bottom: 1px solid var(--border); vertical-align: top; }
+table.perf th { color: var(--ink-soft); font-weight: 600; border-bottom-color: var(--rule); }
+table.perf td.num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+@media (max-width: 699px) {
+    /* A phone stacks a row: each value under the name of its column, so nothing scrolls sideways. */
+    table.perf thead { display: none; }
+    table.perf tr { display: block; padding: .8rem 0; border-bottom: 1px solid var(--rule); }
+    table.perf td, table.perf td.num { display: block; border: 0; padding: .1rem 0; text-align: left; white-space: normal; }
+    table.perf td[data-label]::before { content: attr(data-label) ": "; color: var(--ink-soft); }
+}
+
+/* ---------------------------------------------------------------- the issues */
+.filter { display: flex; align-items: center; gap: .8rem; flex-wrap: wrap; margin: 0 0 1rem; }
+.filter label { font-weight: 600; }
+.filter select {
+    font: inherit; color: var(--ink); background: var(--panel);
+    border: 1px solid var(--rule); border-radius: 8px; padding: .35rem .8rem; max-width: 100%;
+}
+section.theme { padding-top: 3.5rem; }
+section.theme > h2 { padding-bottom: .5rem; border-bottom: 2px solid var(--rule); margin-bottom: 1.6rem; }
+
+/* Each issue is its own panel: a reader always knows where one ends and the next begins. */
+.issue {
+    border: 1px solid var(--rule); border-left: 5px solid var(--accent-2); border-radius: 12px;
+    padding: 1.4rem 1.6rem .4rem; margin: 0 0 2.4rem; background: var(--panel);
+}
+.issue h3 { margin-bottom: .3rem; }
+.issue p.status { margin: 0 0 1rem; display: flex; flex-wrap: wrap; gap: .5rem .8rem; align-items: center; }
+.st { display: inline-block; padding: 0 .8em; border-radius: 100px; font-weight: 600; border: 1px solid var(--ok-line);
+      background: var(--ok-bg); color: var(--ok-ink); }
+.ref { color: var(--ink-soft); }
+.ref:hover { color: var(--accent); }
+.issue p.who { margin: 0 0 .6rem; color: var(--ink-soft); }
+.issue p.who b { color: var(--ink); display: inline-block; min-width: 6.2rem; }
+.issue pre.code { margin: 1rem 0; }
+.printed { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin: 0 0 1rem; }
+.printed > div { min-width: 0; }
+.printed span { display: block; font-weight: 600; margin-bottom: .3rem; }
+.printed pre {
+    margin: 0; padding: .8rem 1rem; border-radius: 10px; border: 1px solid var(--code-border);
+    background: var(--code-bg); color: var(--code-ink); font-size: var(--mono-size); line-height: 1.6;
+    white-space: pre-wrap; overflow-wrap: anywhere;
+}
+@media (max-width: 699px) {
+    .issue { padding: 1.1rem .9rem .2rem; border-left-width: 4px; }
+    .issue pre.code, .printed pre { padding: .7rem .75rem; }
+    .issue p.who b { display: block; }
+    .printed { grid-template-columns: 1fr; }
+}
+
+/* ---------------------------------------------------------------- footer */
+footer { border-top: 1px solid var(--border); margin-top: 3rem; padding: 2rem 0 3rem; color: var(--ink-soft); }
+footer a { color: var(--accent); text-decoration: none; }
+footer .wrap { display: flex; gap: .6rem 1.4rem; flex-wrap: wrap; align-items: center; }
+footer .sp { margin-left: auto; }

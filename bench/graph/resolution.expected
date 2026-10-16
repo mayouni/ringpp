@@ -1,0 +1,11 @@
+FILE|resolution.ring
+FUNC|Two|1
+FUNC|Three|3
+CLASS|K||5
+METHOD|K|M|6
+METHOD|K|M2|9
+METHOD|K|len|11
+CLASS|L||13
+METHOD|L|N|14
+CALL|K.M|K.len|static
+CALL|K.M|Two|static

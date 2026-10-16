@@ -1,0 +1,80 @@
+# Build output and caches. .zig-cache alone is ~488 MB and rebuilds on
+# demand; zig-out is the produced binary.
+.zig-cache/
+zig-out/
+# the Linux cross-build (item 8): -Dtarget=x86_64-linux-gnu --prefix zig-out-linux
+zig-out-linux/
+
+# B2's runtime stubs (tests/b2_runtimes.ps1) -- build output, not vendored
+# source: 5 platforms, ~6 s to regenerate. Whether these ship the way bin/
+# does is a B3 question, once `ringpp build` is the thing consuming them.
+# Matches only the platform subdirectories -- runtime/README.md, sitting
+# directly in runtime/, is untouched by this pattern and stays tracked.
+runtime/*/
+
+# Scratch data written by examples. Example 05 builds a data file and
+# removes it, but a run killed mid-way leaves one behind.
+_example*.bin
+_p05*.bin
+_probe*.bin
+
+# Ring/Softanza engine artefacts
+*.ringo
+*.obj
+*.pdb
+
+# Editor / OS noise
+.DS_Store
+Thumbs.db
+*~
+
+# Ring++ is dependency-free. `.central/` is coordination state from
+# the Softanza estate's harness -- an inbox, an outbox and a status page --
+# which was tracked here and does not belong in a public Ring package.
+# Ignored rather than merely deleted: the harness may write it again, and a
+# regenerated file must not silently re-enter the history.
+.central/
+
+# Same reason: Central rewrites WHATS-NEXT.md with the estate's cross-repo
+# plan (reference-design versions, the UI law, contracts) and instructions to
+# open a mailbox under D:/GitHub/softanza. None of that is Ring++'s roadmap
+# or a reader's business. Ring++'s own plan is docs/PHASE_PLAN.md.
+WHATS-NEXT.md
+
+# Android demo: the build directory `ringpp build --target android` writes,
+# which holds the generated manifest, Java, dex and the debug signing key.
+# A signing key never belongs in a repository, even a throwaway one.
+#
+# `android/report.txt` was ignored here until 2026-08-26. It was not a build
+# artefact -- it was the demo program's own output, proof that `ring -go` was
+# executing the program while packaging it (FINDINGS F-37). Ignoring it made
+# the symptom invisible for as long as the entry existed. The entry is gone,
+# and so is the behaviour that produced the file.
+android/out/
+android/app.ringo
+
+# The original phone photograph. The site ships the 94 KB jpg derivative;
+# this 1.7 MB source stays local so the Pages branch does not carry weight
+# no page references.
+site/ringpp-on-android.png
+
+# The runtime and compiler builds (rnx-*, rnxc) and the arm64 cross-builds
+# that used to live in rnx-spike; plus the engine-shim and file-I/O probe
+# scratch its benches write.
+rnx.exe
+rnx-arm64
+rnx-*-arm64
+bench/rppdemo.dll
+bench/rppdemo.lib
+bench/rppdemo.obj
+bench/_fio_test.txt
+bench/demo.dll
+
+# The demo engine and the demo bridge: build output of bench/engine_shim.zig
+# and bench/bridge_demo.zig, rebuilt by the gate in seconds.
+bench/rppbridge.*
+
+# bench/stop34.py imports clock34 for its tree paths, so Python
+# writes bytecode beside the scripts.
+__pycache__/
+*.pyc

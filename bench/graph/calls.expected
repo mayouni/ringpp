@@ -1,0 +1,15 @@
+FILE|calls.ring
+FUNC|Top|1
+FUNC|Helper|3
+CLASS|A||5
+METHOD|A|Foo|6
+METHOD|A|Bar|10
+CLASS|B|A|12
+METHOD|B|Baz|13
+CALL|A.Foo|A.Bar|static
+CALL|A.Foo|Top|static
+CALL|B.Baz|A.Bar|static
+CALL|B.Baz|A.Foo|static
+CALL|B.Baz|Bar|dynamic|1
+CALL|B.Baz|Unknown|dynamic|0
+CALL|Top|Helper|static

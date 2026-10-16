@@ -1,0 +1,34 @@
+{
+  "$schema": "https://tree-sitter.github.io/tree-sitter/assets/schemas/config.schema.json",
+  "grammars": [
+    {
+      "name": "ring",
+      "camelcase": "Ring",
+      "scope": "source.ring",
+      "path": ".",
+      "file-types": [
+        "ring"
+      ]
+    }
+  ],
+  "metadata": {
+    "version": "0.2.0",
+    "license": "MIT",
+    "description": "Ring grammar for tree-sitter, vendored by ringpp",
+    "authors": [
+      {
+        "name": "Mansour Ayouni"
+      }
+    ]
+  },
+  "bindings": {
+    "c": true,
+    "go": false,
+    "node": false,
+    "python": false,
+    "rust": false,
+    "swift": false,
+    "kotlin": false,
+    "zig": false
+  }
+}

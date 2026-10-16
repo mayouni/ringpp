@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ring++ -- How it works</title>
+<meta name="description" content="The parser, the compiler, the register VM, the oracle built from Ring's own source, and what is measured before every release.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://mayouni.github.io/ringpp/how.html">
+<meta property="og:title" content="Ring++ -- How it works">
+<meta property="og:description" content="The parser, the compiler, the register VM, the oracle built from Ring's own source, and what is measured before every release.">
+<meta property="og:image" content="https://mayouni.github.io/ringpp/ringpp-logo.jpg">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="style.css?v=2.0.1">
+</head>
+<body>
+
+<nav>
+  <div class="wrap">
+    <a class="brand" href="index.html"><img src="favicon.svg" alt="">Ring<span>++</span></a>
+    <a href="why.html">Why we left Ring</a><a href="issues.html">Ring's issues, solved</a><a href="how.html" class="active">How it works</a><a href="start.html">Start here</a>
+    <a class="repo" href="https://github.com/mayouni/ringpp" target="_blank" rel="noopener" aria-label="Ring++ on GitHub"><svg viewBox="0 0 16 16" width="22" height="22" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg></a>
+    <a class="cta" href="https://github.com/mayouni/ringpp/releases/latest" target="_blank" rel="noopener">Get it <span class="newtab" aria-hidden="true">&#8599;</span></a>
+  </div>
+</nav>
+
+<header class="page wrap narrow">
+  <h1>How <em>Ring++</em> works &mdash; and how it is measured</h1>
+  <p class="lead">One binary, <code>rnxc</code>, holds the whole runtime: a parser, a compiler and a register VM. Next to it
+  sits a second runtime that is never shipped: Ring 1.27 itself, built from its own source, so that "compatible" is a
+  measurement.</p>
+</header>
+
+<section class="wrap narrow">
+  <h2>The pieces</h2>
+  <ul class="plain">
+    <li><b>The parser.</b> Youssef Saeed's tree-sitter grammar for Ring, vendored. It gives every node its exact span, which
+    is what lets the compiler point at the statement it refuses.</li>
+    <li><b>The compiler.</b> Ring source to bytecode: name resolution done once, at compile time; type inference over the
+    whole program; methods resolved to slots where the receiver is known; and a refusal, with its reason, for anything it
+    cannot compile correctly. <code>rnxc check</code> is the same compiler reporting instead of running.</li>
+    <li><b>The VM.</b> 16-byte tagged values, contiguous lists, strings passed by reference, lists and objects copied at
+    assignment as Ring's semantics require; register windows for calls; threaded dispatch; mimalloc underneath.</li>
+    <li><b>The native interface.</b> A small ABI in Zig. Softanza's engine &mdash; 89 domains: strings, Unicode, regular
+    expressions, graphs, neural models, GPU, sound and more &mdash; is built for Ring++ from its own unchanged source, with one
+    file swapped. Zip is built in.</li>
+    <li><b>The compiled image.</b> A program is compiled once; later runs start from the image: Softanza's 614 files in
+    0.1&nbsp;s instead of 10.</li>
+  </ul>
+</section>
+
+<section class="wrap narrow">
+  <h2>The oracle</h2>
+  <p>Ring 1.27's VM source is vendored verbatim, under its MIT licence, and built with the same Zig toolchain on five
+  platforms. That build &mdash; not an installation anyone else controls &mdash; is what every comparison is made against.
+  It is never shipped and never the product; it exists so that every claim of compatibility can be checked.</p>
+</section>
+
+<section class="wrap narrow">
+  <h2>What is measured, before every release</h2>
+  <ul class="plain">
+    <li><b>The probes.</b> 156 programs, each pinning one rule of Ring, byte for byte against the oracle: on Windows in the
+    optimised and the safety-checked builds, and on Linux.</li>
+    <li><b>The census.</b> Softanza's base library compiled whole: 118,640 statements, 118,506 compiled; the 134 refused are
+    one 3,909-line function that exceeds the register window.</li>
+    <li><b>The wide clock.</b> 5,112 Ring programs &mdash; Softanza's tests and examples &mdash; run on both runtimes. The oracle
+    runs each twice first, so a line it does not reproduce from itself (a time, a random draw) is never counted against
+    Ring++. 3,559 agree on every remaining line on Windows, 3,772 on Linux; most of the rest differ only on the line that
+    reports how long the program took.</li>
+    <li><b>Assertion parity.</b> Every assertion that passes on Ring must pass on Ring++: 8,540 of 8,540.</li>
+  </ul>
+  <p>And four rules for every number: no claim without a measurement; minima over repetitions, never one run; the same
+  answer before any speed is quoted; and every speed-up stated with the pattern it makes slower. The first measurements of
+  the VM, and what flatters them, are in <a href="https://github.com/mayouni/ringpp/blob/main/NOTES.md">NOTES.md</a>.</p>
+</section>
+
+<section class="wrap narrow">
+  <h2>The commands</h2>
+  <pre class="code">rnxc program.ring            run it (the first run compiles; later runs start from the image)
+rnxc check program.ring      report what Ring would only find when the line runs
+rnxc census program.ring     what compiles, what is refused, and why
+rnxc fmt program.ring        the canonical text of a Ring file
+rnxc graph program.ring      the resolved call graph, as the compiler bound it
+rnxc dump --json file.ring   the lossless parse tree</pre>
+</section>
+
+<footer>
+  <div class="wrap">
+    <span>Ring++ &middot; MIT</span>
+    <span>Ring is the work of Mahmoud Fayed (MIT); its 1.27 VM is vendored here, unchanged, as the oracle Ring++ is measured against</span>
+    <a href="https://github.com/mayouni/ringpp-old" target="_blank" rel="noopener">The library era, archived</a>
+    <a class="sp" href="https://github.com/mayouni/ringpp" target="_blank" rel="noopener">GitHub</a>
+  </div>
+</footer>
+
+</body>
+</html>

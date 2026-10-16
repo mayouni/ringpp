@@ -1,0 +1,4 @@
+FILE|lambda.ring
+FUNC|Helper|1
+FUNC|Outer|3
+CALL|Outer|Helper|static
