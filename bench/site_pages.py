@@ -37,6 +37,7 @@ def head(title, desc, page):
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>%s</title>
 <meta name="description" content="%s">
+<meta name="author" content="Mansour Ayouni">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://mayouni.github.io/ringpp/%s">
 <meta property="og:title" content="%s">
@@ -61,7 +62,8 @@ def head(title, desc, page):
 FOOT = '''
 <footer>
   <div class="wrap">
-    <span>Ring++ &middot; MIT</span>
+    <span>Ring++ &copy; 2026 Mansour Ayouni &middot; MIT</span>
+    <span>A <a href="https://mayouni.github.io/stzsite/" target="_blank" rel="noopener">Softanza</a> project, towards Haro</span>
     <span>Ring is the work of Mahmoud Fayed (MIT); its 1.27 VM is vendored here, unchanged, as the oracle Ring++ is measured against</span>
     <a href="%s" target="_blank" rel="noopener">The library era, archived</a>
     <a class="sp" href="%s" target="_blank" rel="noopener">GitHub</a>

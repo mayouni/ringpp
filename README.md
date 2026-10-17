@@ -48,4 +48,5 @@ the oracle Ring++ is measured against. The Ring grammar Ring++ parses with is Yo
 The library era of Ring++ (August 2026: a library and a CLI that ran inside Ring) is archived, read-only, at
 [mayouni/ringpp-old](https://github.com/mayouni/ringpp-old).
 
-MIT licence.
+Ring++ &copy; 2026 Mansour Ayouni, under the MIT licence -- a [Softanza](https://mayouni.github.io/stzsite/) project,
+towards Haro.

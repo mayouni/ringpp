@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Ring++ -- Ring's issues that Ring++ solves</title>
 <meta name="description" content="Each issue of Ring that Ring++ solves, shown by a small program run on Ring 1.27 and on Ring++, with what each printed.">
+<meta name="author" content="Mansour Ayouni">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://mayouni.github.io/ringpp/issues.html">
 <meta property="og:title" content="Ring++ -- Ring's issues that Ring++ solves">
@@ -279,7 +280,7 @@ of three runs, every answer checked equal:</p>
 </section>
 <section class="wrap narrow" id="findings">
   <h2>Every finding, explained</h2>
-  <p>The findings are what Ring's VM was measured to do: 126 of them, each from a program that ran. They fall into four
+  <p>The findings are what Ring's VM was measured to do: 127 of them, each from a program that ran. They fall into four
   families.</p>
   <p><b>Costs the source does not show.</b> A string passed to a function is copied, every time. A loop written
   <code>for i = 1 to len(s)</code> measures the string again at every turn, which makes it quadratic. How fast a list is read
@@ -292,7 +293,7 @@ of three runs, every answer checked equal:</p>
   <code>operator()</code> method. <code>eval</code> runs in the scope of the function that calls it.</p>
   <p><b>Ring's own failures.</b> <code>memcpy()</code> ending the process on a zero byte; empty catch blocks filling the stack;
   an object from a list ending a program without a message; the Linux build crashing as it exits.</p>
-  <p>All 126, each with the program that shows it, are in <a href="https://github.com/mayouni/ringpp/blob/main/docs/FINDINGS.md">the findings</a>.</p>
+  <p>All 127, each with the program that shows it, are in <a href="https://github.com/mayouni/ringpp/blob/main/docs/FINDINGS.md">the findings</a>.</p>
 </section>
 <script>
 (function () {
@@ -314,7 +315,8 @@ of three runs, every answer checked equal:</p>
 
 <footer>
   <div class="wrap">
-    <span>Ring++ &middot; MIT</span>
+    <span>Ring++ &copy; 2026 Mansour Ayouni &middot; MIT</span>
+    <span>A <a href="https://mayouni.github.io/stzsite/" target="_blank" rel="noopener">Softanza</a> project, towards Haro</span>
     <span>Ring is the work of Mahmoud Fayed (MIT); its 1.27 VM is vendored here, unchanged, as the oracle Ring++ is measured against</span>
     <a href="https://github.com/mayouni/ringpp-old" target="_blank" rel="noopener">The library era, archived</a>
     <a class="sp" href="https://github.com/mayouni/ringpp" target="_blank" rel="noopener">GitHub</a>
