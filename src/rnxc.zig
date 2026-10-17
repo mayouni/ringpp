@@ -368,13 +368,11 @@ fn loadReport(
     }
     const tree = parser.parse(src) orelse return false;
     defer tree.deinit();
-    const rt = tree.root();
     const dir = std.fs.path.dirname(path) orelse ".";
     var errs: u32 = 0;
-    var i: u32 = 0;
-    while (i < rt.namedChildCount()) : (i += 1) {
-        const ch = rt.namedChild(i);
-        if (!std.mem.eql(u8, ch.kind(), "load_statement")) continue;
+    var loads = std.ArrayListUnmanaged(ts.Node){};
+    try collectLoads(alloc, tree.root(), &loads);
+    for (loads.items) |ch| {
         if (ch.namedChildCount() == 0) continue;
         var lit = ch.namedChild(0).text();
         if (lit.len >= 2 and (lit[0] == '"' or lit[0] == '\'' or lit[0] == '`')) lit = lit[1 .. lit.len - 1];
@@ -383,7 +381,13 @@ fn loadReport(
         const target = try resolveLoad(alloc, lit, dir, is_root);
         if (!fileExists(target)) {
             try w.print("\n\nError (E9) : Can't open file {s} \n", .{lit});
-            try w.print("\n{s} Line ({d}) Error (C27) : Syntax Error!\n", .{ name, line });
+            // F-128: inside a block Ring's parser stops there and reports the
+            // innermost block unclosed; the cascade it prints after that is
+            // its error recovery, and is not reproduced line for line
+            if (unclosedBlock(ch)) |u|
+                try w.print("\n{s} Line ({d}) Error ({s}) : Unclosed control structure, {s} is missing\n", .{ name, line, u[0], u[1] })
+            else
+                try w.print("\n{s} Line ({d}) Error (C27) : Syntax Error!\n", .{ name, line });
             errs += 1;
             continue;
         }
@@ -398,6 +402,39 @@ fn loadReport(
     }
     if (errs > 0) try w.print("\n{s} errors count : {d} \n", .{ name, errs });
     return errs > 0;
+}
+
+/// F-128: every `load` of a file outside its functions and classes, in source
+/// order -- at its top level and nested inside its blocks.
+fn collectLoads(alloc: std.mem.Allocator, n: ts.Node, out: *std.ArrayListUnmanaged(ts.Node)) !void {
+    var i: u32 = 0;
+    while (i < n.namedChildCount()) : (i += 1) {
+        const ch = n.namedChild(i);
+        const k = ch.kind();
+        if (std.mem.eql(u8, k, "load_statement")) {
+            try out.append(alloc, ch);
+            continue;
+        }
+        if (std.mem.eql(u8, k, "function_definition") or std.mem.eql(u8, k, "class_definition")) continue;
+        try collectLoads(alloc, ch, out);
+    }
+}
+
+/// The block a nested load stands in, as Ring's parser names it when the load
+/// cannot be opened -- measured on both 1.27 builds: `if` C3 'ok', `while`
+/// C4 'end', `for` C5 next (no quotes). Null at the top level.
+fn unclosedBlock(n: ts.Node) ?[2][]const u8 {
+    var p = n.parent();
+    var guard: u32 = 0;
+    while (guard < 256) : (guard += 1) {
+        const k = p.kind();
+        if (std.mem.eql(u8, k, "source_file")) return null;
+        if (std.mem.eql(u8, k, "if_statement")) return .{ "C3", "'ok'" };
+        if (std.mem.eql(u8, k, "while_statement")) return .{ "C4", "'end'" };
+        if (std.mem.eql(u8, k, "for_statement")) return .{ "C5", "next" };
+        p = p.parent();
+    }
+    return null;
 }
 
 /// The name Ring keeps for a loaded file: the folder the load was resolved
@@ -499,11 +536,13 @@ fn loadUnit(
         // The ROOT file is the one named on the command line -- index 0.
         const is_root = (qi == 0);
         const dir = std.fs.path.dirname(p) orelse ".";
-        const rt = tree.root();
-        var i: u32 = 0;
-        while (i < rt.namedChildCount()) : (i += 1) {
-            const ch = rt.namedChild(i);
-            if (!std.mem.eql(u8, ch.kind(), "load_statement")) continue;
+        // F-128: the loads at the top level AND inside its blocks, in source
+        // order -- Ring follows both as it parses (a branch never taken still
+        // defines its file's functions), and the compiler runs a nested one's
+        // top level where it stands.
+        var loads = std.ArrayListUnmanaged(ts.Node){};
+        try collectLoads(alloc, tree.root(), &loads);
+        for (loads.items) |ch| {
             if (ch.namedChildCount() == 0) continue;
             var lit = ch.namedChild(0).text();
             if (lit.len >= 2 and (lit[0] == '"' or lit[0] == '\'' or lit[0] == '`')) lit = lit[1 .. lit.len - 1];

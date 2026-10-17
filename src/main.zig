@@ -4065,8 +4065,28 @@ pub const VM = struct {
             },
             .idiv => {
                 const in = code[pc];
-                const x = asInt(regs[base + in.b]);
-                const y = asInt(regs[base + in.c]);
+                const xv = regs[base + in.b];
+                const yv = regs[base + in.c];
+                if (xv.tag != .int or yv.tag != .int) {
+                    // F-129: the compiler emits this for `floor(a/b)` only
+                    // when both are proved whole; should a real number still
+                    // arrive, it is floor of the REAL quotient, as the builtin
+                    // computes it -- never the truncated operands.
+                    if (!isNum(xv) or !isNum(yv)) {
+                        self.pending = BADPARAM;
+                        continue :dispatch .raise;
+                    }
+                    const fy = asF64(yv);
+                    if (fy == 0) {
+                        self.pending = R1;
+                        continue :dispatch .raise;
+                    }
+                    self.setRegB(base + in.a, narrow(@floor(asF64(xv) / fy)), false);
+                    pc += 1;
+                    continue :dispatch code[pc].op;
+                }
+                const x = xv.p.i;
+                const y = yv.p.i;
                 if (y == 0) {
                     self.pending = R1;
                     continue :dispatch .raise;

@@ -4017,3 +4017,27 @@ Nine wide-suite tests passed 782 of the Linux oracle's 862 assertions for it; 86
 (`ringLoadName`) and the splice (`loadTarget`) take the three steps in Ring's order. The guard is Linux only, in
 bench/exec_wsl.py: a root loading a library by its absolute path, which loads another the same way; the released v2.0.0 rnxc
 refuses it, the oracle and the fix print the same seven lines.
+
+## F-128. A `load` inside a block runs its file's top level where it stands, each time it is reached
+
+Both 1.27 builds, bench/exec/load_block.ring: a load inside an `if` that is taken runs the loaded file's top level right there
+(a global it sets is read on the next line); a load inside an `if` never taken runs nothing, yet the file's functions are
+defined; a load inside a three-turn `for` runs the file's top level three times. A load inside a block that names a missing
+file refuses the whole program, nothing running: E9, then the innermost block reported unclosed -- `if` C3 'ok', `while`
+C4 'end', `for` C5 next -- and a cascade of error-recovery lines that depends on the nesting. Ring++ followed top-level loads
+only: a nested load's file was never in the unit (R24 at the read, R3 at the call). The loader follows every load outside a
+function or a class, in source order; such a file's top level stays in @@main's statement list, so every pass before code
+generation sees it, and code generation emits it at the nested load instead (`nested_stmts`, `nested_skip`). A missing
+nested load prints E9 and the innermost block's C-line, exit 1 -- the cascade after that is NOT reproduced line for line. The
+estate's one site, neural/neural_backbone (`load "bert_parity_expected.ring"` under `if fexists(...)`), now passes its 14
+checks; it stopped at the first.
+
+## F-129. `floor(a / b)` is the floor of the REAL quotient
+
+`floor(14.15 / 1.9)` is 7 on both 1.27 builds; `floor(-7 / 2)` is -4, `floor("9" / 2)` is 4, and a zero divisor is R1
+`Can't divide by zero`, catchable. Ring++ compiled every `floor(a / b)` to its integer-division opcode, which reads both
+operands as integers -- 14 / 1 -- so Softanza's spectrum plot (stzSoundPlot.DrawSpectra, `floor(_pw_ * (log10(_hz_) -
+_lf_) / (_lt_ - _lf_))`) put every column at twice its pixel and drew 154 points of Ring's 442, silently. The opcode is
+emitted only when both sides are proved integers now, and the VM floors the real quotient should anything else reach it.
+bench/exec/floor_div.ring, which v2.0.1 gets wrong on three rows and stops at the fourth; ten million integer floor
+divisions 0.136 s before and 0.131 s after, minima of seven.

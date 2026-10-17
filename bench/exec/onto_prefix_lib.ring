@@ -29,3 +29,13 @@ class LibThing
 		eval("nHeld = nHeld + 1")
 		eval("t = Twice()")
 		return "" + nHeld + " " + t
+
+# A CHAIN OF INITIALISERS for a class on top to inherit (2026-10-17): on the
+# prefix path these arrive compiled, without their statements, and a child
+# compiled on top must still start with them -- it read R24 until then.
+class LibBase
+	cKind = "base"
+	nCount = 3
+
+class LibMid from LibBase
+	cMid = "mid"

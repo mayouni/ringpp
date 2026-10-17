@@ -576,6 +576,26 @@ fn spliceOne(
     }
 }
 
+/// F-128: mark the targets of every `load` nested inside `n` -- a block of a
+/// file's top level -- that no top-level load has already reached. A load
+/// inside a function or a class is not followed: Ring++ keeps those as they
+/// were.
+fn markNestedLoads(alloc: std.mem.Allocator, ri: u32, n: ts.Node, visited: []const bool, nested: []bool) void {
+    var i: u32 = 0;
+    while (i < n.namedChildCount()) : (i += 1) {
+        const ch = n.namedChild(i);
+        const k = ch.kind();
+        if (std.mem.eql(u8, k, "function_definition") or std.mem.eql(u8, k, "class_definition")) continue;
+        if (std.mem.eql(u8, k, "load_statement")) {
+            if (loadTarget(alloc, ri, ch)) |t| {
+                if (!visited[t]) nested[t] = true;
+            }
+            continue;
+        }
+        markNestedLoads(alloc, ri, ch, visited, nested);
+    }
+}
+
 /// A bare name inside a function that is ALSO a `$` global.
 pub const Shadow = struct {
     byte: u32,
@@ -1141,6 +1161,36 @@ fn spliceMain(c: *Compiler, roots: []const ts.Node, start: u32, alloc: std.mem.A
     for (0..start) |i| visited[i] = true;
 
     try spliceOne(roots, start, &ordered, visited, alloc);
+
+    // F-128: the files only a load INSIDE A BLOCK reaches. Their top level
+    // is laid out here as before -- so every pass before code generation
+    // sees it -- but recorded, so code generation emits it at that load.
+    const nested = try alloc.alloc(bool, roots.len);
+    defer alloc.free(nested);
+    @memset(nested, false);
+    for (roots, 0..) |root, ri| {
+        if (ri < start) continue;
+        var seen_def = false;
+        var i: u32 = 0;
+        while (i < root.namedChildCount()) : (i += 1) {
+            const ch = root.namedChild(i);
+            const k = ch.kind();
+            if (std.mem.eql(u8, k, "function_definition") or std.mem.eql(u8, k, "class_definition")) seen_def = true;
+            if (seen_def or std.mem.eql(u8, k, "load_statement")) continue;
+            markNestedLoads(alloc, @intCast(ri), ch, visited, nested);
+        }
+    }
+    c.nested_stmts.clearRetainingCapacity();
+    c.nested_skip.clearRetainingCapacity();
+    for (roots, 0..) |_, i| {
+        if (visited[i] or !nested[i]) continue;
+        const from = ordered.items.len;
+        try spliceOne(roots, @intCast(i), &ordered, visited, alloc);
+        const own = try alloc.dupe(ts.Node, ordered.items[from..]);
+        try c.nested_stmts.put(alloc, @intCast(i), own);
+        for (own) |st| try c.nested_skip.put(alloc, stmtKey(st), {});
+    }
+
     // A file nothing loads still runs its top level, after -- dropping it
     // would lose code that the old order did run.
     for (roots, 0..) |_, i| {
@@ -1180,6 +1230,12 @@ pub const MAIN = "@@main";
 /// A call site waiting for its callee to be emitted, patched at the end.
 pub const Fixup = extern struct { site: u32, fidx: u32, from: u32 };
 
+/// A statement's identity across passes: its source buffer and where it starts.
+pub const NodeKey = struct { src: usize, byte: u32 };
+pub fn stmtKey(n: ts.Node) NodeKey {
+    return .{ .src = @intFromPtr(n.src.ptr), .byte = n.startByte() };
+}
+
 pub const ClassInfo = struct {
     name: []const u8,
     node: ts.Node,
@@ -1212,6 +1268,13 @@ pub const ClassInfo = struct {
     graft_pass: u32 = 0,
     grafted: u32 = 0,
     grafting: bool = false,
+    /// The parent's prologue to CALL first, when its statements cannot be
+    /// copied: a parent restored from the PREFIX arrives compiled, without
+    /// its parse trees, so a class compiled on top of the library had no
+    /// parent initialisers at all -- `@nWorkbench` read back as R24 in a
+    /// test-side `class watcherAgentClass from stzPIAgent` (2026-10-17).
+    /// The parent's compiled prologue already carries its own ancestors'.
+    parent_prologue: ?u32 = null,
 };
 
 /// The function each instruction belongs to: functions are laid out
@@ -1567,6 +1630,16 @@ pub const Compiler = struct {
     files: std.ArrayListUnmanaged(u16) = .{},
     cur_row: u32 = 0,
     cur_file: u16 = 0,
+    /// F-128: the files a `load` INSIDE A BLOCK of the top level reaches and
+    /// no top-level load does, each with its top level as spliceOne lays it
+    /// out. Ring runs such a file's top level where that load stands, each
+    /// time it is reached (three times in a three-turn loop), and never when
+    /// it is not; its functions and classes exist either way. Ring++ ran it
+    /// once, after everything. The statements stay in @@main's list, so every
+    /// pass before code generation still sees them; `nested_skip` makes code
+    /// generation pass them there, and the load site emits them.
+    nested_stmts: std.AutoHashMapUnmanaged(u16, []const ts.Node) = .{},
+    nested_skip: std.AutoHashMapUnmanaged(NodeKey, void) = .{},
     last_src: ?[*]const u8 = null,
     last_file: u16 = 0,
     funcs: std.ArrayListUnmanaged(Func) = .{},
@@ -3807,9 +3880,16 @@ pub const Compiler = struct {
         // division and the floor builtin -- so `floor(2.9)` was a refusal.
         // It is a fast path now, not a gate: anything else falls through
         // to the general builtin below.
+        // F-129: and ONLY when both sides are proved integers. `idiv` reads its
+        // operands as integers, so `floor(pw * (log10(hz) - lf) / (lt - lf))`
+        // divided 14.15 by 1 -- 1.90 truncated -- and Softanza's spectrum plot
+        // put every column at twice its pixel: 154 points drawn of Ring's 442,
+        // silently. Anything not proved whole is real division, then floor.
         if (std.ascii.eqlIgnoreCase(callee, "floor") and argc == 1 and
             std.mem.eql(u8, args.namedChild(0).kind(), "binary_expression") and
-            std.mem.eql(u8, opText(args.namedChild(0)), "/"))
+            std.mem.eql(u8, opText(args.namedChild(0)), "/") and
+            exprClass(self, self.cur, args.namedChild(0).namedChild(0)) == .int and
+            exprClass(self, self.cur, args.namedChild(0).namedChild(1)) == .int)
         {
             const inner = args.namedChild(0);
             const save = self.temp;
@@ -6012,8 +6092,21 @@ pub const Compiler = struct {
         // Structural noise, not code -- checked BEFORE anything else,
         // because a stray `ok` arrives wrapped in an expression_statement
         // and would otherwise be compiled as a variable read.
-        if (std.mem.eql(u8, k, "load_statement") or
-            std.mem.eql(u8, k, "comment")) return;
+        if (std.mem.eql(u8, k, "load_statement")) {
+            // F-128: a load INSIDE A BLOCK of the top level runs its file's
+            // top level here, each time it is reached; a top-level load was
+            // spliced already, and one inside a function is left as it was.
+            if (self.cur.is_main and self.nested_stmts.count() > 0 and
+                !std.mem.eql(u8, n.parent().kind(), "source_file"))
+            {
+                const from = self.fileOf(n.src.ptr) orelse return;
+                const t = loadTarget(self.alloc, from, n) orelse return;
+                const loaded = self.nested_stmts.get(@intCast(t)) orelse return;
+                for (loaded) |st| try self.stmt(st);
+            }
+            return;
+        }
+        if (std.mem.eql(u8, k, "comment")) return;
         {
             var probe = n;
             if (std.mem.eql(u8, k, "expression_statement") and n.namedChildCount() == 1)
@@ -8968,10 +9061,18 @@ fn graftPrologue(c: *Compiler, cid: u16, alloc: std.mem.Allocator) !void {
     c.classes.items[cid].grafting = true;
     defer c.classes.items[cid].grafting = false;
     c.classes.items[cid].graft_pass = c.resolve_pass;
+    c.classes.items[cid].parent_prologue = null;
     const pid = c.classes.items[cid].parent orelse return;
     try graftPrologue(c, pid, alloc);
     const pfn = c.classes.items[pid].attrs_fn orelse return;
-    if (c.funcs.items[pfn].stmts.items.len == 0) return;
+    if (c.funcs.items[pfn].stmts.items.len == 0) {
+        // compiled already (the prefix) but nothing to copy: call it instead
+        if (c.funcs.items[pfn].emitted) {
+            if (c.classes.items[cid].attrs_fn == null) try newPrologue(c, cid, alloc);
+            c.classes.items[cid].parent_prologue = pfn;
+        }
+        return;
+    }
     if (c.classes.items[cid].attrs_fn == null) try newPrologue(c, cid, alloc);
     const cfn = c.classes.items[cid].attrs_fn.?;
     // The class's OWN statements are whatever follows the ones an earlier
@@ -10300,10 +10401,29 @@ fn emitOne(c: *Compiler, f: *Func) Error!void {
         c.ln_pend = null;
         c.ln_open = null;
         c.stmt_level = 0;
+        // A prologue whose parent arrived compiled (the prefix) calls the
+        // parent's prologue first, as a `new` site calls a prologue: the
+        // receiver in a window above the frame. See ClassInfo.parent_prologue.
+        if (f.owner) |oc| {
+            if (std.mem.eql(u8, f.name, PROLOGUE)) {
+                if (c.classes.items[oc].parent_prologue) |ppf| {
+                    const s2 = c.temp;
+                    defer c.temp = s2;
+                    const win = try c.tmp();
+                    _ = try c.emit(.move, win, 0, 1, 0);
+                    _ = c.reg(win + 8);
+                    c.atNodeStart(c.classes.items[oc].node);
+                    const site = try c.emit(.call, win, 0, 0, 0);
+                    try c.fixups.append(c.alloc, .{ .site = site, .fidx = ppf, .from = c.funcIndex(f) });
+                }
+            }
+        }
         const ln_lo = c.here();
         var si: usize = 0;
         while (si < f.stmts.items.len) : (si += 1) {
             const st = f.stmts.items[si];
+            // F-128: a file only a load inside a block reaches runs there, not here
+            if (f.is_main and c.nested_skip.count() > 0 and c.nested_skip.contains(stmtKey(st))) continue;
             c.ln_has_next = si + 1 < f.stmts.items.len;
             c.ln_block_quirk = false;
             // A span the grammar read differently from Ring -- a line cut in

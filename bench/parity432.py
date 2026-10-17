@@ -34,6 +34,17 @@ STOP = re.compile(r'(Error \((?:R|E|C)\d+\).*|Line \d+ Ring\+\+ refused.*|panic:
                   r'|Segmentation fault.*|(?:Line \d+ )?Bad parameter type!.*|Stack Overflow.*'
                   r'|.*[Ww]atchdog.*)')
 
+# A CHECK IS NOT ONLY `[PASS]` (2026-10-17). The narrated harness ends an assertion's line with `[PASS]`/`[FAIL]`;
+# 160 other tests open a check's line with `[OK]` (139) or `[ok]` (21) and print `[FAIL]` when it fails. Counting `[PASS]`
+# alone read "8,540 of 8,540, every test at parity" while those tests held 4,457 checks Ring passes and Ring++ passed
+# 4,264 of them -- 193 short in 14 tests, found because four tests showed Ring++ failures with no Ring passes at all.
+LINE_OK = re.compile(r'^[ \t]*\[(?:OK|ok) *\]', re.M)
+
+
+def marks(text):
+    """(passes, fails) a transcript prints: `[PASS]` anywhere, `[OK]`/`[ok]` opening a line; `[FAIL]` anywhere."""
+    return text.count('[PASS]') + len(LINE_OK.findall(text)), text.count('[FAIL]')
+
 
 def main():
     # --platform=linux: the Linux clock's cache and table (why432.py --platform=linux)
@@ -81,7 +92,7 @@ def main():
             kinds['oracle timed out'] += 1
             continue
         a, x, e = c.get('a1', ''), c.get('c', ''), c.get('e', '')
-        ap, af, xp, xf = a.count('[PASS]'), a.count('[FAIL]'), x.count('[PASS]'), x.count('[FAIL]')
+        (ap, af), (xp, xf) = marks(a), marks(x)
         tot['ring pass'] += ap
         tot['ring fail'] += af
         tot['rnx pass'] += xp

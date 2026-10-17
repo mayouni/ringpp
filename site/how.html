@@ -66,9 +66,15 @@
     one 3,909-line function that exceeds the register window.</li>
     <li><b>The wide clock.</b> 5,112 Ring programs &mdash; Softanza's tests and examples &mdash; run on both runtimes. The oracle
     runs each twice first, so a line it does not reproduce from itself (a time, a random draw) is never counted against
-    Ring++. 3,559 agree on every remaining line on Windows, 3,772 on Linux; most of the rest differ only on the line that
+    Ring++. 3,567 agree on every remaining line on Windows, 3,753 on Linux; most of the rest differ only on the line that
     reports how long the program took.</li>
-    <li><b>Assertion parity.</b> Every assertion that passes on Ring must pass on Ring++: 8,540 of 8,540.</li>
+    <li id="parity"><b>Assertion parity.</b> Every check that passes on Ring must pass on Ring++. Counting every check
+    Softanza's tests print, <code>[PASS]</code> and <code>[OK]</code> alike, Ring++ passes 12,863 of Ring's 13,008 on
+    Windows and 12,170 of 12,255 on Linux. The rest is named: 81 sit in two test files that read a global without its
+    <code>$</code> inside a function, which Ring++ refuses to compile; 61 sit behind one function too large for the register
+    window (Windows); a handful measure time or memory; and on Linux one is a cluster test that does not finish under
+    Ring++. Until 17 October 2026 this count read <code>[PASS]</code> lines
+    only, and said 8,540 of 8,540: true of those checks, and silent about the 4,468 written as <code>[OK]</code>.</li>
   </ul>
   <p>And four rules for every number: no claim without a measurement; minima over repetitions, never one run; the same
   answer before any speed is quoted; and every speed-up stated with the pattern it makes slower. The first measurements of

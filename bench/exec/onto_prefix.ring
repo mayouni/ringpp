@@ -22,6 +22,10 @@ oT.Set_(7)
 oM = new OwnThing
 ? "own class       : " + oM.Say()
 ? "own calls lib   : " + oM.ViaLib(4)
+oC = new OwnChild
+? "child of lib    : " + oC.Show()
+oB = new OwnBare
+? "bare child      : " + oB.Show()
 
 func OwnTriple n
 	return n * 3
@@ -32,3 +36,14 @@ class OwnThing
 
 	def ViaLib(n)
 		return LibDouble(n) + $libGlobal
+
+# a library class's child, with initialisers of its own and without
+class OwnChild from LibMid
+	cOwn = "own"
+
+	def Show()
+		return cKind + " " + nCount + " " + cMid + " " + cOwn
+
+class OwnBare from LibMid
+	def Show()
+		return cKind + " " + nCount + " " + cMid
