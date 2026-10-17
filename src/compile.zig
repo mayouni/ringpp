@@ -488,8 +488,11 @@ fn loadTarget(alloc: std.mem.Allocator, from: u32, n: ts.Node) ?u32 {
     var cands: [4][]const u8 = undefined;
     var n_cands: usize = 0;
     if (rooted) {
-        cands[0] = std.fs.path.join(alloc, &.{ exe_dir, "load", lit[1..] }) catch return null;
-        n_cands = 1;
+        // F-127, the loader's order: as written, beside the exe, in load/
+        cands[0] = alloc.dupe(u8, lit) catch return null;
+        cands[1] = std.fs.path.join(alloc, &.{ exe_dir, lit[1..] }) catch return null;
+        cands[2] = std.fs.path.join(alloc, &.{ exe_dir, "load", lit[1..] }) catch return null;
+        n_cands = 3;
     } else if (std.fs.path.isAbsolute(lit)) {
         cands[0] = alloc.dupe(u8, lit) catch return null;
         n_cands = 1;

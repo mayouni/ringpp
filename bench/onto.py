@@ -37,6 +37,8 @@ RNXC = os.environ.get('RNXC') or os.path.join(ROOT, 'zig-out', 'bin', 'rnxc.exe'
 PROBES = os.path.join(HERE, 'exec')
 CACHE = os.path.join(ROOT, 'runtime', 'onto-cache')
 
+# rnxc prints its status lines -- `(library as a prefix)` among them, which this guard reads -- only under RNXC_VERBOSE.
+os.environ['RNXC_VERBOSE'] = '1'
 WHOLE = dict(os.environ)
 WHOLE['RNXC_NOCACHE'] = '1'
 WHOLE.pop('RNXC_CACHE', None)

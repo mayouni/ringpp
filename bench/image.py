@@ -36,6 +36,8 @@ REFUSED = b'refused: a load names a file that cannot be opened'
 
 def run(path, cache, nocache=False):
     env = dict(os.environ)
+    # the `(compiled image)` status line this guard reads is printed only under RNXC_VERBOSE
+    env['RNXC_VERBOSE'] = '1'
     if nocache:
         env['RNXC_NOCACHE'] = '1'
         env.pop('RNXC_CACHE', None)

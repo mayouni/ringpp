@@ -56,6 +56,40 @@ def run(exe, probe):
     return p.returncode, p.stdout.replace(b'\r', b'')
 
 
+def absolute_load():
+    """F-127, Linux only: a load by ABSOLUTE path. Ring tries a rooted path as
+    written first, so on Linux `/x/lib.ring` is that file; rnxc read every
+    leading `/` as <exefolder>/load/ and refused the program -- which is how
+    every node and worker script Softanza generates (they load the library by
+    an absolute path) died at birth on Linux. A probe in bench/exec cannot
+    carry it: no absolute path is spelt the same on both platforms. So the
+    files are written here, the root naming the library by its /mnt path, a
+    loaded file loading another the same way (the splice), and both runtimes
+    must print the same bytes. The build before printed the refusal."""
+    d = os.path.join(ROOT, 'runtime', 'f127')
+    os.makedirs(d, exist_ok=True)
+    lib, inner = wsl_path(os.path.join(d, 'lib.ring')), wsl_path(os.path.join(d, 'inner.ring'))
+    files = {
+        'inner.ring': '? "inner: its top level runs at its load"\nfunc Inner127 return "inner answered"\n',
+        'lib.ring': '? "lib: before its own load"\nload "%s"\n? "lib: after it"\nfunc F127 return "absolute load resolved"\n' % inner,
+        'root.ring': '? "root: before"\nload "%s"\n? F127()\n? Inner127()\n? "root: after"\n' % lib,
+    }
+    for name, text in files.items():
+        with open(os.path.join(d, name), 'w', encoding='utf-8', newline='\n') as f:
+            f.write(text)
+    outs = []
+    for exe in (ORACLE, RNXC):
+        lx = wsl_path(exe)
+        p = subprocess.run(['wsl.exe', '-d', DISTRO, '--cd', wsl_path(d), '--', 'env',
+                            'LD_LIBRARY_PATH=' + lx.rsplit('/', 1)[0], lx, 'root.ring'],
+                           capture_output=True, timeout=600)
+        outs.append(p.stdout.replace(b'\r', b''))
+    if outs[0] != outs[1] or b'absolute load resolved' not in outs[0]:
+        print('DIFF %-28s\n     oracle: %s\n     rnxc  : %s' % ('F-127 absolute load', outs[0][:200], outs[1][:200]))
+        return False
+    return True
+
+
 def main():
     for what, p in (('the Linux oracle', ORACLE), ('the Linux rnxc', RNXC)):
         if not os.path.exists(p):
@@ -68,7 +102,13 @@ def main():
         return 0
     probes = sys.argv[1:] or sorted(f for f in os.listdir(EXEC) if f.endswith('.ring'))
     bad = []
+    if not sys.argv[1:]:
+        if not absolute_load():
+            bad.append('F-127 absolute load')
+        probes = probes + ['(F-127 absolute load)']
     for pr in probes:
+        if pr.startswith('('):
+            continue
         a = run(ORACLE, pr)
         b = run(RNXC, pr)
         if a[1] != b[1]:

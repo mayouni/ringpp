@@ -46,6 +46,7 @@ CWD = os.path.join(ROOT, 'runtime', 'clock-copy', 'libraries', 'stzlib',
 def once(script, cache, port):
     env = dict(os.environ)
     env['RNXC_IMAGE'] = '1'
+    env['RNXC_VERBOSE'] = '1'      # `running the top level...` is the timing mark, a status line
     env['RNXC_CACHE'] = cache
     t0 = time.time()
     p = subprocess.Popen([RNXC, script, str(port)], cwd=CWD, env=env,

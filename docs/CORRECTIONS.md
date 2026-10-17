@@ -197,7 +197,9 @@ Ring's rule, measured on both builds 2026-09-10:
 ```
   load "x.ring" in the ROOT file        looked for in the LAUNCH DIRECTORY
   load "x.ring" in a LOADED file        looked for beside THAT FILE
-  load "/x.ring"                        <exefolder>/load/x.ring  (never the root)
+  load "/x.ring"                        <exefolder>/load/x.ring  (never the root -- ON WINDOWS;
+                                        F-127: Ring tries it as written first, so on Linux
+                                        an absolute path is itself)
   a bare name found nowhere above       <exefolder>/, then <exefolder>/load/, silently
   load "a.ring" + load "./a.ring"       C22, the program never starts (keyed on the spelling)
   load inside a branch never taken      definitions pulled in anyway; top level not run

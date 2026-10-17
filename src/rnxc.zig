@@ -262,9 +262,19 @@ fn tryPrefix(
 fn resolveLoad(alloc: std.mem.Allocator, lit: []const u8, dir: []const u8, is_root: bool) ![]const u8 {
     const rooted = (lit[0] == '/' or lit[0] == '\\') and
         !(lit.len > 1 and (lit[1] == '/' or lit[1] == '\\'));
-    return if (rooted)
-        try std.fs.path.join(alloc, &.{ exeDir(alloc), "load", lit[1..] })
-    else if (std.fs.path.isAbsolute(lit))
+    return if (rooted) blk: {
+        // F-127: Ring tries a rooted path AS WRITTEN first, then
+        // <exefolder> + it, then <exefolder>/load/ + it (stmt.c:290-302).
+        // On Windows `/x` names the drive's root, where nothing usually is,
+        // so the load folder answers -- which is how the rule was first
+        // measured, and read as "a leading `/` means load/". On Linux `/x`
+        // is an ABSOLUTE path, and Softanza's node and worker scripts load
+        // the library by one: every one of them was refused.
+        if (fileExists(lit)) break :blk try alloc.dupe(u8, lit);
+        const at_exe = try std.fs.path.join(alloc, &.{ exeDir(alloc), lit[1..] });
+        if (fileExists(at_exe)) break :blk at_exe;
+        break :blk try std.fs.path.join(alloc, &.{ exeDir(alloc), "load", lit[1..] });
+    } else if (std.fs.path.isAbsolute(lit))
         try alloc.dupe(u8, lit)
     else blk: {
         // C-4, decided 2026-09-11: the file's OWN directory first for
@@ -397,8 +407,15 @@ fn ringLoadName(alloc: std.mem.Allocator, lit: []const u8, dir: []const u8, is_r
     const sep = if (@import("builtin").os.tag == .windows) "\\" else "/";
     const rooted = (lit[0] == '/' or lit[0] == '\\') and !(lit.len > 1 and (lit[1] == '/' or lit[1] == '\\'));
     // Ring appends the path, leading `/` and all, to "<exefolder>load/":
-    // `...\win64\load//../../libraries/stdlib/stdlib.ring`, measured.
-    if (rooted) return std.fmt.allocPrint(alloc, "{s}{s}load/{s}", .{ exeDir(alloc), sep, lit });
+    // `...\win64\load//../../libraries/stdlib/stdlib.ring`, measured --
+    // unless it found it AS WRITTEN (an absolute path on Linux), when the
+    // name is the path itself, or beside the executable (F-127).
+    if (rooted) {
+        if (std.mem.eql(u8, target, lit)) return alloc.dupe(u8, lit);
+        const r_exe = try std.fs.path.join(alloc, &.{ exeDir(alloc), lit[1..] });
+        if (std.mem.eql(u8, target, r_exe)) return std.fmt.allocPrint(alloc, "{s}{s}{s}", .{ exeDir(alloc), sep, lit });
+        return std.fmt.allocPrint(alloc, "{s}{s}load/{s}", .{ exeDir(alloc), sep, lit });
+    }
     if (std.fs.path.isAbsolute(lit)) return alloc.dupe(u8, lit);
     const beside = try std.fs.path.join(alloc, &.{ dir, lit });
     if (std.mem.eql(u8, target, beside)) {
@@ -493,8 +510,11 @@ fn loadUnit(
             if (lit.len == 0) continue;
             // Ring's own resolution, probed on 1.27 (2026-09-09):
             //   an absolute path is itself;
-            //   a leading `/` means <exefolder>/load/ -- that is how
+            //   a leading `/` is tried as written, then <exefolder>/ + it,
+            //     then <exefolder>/load/ + it (F-127: on Windows the drive's
+            //     root rarely holds it, so load/ answers -- that is how
             //     bin/load/stdlibcore.ring reaches /../../libraries/stdlib;
+            //     on Linux it is an absolute path and found as written);
             //   otherwise it depends on WHICH FILE the load sits in, and
             //     this took three probes on 2026-09-10 to pin down:
             //       the ROOT file's loads resolve against the CURRENT
@@ -1027,6 +1047,21 @@ fn runKernels(alloc: std.mem.Allocator, prog: co.Program) !void {
 /// _RingExecutable() spawns its child on THIS binary.
 var g_sysargv: []const []const u8 = &.{};
 
+/// rnxc's own STATUS during a run -- `files N functions+methods N`, `running
+/// the top level...`, `TOP LEVEL RAN TO COMPLETION`, the prefix not applying --
+/// is printed only with `RNXC_VERBOSE` set (and not "0"). Ring prints nothing
+/// of its own around a program, and on stderr these lines still reach a
+/// terminal, interleaved with the program's output: every person who tried the
+/// v2.0.0 package saw three of them on every run (2026-10-16). The `note:`
+/// lines are not status -- they say an answer is not certified, or a loaded
+/// file could not be read -- and are always printed. The harnesses that read
+/// status (bench/image.py, onto.py, child_start.py) set the variable.
+var g_verbose = false;
+
+fn status(comptime text: []const u8, args: anytype) void {
+    if (g_verbose) std.debug.print(text, args);
+}
+
 /// Every name `rnxc` accepts in argv[1]. Listed so a bare `rnxc file.ring`
 /// can be told apart from a subcommand without guessing -- and a file
 /// genuinely named `census.ring` still reaches the subcommand, which is
@@ -1047,9 +1082,10 @@ fn isSubcommand(a: []const u8) bool {
 ///
 /// This is the tail of `exec` with the compiler removed, and the two have to
 /// stay the same shape: every VM table the freeze sets is set here from the
-/// image, and the same three status lines are printed, because a warm run
-/// that says something different from a cold run is a warm run nobody can
-/// check. `bench/image.py` runs both and requires the bytes to match.
+/// image, and the same three status lines are printed (under RNXC_VERBOSE,
+/// see `status`), because a warm run that says something different from a
+/// cold run is a warm run nobody can check. `bench/image.py` runs both and
+/// requires the bytes to match.
 fn runImage(p: image.Parts, root_as_typed: []const u8) !void {
     const H = vmheap;
     vm.dispatch = p.dispatch;
@@ -1075,7 +1111,7 @@ fn runImage(p: image.Parts, root_as_typed: []const u8) !void {
     @memcpy(file_names, p.file_names);
     if (file_names.len > 0) file_names[0] = root_as_typed;
 
-    std.debug.print("files {d}   functions+methods {d}   (compiled image)\n", .{ p.file_names.len, p.fn_names.len });
+    status("files {d}   functions+methods {d}   (compiled image)\n", .{ p.file_names.len, p.fn_names.len });
     if (p.poisoned_own) {
         std.debug.print("note: a statement in the top level did not compile. It runs to\n", .{});
         std.debug.print("      that statement and stops there, as Ring stops at a line it\n", .{});
@@ -1118,11 +1154,11 @@ fn runImage(p: image.Parts, root_as_typed: []const u8) !void {
         .file_names = file_names,
         .main_fn = p.main_fn,
     };
-    std.debug.print("running the top level...\n", .{});
+    status("running the top level...\n", .{});
     vm.armWatchdog();
     _ = m.run(p.main_tramp);
     vm.outFlush();
-    std.debug.print("TOP LEVEL RAN TO COMPLETION\n", .{});
+    status("TOP LEVEL RAN TO COMPLETION\n", .{});
 }
 
 /// EVAL (F-72, C-9 revised): the string compiled at run time, in the
@@ -1502,6 +1538,9 @@ pub fn main() !void {
         vm.poison_on = !(v.len == 0 or std.mem.eql(u8, v, "0"));
     } else |_| {}
     vmheap = vm.vmHeap();
+    if (std.process.getEnvVarOwned(std.heap.page_allocator, "RNXC_VERBOSE")) |v| {
+        g_verbose = !(v.len == 0 or std.mem.eql(u8, v, "0"));
+    } else |_| {}
     if (std.process.getEnvVarOwned(std.heap.page_allocator, "RNXC_TRACE_NATIVE")) |_| { vm.g_trace_native = true; } else |_| {}
     if (std.process.getEnvVarOwned(std.heap.page_allocator, "RNXC_WATCHDOG")) |v| {
         vm.g_watchdog_s = std.fmt.parseInt(i64, std.mem.trim(u8, v, " \t\r\n"), 10) catch 0;
@@ -1849,7 +1888,7 @@ pub fn main() !void {
                     }
                     // Rare, and it costs the parse of one file: everything
                     // below is the path taken before prefixes existed.
-                    std.debug.print("onto: the prefix does not apply here ({s}); compiling whole\n", .{co.prefix_blocked_by});
+                    status("onto: the prefix does not apply here ({s}); compiling whole\n", .{co.prefix_blocked_by});
                     unit = Unit{};
                     try loadUnit(alloc, parser, argv[2], &unit, false, &.{});
                     if (unit.missing > 0) refuseMissingLoads(alloc, parser, argv[2]);
@@ -1900,13 +1939,15 @@ pub fn main() !void {
             if (prog.entry_tramp != null) {
                 if (prog.find("main")) |um| break :blk um;
             }
-            std.debug.print("no top-level code in this file\n", .{});
+            status("no top-level code in this file\n", .{});
             return;
         };
         // rnxc's OWN status goes to stderr, now that stdout carries the
         // program's output the way `ring script.ring` does. A caller
-        // capturing that output must not find our chatter mixed into it.
-        std.debug.print("files {d}   functions+methods {d}{s}\n", .{ unit.roots.items.len, prog.funcs.len, if (prefix_used) "   (library as a prefix)" else "" });
+        // capturing that output must not find our chatter mixed into it --
+        // and since 2026-10-16 it is printed only under RNXC_VERBOSE, because
+        // a terminal shows stderr too (see `status`).
+        status("files {d}   functions+methods {d}{s}\n", .{ unit.roots.items.len, prog.funcs.len, if (prefix_used) "   (library as a prefix)" else "" });
         // With a prefix there are TWO top levels -- the library's and this
         // file's -- and either can carry a refusal the note has to name.
         var tl_own = mf.poisoned_own;
@@ -2167,14 +2208,14 @@ pub fn main() !void {
             .main_fn = main_fn,
         };
         @memset(m.globals, vm.Value.nil());
-        std.debug.print("running the top level...\n", .{});
+        status("running the top level...\n", .{});
         vm.armWatchdog();
         _ = m.run(main_tramp);
         // Reached only if the VM did not panic or exit. The program's stdout
         // is flushed FIRST, so our completion line cannot overtake the last
         // thing the program printed.
         vm.outFlush();
-        std.debug.print("TOP LEVEL RAN TO COMPLETION\n", .{});
+        status("TOP LEVEL RAN TO COMPLETION\n", .{});
         return;
     }
 

@@ -24,7 +24,7 @@ reason for this class of bug to accumulate again.
 A gate that could not run is NAMED with its reason, never quietly
 skipped.
 """
-import os, subprocess, sys, time
+import os, shutil, subprocess, sys, time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
@@ -382,6 +382,40 @@ def refusal():
     return ok
 
 
+def quiet():
+    """A plain run prints the PROGRAM's output and nothing of rnxc's own. Ring
+    prints nothing around a program; rnxc's three status lines went to stderr,
+    which a terminal shows too, and every person who tried the v2.0.0 package
+    saw them on every run (2026-10-16). They print only under RNXC_VERBOSE now.
+    Checked on both paths -- a cold compile and a warm start from the compiled
+    image, which prints its own status -- and with the variable set, so the
+    harnesses that read the lines (image.py, onto.py, child_start.py) still
+    find them."""
+    import tempfile
+    exe = os.path.join(ROOT, 'zig-out', 'bin', 'rnxc.exe')
+    t0 = time.time()
+    d = tempfile.mkdtemp(prefix='rnxc_quiet_')
+    with open(os.path.join(d, 'q.ring'), 'w', newline='\n') as f:
+        f.write('? "quiet"\n')
+    base = {k: v for k, v in os.environ.items() if k not in ('RNXC_VERBOSE', 'RNXC_NOCACHE')}
+    base['RNXC_CACHE'] = os.path.join(d, 'cache')
+    problems = []
+    for label, extra in (('cold', {}), ('warm', {}), ('verbose', {'RNXC_VERBOSE': '1'})):
+        r = subprocess.run([exe, 'q.ring'], cwd=d, capture_output=True, text=True, env=dict(base, **extra))
+        out, err = r.stdout.replace('\r', ''), r.stderr.replace('\r', '')
+        if r.returncode != 0 or out != 'quiet\n':
+            problems.append('%s: exit %d, stdout %r' % (label, r.returncode, out[:60]))
+        elif label != 'verbose' and err.strip():
+            problems.append('%s run printed %r' % (label, err.strip().split('\n')[0][:60]))
+        elif label == 'verbose' and not ('running the top level' in err and 'TOP LEVEL RAN TO COMPLETION' in err):
+            problems.append('RNXC_VERBOSE=1 printed no status')
+    shutil.rmtree(d, ignore_errors=True)
+    ok = not problems
+    record('quiet by default', ok, 'only the program speaks; RNXC_VERBOSE=1 brings the status back' if ok
+           else ' | '.join(problems), time.time() - t0)
+    return ok
+
+
 def websock():
     """Contract 5.1's socket, driven for real: the binary serves the tree,
     a POST comes back, and the model must be the one the terminal
@@ -421,6 +455,7 @@ def main():
 
     ok &= console()
     ok &= refusal()
+    ok &= quiet()
     ok &= execprobes()
     ok &= onto()
     ok &= imagecache()

@@ -4005,3 +4005,15 @@ on 2026-10-15, when a local index began to be read in place (to drop that copy):
 the index is read in place only when that side can move no local -- no `++`, no `eval`, no brace, no `new`. Both 1.27 builds; rows
 r3, r4 and r6 of `bench/exec/index_inplace.ring`, which fail on a build that reads the index in place regardless.
 
+## F-127. A rooted load is tried as written first -- on Linux, an absolute path is itself
+
+Ring resolves `load "/x.ring"` in three steps (vendor/ring-vm/src/stmt.c:290-302): the path AS WRITTEN, then `<exefolder>` plus
+it, then `<exefolder>load/` plus it. On Windows `/x.ring` names the root of the current drive, where nothing usually is, so the load
+folder answers -- that is the measurement of 2026-09-10 (C-4's table, "`<exefolder>/load/x.ring`, never the root"), and it is how
+the stdlib shims reach `/../../libraries/stdlib`. On Linux `/x.ring` is an ABSOLUTE path and step one finds it. rnxc read every
+leading `/` as the load folder, so on Linux no absolute load was ever found: the program was refused (C-25), and every node and
+worker script Softanza generates -- stzNodeApp, stzAppCluster, stzAppBackend load the library by an absolute path -- died at birth.
+Nine wide-suite tests passed 782 of the Linux oracle's 862 assertions for it; 860 now. The loader, the name it reports
+(`ringLoadName`) and the splice (`loadTarget`) take the three steps in Ring's order. The guard is Linux only, in
+bench/exec_wsl.py: a root loading a library by its absolute path, which loads another the same way; the released v2.0.0 rnxc
+refuses it, the oracle and the fix print the same seven lines.

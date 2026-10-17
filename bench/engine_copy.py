@@ -120,6 +120,80 @@ def save(path, s):
     io.open(path, 'w', encoding='utf-8', newline='').write(s)
 
 
+def linux_curl(patch):
+    """LIBCURL ON LINUX (2026-10-17). His build.zig vendors libcurl for Windows
+    only -- `addLibcurl` panics elsewhere, "POSIX needs a generated
+    curl_config.h" -- so stz_http and stz_reactor did not build for Linux, and
+    every Softanza program there printed two WARNING lines and had no HTTP
+    client and no reactor (83 tests stop on it on the Linux oracle). This is
+    the missing half, in the copy: bench/curl_config_linux.h laid out as
+    vendor/curl-config/linux/curl_config.h, mbedTLS (vendored, 3.6) as curl's
+    TLS where Windows uses Schannel, the GNU and nghttp2 definitions Linux
+    needs, and mbedTLS's sources added to a curl domain off Windows (stz_http
+    has none of its own). Windows compiles exactly what it compiled before.
+    It is a change for HIS build.zig too; until he takes it, every flavour of
+    the copy carries it."""
+    cfg = os.path.join(DST, 'vendor', 'curl-config', 'linux')
+    os.makedirs(cfg, exist_ok=True)
+    shutil.copyfile(os.path.join(HERE, 'curl_config_linux.h'), os.path.join(cfg, 'curl_config.h'))
+    patch('    if (os_tag != .windows) {\n'
+          '        std.debug.panic("libcurl vendoring is currently Windows-only (POSIX needs a generated curl_config.h)", .{});\n'
+          '    }\n',
+          '    // Linux: a hand-written curl_config.h (vendor/curl-config/linux, its header\n'
+          '    // says what it chooses) and mbedTLS for TLS where Windows uses Schannel --\n'
+          '    // the domain loop adds mbedTLS\'s sources for a curl domain off Windows.\n'
+          '    if (os_tag != .windows and os_tag != .linux) {\n'
+          '        std.debug.panic("libcurl vendoring builds for Windows and Linux only (another POSIX needs its own curl_config.h)", .{});\n'
+          '    }\n'
+          '    const linux = os_tag == .linux;\n'
+          '    if (linux) {\n'
+          '        mod.addIncludePath(b.path("vendor/curl-config/linux"));\n'
+          '        mod.addIncludePath(b.path("vendor/mbedtls/include"));\n'
+          '    }\n')
+    patch('    const flags = [_][]const u8{\n'
+          '        "-DBUILDING_LIBCURL",\n'
+          '        "-DCURL_STATICLIB",\n'
+          '        "-DUSE_WINDOWS_SSPI",\n'
+          '        "-DUSE_SCHANNEL",\n'
+          '        "-DUSE_NGHTTP2",',
+          '    const tls_flags: []const []const u8 = if (linux)\n'
+          '        &.{ "-DHAVE_CONFIG_H", "-D_GNU_SOURCE" }\n'
+          '    else\n'
+          '        &.{ "-DUSE_WINDOWS_SSPI", "-DUSE_SCHANNEL" };\n'
+          '    const head_flags = [_][]const u8{ "-DBUILDING_LIBCURL", "-DCURL_STATICLIB" };\n'
+          '    const common_flags = [_][]const u8{\n'
+          '        "-DUSE_NGHTTP2",')
+    # the TLS definitions stay where they stood, so Windows compiles with the very same command line
+    patch('    lib.addCSourceFiles(.{ .files = files.items, .flags = &flags });',
+          '    lib.addCSourceFiles(.{ .files = files.items, .flags = std.mem.concat(b.allocator, []const u8, '
+          '&.{ &head_flags, tls_flags, &common_flags }) catch @panic("oom") });')
+    patch('    const ng_flags = [_][]const u8{ "-DNGHTTP2_STATICLIB", "-DBUILDING_NGHTTP2" };\n'
+          '    lib.addCSourceFiles(.{ .files = ngfiles.items, .flags = &ng_flags });',
+          '    // on Linux nghttp2 finds htons & co. and its clock only when told they exist\n'
+          '    const ng_flags: []const []const u8 = if (linux)\n'
+          '        &.{ "-DNGHTTP2_STATICLIB", "-DBUILDING_NGHTTP2", "-DHAVE_ARPA_INET_H=1", "-DHAVE_NETINET_IN_H=1", '
+          '"-DHAVE_CLOCK_GETTIME=1", "-DHAVE_DECL_CLOCK_MONOTONIC=1" }\n'
+          '    else\n'
+          '        &.{ "-DNGHTTP2_STATICLIB", "-DBUILDING_NGHTTP2" };\n'
+          '    lib.addCSourceFiles(.{ .files = ngfiles.items, .flags = ng_flags });')
+    patch('    const win_libs = [_][]const u8{ "ws2_32", "crypt32", "secur32", "advapi32", "bcrypt", "normaliz" };\n'
+          '    for (win_libs) |l| lib.linkSystemLibrary(l);\n'
+          '}',
+          '    if (linux) {\n'
+          '        lib.linkSystemLibrary("pthread"); // the threaded resolver\n'
+          '        return;\n'
+          '    }\n'
+          '    const win_libs = [_][]const u8{ "ws2_32", "crypt32", "secur32", "advapi32", "bcrypt", "normaliz" };\n'
+          '    for (win_libs) |l| lib.linkSystemLibrary(l);\n'
+          '}')
+    patch('        if (dom.needs_libcurl) addLibcurl(mod, lib, b, target.result.os.tag);\n'
+          '        if (dom.needs_mbedtls) addMbedtls(mod, lib, b, target.result.os.tag, false);\n',
+          '        if (dom.needs_libcurl) addLibcurl(mod, lib, b, target.result.os.tag);\n'
+          '        // off Windows, curl\'s TLS is mbedTLS, so a curl domain needs its sources too\n'
+          '        if (dom.needs_mbedtls or (dom.needs_libcurl and target.result.os.tag != .windows))\n'
+          '            addMbedtls(mod, lib, b, target.result.os.tag, false);\n')
+
+
 def main():
     if not os.path.isdir(SRC):
         print('SKIP engine copy: no engine tree at ' + SRC)
@@ -226,6 +300,7 @@ def main():
     patch('    for (base_domains) |dom| {\n', '    for (base_domains) |dom| {\n        if (!wanted(b, dom.name)) continue;\n')
     for old in ('        b.installArtifact(studio);', '    b.installArtifact(static_lib);', '    b.installArtifact(gen_refdata);'):
         patch(old, old.replace('b.installArtifact', 'if (false) b.installArtifact'))
+    linux_curl(patch)
     if official:
         save(bz, s)
         print('build.zig: ONLY from the environment, extra installs off; addRing and '
