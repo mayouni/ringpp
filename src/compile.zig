@@ -366,7 +366,35 @@ pub const Func = struct {
     /// classes and answers it the same way, with position rather than
     /// nesting.
     stmts: std.ArrayListUnmanaged(ts.Node) = .{},
+    /// The registers its locals occupy are 0..reg_top-1. One per local, so
+    /// equal to `locals.items.len`, for every function but one that SHARES.
+    reg_top: u16 = 0,
+    /// `define` met the register window (MAXREG): one register per local
+    /// does not fit. See shareFunction.
+    window_full: bool = false,
+    share_tried: bool = false,
+    /// Its locals SHARE registers (shareFunction): at the start of each
+    /// statement keyed here, the registers listed are cleared for their
+    /// next owner.
+    share: ?*ShareTable = null,
 };
+
+/// Statement (its own first and last byte, packed) -> the registers cleared
+/// before it, because a local that shares them begins its stretch there.
+pub const ShareTable = std.AutoHashMapUnmanaged(u64, std.ArrayListUnmanaged(u8));
+
+/// One statement sequence the emitter walked during a structure pass: how
+/// many loops enclose it, and each element -- the key of its first
+/// statement, and the bytes from that statement to the last one it consumed.
+const SeqRec = struct {
+    depth: u32,
+    keys: std.ArrayListUnmanaged(u64) = .{},
+    spans: std.ArrayListUnmanaged([2]u32) = .{},
+};
+
+fn stmtKeyBytes(n: ts.Node) u64 {
+    return (@as(u64, n.startByte()) << 32) | n.endByte();
+}
 
 /// A header (`func`, `def`, `class`) or a loose statement, in source order.
 const Piece = struct {
@@ -1597,6 +1625,11 @@ pub const DaState = struct {
     fn add(s: *DaState, r: u8) void {
         s.set[r >> 6] |= @as(u64, 1) << @intCast(r & 63);
     }
+    /// A register shared by locals is unassigned again when its next owner's
+    /// stretch begins (shareFunction).
+    fn del(s: *DaState, r: u8) void {
+        s.set[r >> 6] &= ~(@as(u64, 1) << @intCast(r & 63));
+    }
     /// Where two paths meet: assigned only if assigned on both, and a
     /// path that ended early does not count.
     fn meet(a: DaState, b: DaState) DaState {
@@ -1797,6 +1830,16 @@ pub const Compiler = struct {
     da_on: bool = false,
     da: DaState = .{},
     da_flag: [4]u64 = .{ 0, 0, 0, 0 },
+    /// Set while a function's STRUCTURE pass runs (shareFunction): every
+    /// statement sequence the emitter walks in that function's own source is
+    /// recorded here, with the loops around it.
+    share_rec: ?*std.ArrayListUnmanaged(SeqRec) = null,
+    /// The loop stack's length when the structure pass began: a refused loop
+    /// never pops, so entries from earlier statements can still be on it.
+    share_loop_base: usize = 0,
+    /// Functions whose locals share registers, and the registers that saved.
+    shared_funcs: u32 = 0,
+    shared_saved: u32 = 0,
     /// Index of the synthetic top-level function, once one is needed.
     main_fn: ?u32 = null,
     /// A PREFIX is a compile that already happened. The library is 613 of
@@ -2129,7 +2172,13 @@ pub const Compiler = struct {
         return r;
     }
     fn tmp(self: *Compiler) !u8 {
-        if (self.temp >= MAXREG) return Error.Unsupported;
+        if (self.temp >= MAXREG) {
+            // the LOCALS filled the window and left no room to compute in:
+            // a statement needs its temporaries before it defines its new
+            // local, so `define` may never see the limit (shareFunction)
+            if (self.eval == null and self.cur.reg_top + SHARE_TEMPS >= MAXREG) self.cur.window_full = true;
+            return Error.Unsupported;
+        }
         const r = self.temp;
         self.temp += 1;
         return self.reg(r);
@@ -2254,17 +2303,76 @@ pub const Compiler = struct {
             try self.cur.locals.append(self.alloc, .{ .name = name, .reg = self.reg(r), .class = .ref, .declared = true });
             return &self.cur.locals.items[self.cur.locals.items.len - 1];
         }
-        const r: u8 = @intCast(self.cur.locals.items.len);
-        if (r >= MAXREG) return Error.Unsupported;
-        try self.cur.locals.append(self.alloc, .{ .name = name, .reg = self.reg(r) });
+        if (self.share_rec != null) {
+            // THE STRUCTURE PASS (shareFunction) records where statements are;
+            // its code is thrown away, so its registers only have to stay
+            // inside the window: past the parameters they wrap.
+            const p = self.cur.params.len;
+            const n = self.cur.locals.items.len;
+            const rp: u8 = if (n < p) @intCast(n) else @intCast(p + (n - p) % (SHARE_PROV - p));
+            try self.cur.locals.append(self.alloc, .{ .name = name, .reg = self.reg(rp) });
+            self.cur.reg_top = @max(self.cur.reg_top, @as(u16, rp) + 1);
+            return &self.cur.locals.items[self.cur.locals.items.len - 1];
+        }
+        const r = self.cur.reg_top;
+        if (r >= MAXREG) {
+            self.cur.window_full = true;
+            return Error.Unsupported;
+        }
+        try self.cur.locals.append(self.alloc, .{ .name = name, .reg = self.reg(@intCast(r)) });
+        self.cur.reg_top = r + 1;
         return &self.cur.locals.items[self.cur.locals.items.len - 1];
+    }
+
+    /// The register above the locals. Eval code keeps the count it always
+    /// used (its locals are the caller's, bound by register).
+    fn localsTop(self: *Compiler) u8 {
+        if (self.eval != null) return @intCast(self.cur.locals.items.len);
+        return @intCast(self.cur.reg_top);
     }
 
     /// Where a statement's temporaries start: above the locals -- or, in
     /// eval mode, above the eval's own new names.
     fn bottom(self: *Compiler) u8 {
         if (self.eval) |ev| return ev.next_reg;
-        return @intCast(self.cur.locals.items.len);
+        return @intCast(self.cur.reg_top);
+    }
+
+    /// Before a statement of a function whose locals share registers: clear
+    /// each register whose next owner's stretch begins here, releasing what
+    /// the last owner left, and forget that it was assigned (shareFunction).
+    fn shareClear(self: *Compiler, st: ts.Node) Error!void {
+        const sh = self.cur.share orelse return;
+        if (self.eval != null or st.src.ptr != self.cur.node.src.ptr) return;
+        const regs = sh.get(stmtKeyBytes(st)) orelse return;
+        for (regs.items) |r| {
+            // `loadi` releases a counted value it overwrites (F-118's leak
+            // fix), and the raw `nilr` then overwrites only the 0: a release
+            // and a clear with no change to the VM. A change to the VM's one
+            // big loop moves its layout, and that measured 9-11% on kernels
+            // that never run the changed instruction (2026-10-18).
+            _ = try self.emit(.loadi, self.reg(r), 0, 0, 0);
+            _ = try self.emit(.nilr, r, 0, 0, 0);
+            if (self.da_on) self.da.del(r);
+        }
+    }
+
+    /// The structure pass: a sequence starts (its elements follow).
+    fn seqOpen(self: *Compiler, first: ts.Node) ?usize {
+        const rec = self.share_rec orelse return null;
+        if (first.src.ptr != self.cur.node.src.ptr) return null;
+        rec.append(self.alloc, .{ .depth = @intCast(self.loop_try.items.len -| self.share_loop_base) }) catch return null;
+        return rec.items.len - 1;
+    }
+
+    /// The structure pass: the element made of list[from..to] (inclusive).
+    fn seqElem(self: *Compiler, seq: ?usize, list: []const ts.Node, from: usize, to: usize) void {
+        const si = seq orelse return;
+        const rec = self.share_rec orelse return;
+        if (from > to or to >= list.len) return;
+        const s = &rec.items[si];
+        s.keys.append(self.alloc, stmtKeyBytes(list[from])) catch return;
+        s.spans.append(self.alloc, .{ list[from].startByte(), list[to].endByte() }) catch return;
     }
 
     /// Eval mode: does the caller's class (or a parent) have this attribute?
@@ -6802,8 +6910,16 @@ pub const Compiler = struct {
         // F-110: the block's flag, for each of its statements in turn
         const ln_bq = self.ln_block_quirk;
         self.ln_block_quirk = false;
+        const seq: ?usize = if (list.len > 0) self.seqOpen(list[0]) else null;
+        var el: usize = 0; // the element open since this statement (structure pass)
+        defer if (seq != null and list.len > 0) self.seqElem(seq, list, el, list.len - 1);
         var si: usize = 0;
         while (si < list.len) : (si += 1) {
+            if (seq != null and si > 0) {
+                self.seqElem(seq, list, el, si - 1);
+                el = si;
+            }
+            try self.shareClear(list[si]);
             self.ln_has_next = si + 1 < list.len;
             self.ln_block_quirk = ln_bq;
             if (rereadSpan(self, list, si)) |rr| {
@@ -7344,11 +7460,11 @@ pub const Compiler = struct {
         var ctr: u8 = 0;
         if (var_is_global) {
             gslot = try self.globalSlot(vname);
-            self.temp = @max(self.floor, @as(u8, @intCast(self.cur.locals.items.len)));
+            self.temp = @max(self.floor, self.localsTop());
             ctr = try self.tmp();
         } else if (var_is_attr) {
             aslot = (if (region_attr) self.declaredAttr(vname) else self.attrSlot(vname)) orelse return self.nopeKind(v, "@attribute outside a class");
-            self.temp = @max(self.floor, @as(u8, @intCast(self.cur.locals.items.len)));
+            self.temp = @max(self.floor, self.localsTop());
             ctr = try self.tmp();
         } else {
             // the seeded local (low register, classified) the first time the
@@ -7615,6 +7731,9 @@ pub const Census = struct {
     stmts_ok: u32,
     stmts_bad: u32,
     emit_failed: u32 = 0,
+    /// functions whose locals share registers (shareFunction), and the registers saved
+    shared_funcs: u32 = 0,
+    shared_saved: u32 = 0,
     refusals: []Refusal,
     /// `new K` of a class the unit does not define -- COMPILED, to Ring's
     /// run-time R11, and counted here so a typo still shows (absentClass).
@@ -7738,6 +7857,8 @@ pub fn census(alloc: std.mem.Allocator, roots: []const ts.Node) !Census {
         .stmts_ok = c.stmts_ok,
         .stmts_bad = c.stmts_bad,
         .emit_failed = c.emit_failed,
+        .shared_funcs = c.shared_funcs,
+        .shared_saved = c.shared_saved,
         .refusals = c.refusals.items,
         .absent_classes = c.absent_classes.items,
         .native_sites = c.stmts_native,
@@ -9890,7 +10011,15 @@ fn emitAll(c: *Compiler) !void {
     // From the prefix mark: everything below it is already emitted, and its
     // code sits at the front of the stream where its entries point.
     for (c.funcs.items[c.prefix_funcs..]) |*f| {
-        emitOne(c, f) catch |e| {
+        var res = emitOne(c, f);
+        // ITS LOCALS DID NOT FIT THE WINDOW: share registers, then emit again
+        // (shareFunction). This runs once per function, in pass A, whose code
+        // is thrown away; pass B emits with the shared registers.
+        if (f.window_full and !f.share_tried and c.eval == null) {
+            f.share_tried = true;
+            if (shareFunction(c, f)) res = emitOne(c, f);
+        }
+        res catch |e| {
             // THE CENSUS TOO. It is not lenient, so an Unsupported escaping
             // one function returned out of this loop -- and every caller in
             // the census wrote `emitAll(&c) catch {}`, so the functions after
@@ -10336,7 +10465,7 @@ fn noteUnnamed(c: *Compiler, st: ts.Node, nref: usize) void {
     // the one bare Unsupported measured so far: `define` and `tmp` at the
     // edge of the register window. stzDiagram.ToCanvasXT is 3,909 lines
     // with about 630 locals, and Ring has no limit to match.
-    const full = c.cur.locals.items.len >= MAXREG;
+    const full = c.cur.window_full or c.cur.locals.items.len >= MAXREG;
     c.refusals.append(c.alloc, .{
         .kind = if (full) "the register window is full (200 locals and temporaries)" else "unsupported, no cause recorded",
         .row = st.start().row + 1,
@@ -10345,6 +10474,226 @@ fn noteUnnamed(c: *Compiler, st: ts.Node, nref: usize) void {
         .byte = st.startByte(),
         .src = st.src,
     }) catch {};
+}
+
+/// THE REGISTER WINDOW (2026-10-18). An instruction names a register in a
+/// byte and MAXREG is 200, so a function gets one register per local only up
+/// to there. stzDiagram.ToCanvasXT has 618 locals in 3,909 lines, and Ring
+/// has no such limit, so it was refused -- yet no more than about fifty of
+/// them are in use over any one stretch of it. Its locals SHARE registers.
+///
+/// A local's STRETCH: the statements, in one sequence the emitter walks,
+/// from the one holding its first use to the one holding its last -- in the
+/// innermost sequence that holds every use and that NO loop encloses. Such a
+/// sequence runs at most once per call, its statements in order, and nothing
+/// jumps into its middle (Ring has no goto), so control that has left a
+/// stretch never comes back into it. Two locals whose stretches do not
+/// overlap may share a register: each sees its own writes, and nothing else,
+/// from the start of its stretch on. The start clears the register
+/// (`loadi` then `nilr`, releasing what the last owner left) and definite assignment
+/// forgets it, so a read before the local's own first assignment is still R24
+/// (`chkl`), as on Ring. A local used inside a loop gets the whole loop.
+///
+/// What keeps a register of its own: a parameter; a name used inside a lambda
+/// (a capture is taken by name); a local with no use in the body. Not tried
+/// at all: a function holding an eval (it binds locals by name at run time),
+/// the top level, a class region. The positions come from the compiler's own
+/// walk -- a STRUCTURE pass of emitOne whose code is thrown away -- so a
+/// sequence is exactly what the emitter treats as one; a statement it did not
+/// walk into counts whole, which can only lengthen a stretch.
+///
+/// Every function that fits the window compiles exactly as before.
+const SHARE_PROV: usize = 140;
+const SHARE_TEMPS: usize = 40;
+
+/// RNXC_TRACE_SHARE=1: say, on stderr, what shareFunction decided and why.
+var g_share_trace: ?bool = null;
+fn shareNote(f: *const Func, comptime why: []const u8, args: anytype) void {
+    const on = g_share_trace orelse blk: {
+        const b = std.process.hasEnvVarConstant("RNXC_TRACE_SHARE");
+        g_share_trace = b;
+        break :blk b;
+    };
+    if (on) std.debug.print("share {s}: " ++ why ++ "\n", .{f.name} ++ args);
+}
+
+fn shareFunction(c: *Compiler, f: *Func) bool {
+    if (f.is_main or f.calls_eval or f.stmts.items.len == 0 or std.mem.eql(u8, f.name, PROLOGUE)) {
+        shareNote(f, "not tried (main {}, eval {}, statements {d})", .{ f.is_main, f.calls_eval, f.stmts.items.len });
+        return false;
+    }
+    const a = c.alloc;
+    const np = f.params.len;
+    if (np + 8 >= SHARE_PROV or f.locals.items.len < np) {
+        shareNote(f, "not tried ({d} parameters, {d} locals)", .{ np, f.locals.items.len });
+        return false;
+    }
+    for (f.params, 0..) |p, i| {
+        if (!std.ascii.eqlIgnoreCase(f.locals.items[i].name, p)) {
+            shareNote(f, "not tried: local {d} is {s}, parameter {s}", .{ i, f.locals.items[i].name, p });
+            return false;
+        }
+    }
+    const snap = a.dupe(Local, f.locals.items) catch return false;
+    const snap_top = f.reg_top;
+    const restore = struct {
+        fn go(cc: *Compiler, ff: *Func, s: []const Local, top: u16) void {
+            ff.locals.clearRetainingCapacity();
+            ff.locals.appendSlice(cc.alloc, s) catch {};
+            ff.reg_top = top;
+        }
+    }.go;
+
+    // 1. the structure pass, on provisional registers that stay in the window
+    for (f.locals.items[np..], np..) |*l, i| l.reg = @intCast(np + (i - np) % (SHARE_PROV - np));
+    f.reg_top = @intCast(@min(f.locals.items.len, SHARE_PROV));
+    var rec = std.ArrayListUnmanaged(SeqRec){};
+    const code0 = c.code.items.len;
+    const rows0 = c.rows.items.len;
+    const files0 = c.files.items.len;
+    const fix0 = c.fixups.items.len;
+    const ref0 = c.refusals.items.len;
+    c.share_rec = &rec;
+    c.share_loop_base = c.loop_try.items.len;
+    emitOne(c, f) catch {};
+    c.share_rec = null;
+    c.code.shrinkRetainingCapacity(code0);
+    c.rows.shrinkRetainingCapacity(@min(rows0, c.rows.items.len));
+    c.files.shrinkRetainingCapacity(@min(files0, c.files.items.len));
+    c.fixups.shrinkRetainingCapacity(@min(fix0, c.fixups.items.len));
+    c.refusals.shrinkRetainingCapacity(@min(ref0, c.refusals.items.len));
+
+    // 2. every use of every name in the body, by position; names used inside
+    // a lambda apart
+    var uses = std.StringHashMapUnmanaged(std.ArrayListUnmanaged(u32)){};
+    var in_lambda = std.StringHashMapUnmanaged(void){};
+    const Item = struct { n: ts.Node, lam: bool };
+    var stack = std.ArrayListUnmanaged(Item){};
+    for (f.stmts.items) |st| stack.append(a, .{ .n = st, .lam = false }) catch return false;
+    while (stack.pop()) |it| {
+        const k = it.n.kind();
+        const lam = it.lam or std.mem.eql(u8, k, "anonymous_function");
+        if (std.mem.eql(u8, k, "identifier")) {
+            const low = std.ascii.allocLowerString(a, it.n.text()) catch return false;
+            if (lam) {
+                in_lambda.put(a, low, {}) catch return false;
+            } else {
+                const g = uses.getOrPut(a, low) catch return false;
+                if (!g.found_existing) g.value_ptr.* = .{};
+                g.value_ptr.append(a, it.n.startByte()) catch return false;
+            }
+        }
+        var i: u32 = 0;
+        while (i < it.n.namedChildCount()) : (i += 1)
+            stack.append(a, .{ .n = it.n.namedChild(i), .lam = lam }) catch return false;
+    }
+
+    // 3. each local's stretch
+    const Iv = struct { s: u32, e: u32, key: u64, li: usize };
+    var ivs = std.ArrayListUnmanaged(Iv){};
+    var own = std.ArrayListUnmanaged(usize){};
+    for (f.locals.items[np..], np..) |l, li| {
+        const low = std.ascii.allocLowerString(a, l.name) catch return false;
+        const us = uses.get(low);
+        if (in_lambda.contains(low) or us == null or us.?.items.len == 0) {
+            own.append(a, li) catch return false;
+            continue;
+        }
+        var umin: u32 = std.math.maxInt(u32);
+        var umax: u32 = 0;
+        for (us.?.items) |u| {
+            umin = @min(umin, u);
+            umax = @max(umax, u);
+        }
+        var best: ?Iv = null;
+        for (rec.items) |sq| {
+            const sp = sq.spans.items;
+            if (sq.depth != 0 or sp.len == 0) continue;
+            if (umin < sp[0][0] or umax >= sp[sp.len - 1][1]) continue;
+            var lo: usize = sp.len;
+            var hi: usize = 0;
+            var ok = true;
+            for (us.?.items) |u| {
+                const ix = spanOf(sp, u) orelse {
+                    ok = false;
+                    break;
+                };
+                lo = @min(lo, ix);
+                hi = @max(hi, ix);
+            }
+            if (!ok) continue;
+            const cand = Iv{ .s = sp[lo][0], .e = sp[hi][1], .key = sq.keys.items[lo], .li = li };
+            if (best == null or cand.e - cand.s < best.?.e - best.?.s) best = cand;
+        }
+        if (best) |b| ivs.append(a, b) catch return false else own.append(a, li) catch return false;
+    }
+
+    // 4. colour the stretches: sorted by start, each takes the lowest
+    // register whose last stretch has ended
+    std.mem.sort(Iv, ivs.items, {}, struct {
+        fn lt(_: void, x: Iv, y: Iv) bool {
+            return x.s < y.s or (x.s == y.s and x.li < y.li);
+        }
+    }.lt);
+    var ends = std.ArrayListUnmanaged(u32){};
+    const colour = a.alloc(usize, ivs.items.len) catch return false;
+    for (ivs.items, 0..) |iv, ii| {
+        var pick: ?usize = null;
+        for (ends.items, 0..) |e, ci| {
+            if (e <= iv.s) {
+                pick = ci;
+                break;
+            }
+        }
+        if (pick) |ci| {
+            ends.items[ci] = iv.e;
+            colour[ii] = ci;
+        } else {
+            ends.append(a, iv.e) catch return false;
+            colour[ii] = ends.items.len - 1;
+        }
+    }
+    const top = np + ends.items.len + own.items.len;
+    shareNote(f, "{d} locals, {d} sequences walked: {d} stretches in {d} registers, {d} of their own, {d} parameters", .{ f.locals.items.len, rec.items.len, ivs.items.len, ends.items.len, own.items.len, np });
+    if (top + SHARE_TEMPS > MAXREG) {
+        shareNote(f, "does not fit: {d} registers + {d} for temporaries > {d}", .{ top, SHARE_TEMPS, MAXREG });
+        restore(c, f, snap, snap_top);
+        return false;
+    }
+
+    // 5. install
+    const tbl = a.create(ShareTable) catch return false;
+    tbl.* = .{};
+    for (ivs.items, 0..) |iv, ii| {
+        const r: u8 = @intCast(np + colour[ii]);
+        f.locals.items[iv.li].reg = r;
+        const g = tbl.getOrPut(a, iv.key) catch return false;
+        if (!g.found_existing) g.value_ptr.* = .{};
+        var dup = false;
+        for (g.value_ptr.items) |x| dup = dup or x == r;
+        if (!dup) g.value_ptr.append(a, r) catch return false;
+    }
+    for (own.items, 0..) |li, j| f.locals.items[li].reg = @intCast(np + ends.items.len + j);
+    f.reg_top = @intCast(top);
+    f.share = tbl;
+    f.window_full = false;
+    c.shared_funcs += 1;
+    c.shared_saved += @intCast(f.locals.items.len -| top);
+    return true;
+}
+
+/// The element of a sequence that holds byte `u`, by binary search (the
+/// elements are in order and do not overlap).
+fn spanOf(sp: []const [2]u32, u: u32) ?usize {
+    var lo: usize = 0;
+    var hi: usize = sp.len;
+    while (lo < hi) {
+        const mid = (lo + hi) / 2;
+        if (sp[mid][0] <= u) lo = mid + 1 else hi = mid;
+    }
+    if (lo == 0) return null;
+    const ix = lo - 1;
+    return if (u < sp[ix][1]) ix else null;
 }
 
 fn emitOne(c: *Compiler, f: *Func) Error!void {
@@ -10371,7 +10720,7 @@ fn emitOne(c: *Compiler, f: *Func) Error!void {
         // Params occupy r0..r(n-1); `define` is idempotent so pass B reuses
         // exactly the registers pass A handed out.
         for (f.params) |p| _ = try c.define(p);
-        c.temp = @intCast(f.locals.items.len);
+        c.temp = c.localsTop();
         const code_start = c.here();
         f.entry = c.here();
         f.emitted = true;
@@ -10419,11 +10768,20 @@ fn emitOne(c: *Compiler, f: *Func) Error!void {
             }
         }
         const ln_lo = c.here();
+        // the function body is a sequence too (structure pass, shareFunction)
+        const bseq: ?usize = if (f.stmts.items.len > 0) c.seqOpen(f.stmts.items[0]) else null;
+        var bel: usize = 0;
+        defer if (bseq != null) c.seqElem(bseq, f.stmts.items, bel, f.stmts.items.len - 1);
         var si: usize = 0;
         while (si < f.stmts.items.len) : (si += 1) {
             const st = f.stmts.items[si];
             // F-128: a file only a load inside a block reaches runs there, not here
             if (f.is_main and c.nested_skip.count() > 0 and c.nested_skip.contains(stmtKey(st))) continue;
+            if (bseq != null and si > 0) {
+                c.seqElem(bseq, f.stmts.items, bel, si - 1);
+                bel = si;
+            }
+            try c.shareClear(st);
             c.ln_has_next = si + 1 < f.stmts.items.len;
             c.ln_block_quirk = false;
             // A span the grammar read differently from Ring -- a line cut in
@@ -10542,7 +10900,7 @@ fn emitOne(c: *Compiler, f: *Func) Error!void {
         // this. A function whose LOCALS alone fill the window gets the old
         // instruction rather than an abort: a wrong value in a case no census
         // has seen, instead of a lost library.
-        c.temp = @intCast(f.locals.items.len);
+        c.temp = c.localsTop();
         if (c.tmp()) |tr| {
             _ = try c.emit(.loadk, tr, 0, 0, try c.konstIndex("\"\""));
             _ = try c.emit(.ret, tr, 0, 0, 0);
@@ -10557,9 +10915,16 @@ fn emitOne(c: *Compiler, f: *Func) Error!void {
         // integers. Temporaries are conservatively boxed, so nothing leaks;
         // sharpening this is what better inference buys.
         var m: u64 = if (f.frame >= 64) ~@as(u64, 0) else (@as(u64, 1) << @intCast(f.frame)) - 1;
+        // a register leaves the mask only when NO local in it can hold a
+        // reference -- locals that share one (shareFunction) are judged together
+        var held: u64 = 0;
+        for (f.locals.items) |l| {
+            if (l.class.boxed() and l.reg < 64) held |= @as(u64, 1) << @intCast(l.reg);
+        }
         for (f.locals.items) |l| {
             if (!l.class.boxed() and l.reg < 64) m &= ~(@as(u64, 1) << @intCast(l.reg));
         }
+        m |= held & (if (f.frame >= 64) ~@as(u64, 0) else (@as(u64, 1) << @intCast(f.frame)) - 1);
         f.mask = m;
 
         if (da_ph) |ph| {

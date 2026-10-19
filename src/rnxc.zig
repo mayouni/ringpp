@@ -800,6 +800,8 @@ fn printCensus(cs: co.Census, w: *std.Io.Writer, alloc: std.mem.Allocator) !void
     // non-zero cannot be told apart from one that stopped being reported.
     // This is the number that was silently discarded until 2026-09-23.
     try w.print("functions whose codegen failed outside a statement: {d}\n", .{cs.emit_failed});
+    // the register window (shareFunction): printed always, as above
+    try w.print("functions whose locals share registers: {d} ({d} registers saved)\n", .{ cs.shared_funcs, cs.shared_saved });
     // `new K` of a class nobody defines compiles to Ring's run-time R11
     // (2026-09-27), and is counted here so a typo (`stzEnity`) stays
     // visible without a refusal. Printed always, for the reason above.

@@ -129,7 +129,7 @@ INDEX = '''
   <table class="perf">
     <thead><tr><th>what is measured, before every release</th><th>the result</th></tr></thead>
     <tbody>
-      <tr><td>Softanza's own tests: the checks that pass on Ring, passing on Ring++</td><td data-label="the result">12,863 of 13,008 on Windows (98.9%), 12,170 of 12,255 on Linux (99.3%) &mdash; <a href="how.html#parity">the rest, named</a></td></tr>
+      <tr><td>Softanza's own tests: the checks that pass on Ring, passing on Ring++</td><td data-label="the result">12,924 of 13,008 on Windows (99.4%), 12,170 of 12,255 on Linux (99.3%) &mdash; <a href="how.html#parity">the rest, named</a></td></tr>
       <tr><td>Ring programs compared with Ring, line by line</td><td data-label="the result">5,112</td></tr>
       <tr><td>Speed against Ring 1.27, on the same programs</td><td data-label="the result"><a href="issues.html#speed">4 to 2,000 times faster</a></td></tr>
       <tr><td>What has to be installed beside it</td><td data-label="the result">nothing</td></tr>
@@ -231,7 +231,7 @@ cWord = <span class="s">"<span class="ar" lang="ar">&#1587;&#1604;&#1575;&#1605;
   <h2>What Ring++ does instead</h2>
   <ul class="plain">
     <li><b>It keeps the code that exists running.</b> Softanza runs on Ring++: of the checks in its tests that pass on Ring,
-    Ring++ passes 12,863 of 13,008 on Windows and 12,170 of 12,255 on Linux, and every one it does not pass has a named
+    Ring++ passes 12,924 of 13,008 on Windows and 12,170 of 12,255 on Linux, and every one it does not pass has a named
     cause (<a href="how.html#parity">how it is counted</a>).</li>
     <li><b>It answers like Ring, unless it says otherwise.</b> Each of Ring's defects was looked at on its own and given one
     of four answers: keep it, so existing programs mean the same; fix it, where no correct program could tell the
@@ -293,19 +293,20 @@ HOW = '''
 <section class="wrap narrow">
   <h2>What is measured, before every release</h2>
   <ul class="plain">
-    <li><b>The probes.</b> 156 programs, each pinning one rule of Ring, byte for byte against the oracle: on Windows in the
+    <li><b>The probes.</b> 159 programs, each pinning one rule of Ring, byte for byte against the oracle: on Windows in the
     optimised and the safety-checked builds, and on Linux.</li>
-    <li><b>The census.</b> Softanza's base library compiled whole: 118,640 statements, 118,506 compiled; the 134 refused are
-    one 3,909-line function that exceeds the register window.</li>
+    <li><b>The census.</b> Softanza's base library compiled whole: 118,640 statements, every one compiled &mdash; among them a
+    3,909-line function with 631 locals, whose locals share registers because one apiece does not fit the window.</li>
     <li><b>The wide clock.</b> 5,112 Ring programs &mdash; Softanza's tests and examples &mdash; run on both runtimes. The oracle
     runs each twice first, so a line it does not reproduce from itself (a time, a random draw) is never counted against
-    Ring++. 3,567 agree on every remaining line on Windows, 3,753 on Linux; most of the rest differ only on the line that
+    Ring++. 3,567 agree on every remaining line on Windows, 3,753 on Linux, on 2.0.2's compiler; most of the rest differ only on the line that
     reports how long the program took.</li>
     <li id="parity"><b>Assertion parity.</b> Every check that passes on Ring must pass on Ring++. Counting every check
-    Softanza's tests print, <code>[PASS]</code> and <code>[OK]</code> alike, Ring++ passes 12,863 of Ring's 13,008 on
-    Windows and 12,170 of 12,255 on Linux. The rest is named: 81 sit in two test files that read a global without its
-    <code>$</code> inside a function, which Ring++ refuses to compile; 61 sit behind one function too large for the register
-    window (Windows); a handful measure time or memory; and on Linux one is a cluster test that does not finish under
+    Softanza's tests print, <code>[PASS]</code> and <code>[OK]</code> alike, Ring++ passes 12,924 of Ring's 13,008 on
+    Windows and 12,170 of 12,255 on Linux, against Softanza as of 4 October 2026 (Windows on 2.0.3: the programs its one
+    change reaches were run again; Linux on 2.0.2, every function but that one compiling to the same code). The rest is
+    named: 81 sit in three test files that read a global without its <code>$</code> inside a function, which Ring++ refuses
+    to compile &mdash; corrected in Softanza since, they pass every check; a handful measure time or memory; and on Linux one is a cluster test that does not finish under
     Ring++. Until 17 October 2026 this count read <code>[PASS]</code> lines
     only, and said 8,540 of 8,540: true of those checks, and silent about the 4,468 written as <code>[OK]</code>.</li>
   </ul>

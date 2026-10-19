@@ -1301,7 +1301,35 @@ def main():
             return 1
         K.make_copy()
     copy = None
-    if MIRROR_MAP:
+    if '--mirror-frozen' in flags and not MIRROR_MAP:
+        print('--mirror-frozen is for the Linux pass on the mirror (--platform=linux)')
+        return 1
+    if MIRROR_MAP and '--mirror-frozen' in flags:
+        # --mirror-frozen (2026-10-19): rnx runs the MIRROR'S clock copy as it was last synced, and is NOT re-synced
+        # from the Windows copy. For a pass on the Linux oracle's snapshot after the Windows snapshot was re-taken:
+        # the Windows copy then holds a newer Softanza than the Linux oracle's transcripts were taken on, and
+        # comparing the two would compare two libraries. The mirror still holds the copy those transcripts were
+        # measured against; its stamp, recorded when it was synced, is what every rnx row is keyed on -- and it must
+        # be the one this cache's own copy list recorded, or the mirror is not what that pass ran.
+        t = time.time()
+        try:
+            done = json.load(io.open(MIRROR_LIST, encoding='utf-8'))
+            listed = json.load(io.open(COPY_LIST, encoding='utf-8')).get('stamp')
+        except (OSError, ValueError) as ex:
+            print('--mirror-frozen: cannot read the mirror list or the copy list (%s)' % ex)
+            return 1
+        copy = (done.get('runtime/clock-copy') or '').split('/')[0]
+        if not copy or copy != listed:
+            print('--mirror-frozen: the mirror holds copy %s and this cache recorded %s -- not the copy its pass ran'
+                  % (copy or 'nothing', listed))
+            return 1
+        copy_took = time.time() - t
+        print('MIRROR FROZEN: rnx runs the mirror\'s clock copy as last synced (stamp %s, the one this cache\'s '
+              'transcripts were compared against), NOT the Windows copy; only rnxc and the tools are synced' % copy)
+        sync_mirror([('zig-out-linux', listing_stamp('zig-out-linux')),
+                     ('runtime/linux-mirror-tools', listing_stamp('runtime/linux-mirror-tools'))])
+        subprocess.run(['wsl.exe', '-d', WSL_DISTRO, '--exec', 'mkdir', '-p', to_wsl(W.CACHE)])
+    elif MIRROR_MAP:
         # what RNX reads, on WSL's own disk; the stamp is taken here so the
         # mirror is synced before the prefix is built from it
         t = time.time()

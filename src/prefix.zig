@@ -461,6 +461,10 @@ fn loadInner(
                 .declared = true,
                 .elem = .ref,
             });
+            // the registers above its locals (they may share: shareFunction)
+            var top: u16 = 0;
+            for (fnc.locals.items) |l| top = @max(top, @as(u16, l.reg) + 1);
+            fnc.reg_top = top;
             li += n;
         }
     }

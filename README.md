@@ -9,7 +9,7 @@ that comes next.
 
 | | measured 2026-10-17 |
 |---|---|
-| Softanza's checks that pass on Ring and pass on Ring++ | **12,863 of 13,008** (Windows), **12,170 of 12,255** (Linux) -- [the rest, named](https://mayouni.github.io/ringpp/how.html#parity) |
+| Softanza's checks that pass on Ring and pass on Ring++ | **12,924 of 13,008** (Windows), **12,170 of 12,255** (Linux) -- [the rest, named](https://mayouni.github.io/ringpp/how.html#parity) |
 | Ring programs compared with Ring, line by line | **5,112** |
 | faster than Ring 1.27 on the same programs | **4x to 2,030x** ([the table](https://mayouni.github.io/ringpp/issues.html#speed)) |
 | what it needs | one binary: no Ring, no C compiler |
