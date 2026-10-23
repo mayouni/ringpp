@@ -17,7 +17,7 @@
 # the first block below is a row that would have made wrong. The other
 # temptation was a faithful type test over a LoadLib that returned the
 # INTEGER 1, which answers FALSE for a library that HAS loaded, and
-# stzGraph._EngineAvailable() would then have switched the whole engine
+# StzGraphQ()._EngineAvailable() would then have switched the whole engine
 # graph path off in silence.
 #
 # LoadLib answers a DLL value now, as Ring's does. This file pins the half

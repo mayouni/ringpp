@@ -27,6 +27,7 @@
 //! Nothing is shared between the two allocators, in either direction.
 
 const std = @import("std");
+const handles = @import("handles.zig");
 
 pub const Tag = enum(u32) {
     nil = 0,
@@ -144,7 +145,48 @@ pub const HostApi = extern struct {
     list_num: *const fn (RppList, u32) callconv(.c) f64,
     list_str: *const fn (RppList, u32, *u32) callconv(.c) [*]const u8,
     list_list: *const fn (RppList, u32) callconv(.c) RppList,
+    // ---- ONE handle table, the host's (ABI 3, 2026-10-22) ----
+    // RINGPP-HOST-HANDLES-01 and RINGPP-CPTR-RETIRE-01 (stzlib-security, SECURITY-R16): a Ring copy of an object a
+    // native library destroyed read freed, reused memory with no error, and ids could not cross DLLs because every
+    // library had a table of its own. The host keeps one (src/handles.zig). An id is `generation * 2^32 + slot + 1`,
+    // exact in an f64; a release bumps the slot's generation, so every copy of the old id is STALE.
+    //
+    //   handle_store    the id of a pointer; a pointer that is already live gets the id it has (one object, one id);
+    //                   0 for null, or when the table cannot grow
+    //   handle_resolve  the pointer, or null: id 0, malformed, never issued, released or retired
+    //   handle_state    0 unknown (not an id), 1 live, 2 stale (an id this table issued, no longer valid): a bridge
+    //                   raises for 2 and stays quiet for NULL
+    //   handle_release  retire the id (every copy goes stale), answer the pointer for the caller to free; a stale or
+    //                   unknown id releases nothing
+    //   handle_retire   the library freed a pointer WITHOUT holding its id: retire the id it has, if any (1) or none (0)
+    //
+    // An engine built for ABI 2 never reads these and keeps its own table; one built for 3 must run on a host that
+    // speaks 3 (`rpp_abi_version`, checked at load).
+    handle_store: *const fn (?*anyopaque) callconv(.c) f64,
+    handle_resolve: *const fn (f64) callconv(.c) ?*anyopaque,
+    handle_state: *const fn (f64) callconv(.c) c_int,
+    handle_release: *const fn (f64) callconv(.c) ?*anyopaque,
+    handle_retire: *const fn (?*anyopaque) callconv(.c) c_int,
 };
+
+/// THE table: one per process, whichever library asks.
+pub var handle_table = handles.Table.init(std.heap.page_allocator);
+
+pub fn hostHandleStore(p: ?*anyopaque) callconv(.c) f64 {
+    return handle_table.store(p);
+}
+pub fn hostHandleResolve(id: f64) callconv(.c) ?*anyopaque {
+    return handle_table.resolve(id);
+}
+pub fn hostHandleState(id: f64) callconv(.c) c_int {
+    return @intFromEnum(handle_table.state(id));
+}
+pub fn hostHandleRelease(id: f64) callconv(.c) ?*anyopaque {
+    return handle_table.release(id);
+}
+pub fn hostHandleRetire(p: ?*anyopaque) callconv(.c) c_int {
+    return if (handle_table.retirePtr(p)) 1 else 0;
+}
 
 /// Filled by the VM at startup and handed to every engine that loads.
 pub var host_api: HostApi = undefined;
@@ -157,14 +199,20 @@ pub var host_api: HostApi = undefined;
 pub const INIT_SYMBOL = "rpp_init";
 
 /// The ABI version this build speaks. An engine may export
-/// `rpp_abi_version` returning this; absent, version 1 is assumed.
+/// `rpp_abi_version` returning this; absent, version 1 is assumed. An engine that
+/// exports a number ABOVE this is refused at load (`too_new`): it would read the
+/// vtable past its end.
+///
+/// **3** since 2026-10-22: the HostApi ends with the host's handle table (store,
+/// resolve, state, release, retire). The table only grew at its end, so an engine
+/// built for 2 loads and runs as before.
 ///
 /// **2** since 2026-09-10: `rpp_init` receives a `*const HostApi` where it
 /// received a bare `RppRegister`, and `Tag.list` exists. Version 1 engines
 /// do not load -- the change is in the init signature, so a stale engine
 /// would read a vtable pointer as a function pointer. There is one version 1
 /// engine in the world (`bench/engine_shim.zig`) and it moved with the ABI.
-pub const VERSION: u32 = 2;
+pub const VERSION: u32 = 3;
 
 // ---------------------------------------------------------------- registry
 
@@ -203,7 +251,7 @@ pub fn find(name: []const u8) ?RppFn {
 /// whole of the difference. An earlier note here said Ring "has no case for
 /// you could load this and I cannot" and used that to justify answering
 /// NULL instead of raising. It was wrong: R46 IS that case.
-pub const LoadResult = enum { ok, cannot_open, no_init };
+pub const LoadResult = enum { ok, cannot_open, no_init, too_new };
 
 pub fn loadLib(alloc: std.mem.Allocator, path: []const u8) LoadResult {
     reg_alloc = alloc;
@@ -212,6 +260,13 @@ pub fn loadLib(alloc: std.mem.Allocator, path: []const u8) LoadResult {
         lib.close();
         return .no_init;
     };
+    // An engine built for a LATER host would read the vtable past its end: refuse it by name rather than let it find garbage.
+    if (lib.lookup(*const fn () callconv(.c) u32, "rpp_abi_version")) |ver| {
+        if (ver() > VERSION) {
+            lib.close();
+            return .too_new;
+        }
+    }
     host_api.register = &register;
     return if (init(&host_api) == 0) .ok else .no_init;
 }

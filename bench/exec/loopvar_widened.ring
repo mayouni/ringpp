@@ -4,7 +4,7 @@
 # uncounted copy of whatever the register held -- dropped silently until an
 # integer store began releasing what it overwrites (F-118's leak fix), and
 # then released: a string still held elsewhere was freed, and three Softanza
-# graphics tests died at a frame sweep. stzMathDiagram._MintShape is the
+# graphics tests died at a frame sweep. StzMathDiagramQ()._MintShape is the
 # shape: `for _v_ = 1 to _nV_`, then `_v_ = This._Prop(...)`, then
 # `isNumber(_v_)` and `isString(_v_)` in a loop. 2026-10-14.
 

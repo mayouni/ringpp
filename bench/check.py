@@ -32,7 +32,7 @@ import os, re, subprocess, sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
-RNXC = os.path.join(ROOT, 'zig-out', 'bin', 'rnxc.exe')
+RNXC = os.environ.get('RNXC') or os.path.join(ROOT, 'zig-out', 'bin', 'rnxc.exe')
 RING = os.environ.get('RING') or os.path.join(ROOT, 'runtime', 'win64', 'ring.exe')
 FIX = os.path.join(ROOT, 'tests', 'fixtures')
 
@@ -75,8 +75,17 @@ EXPECT = {
     'unknown_package.ring': ['6:8 rpp/unknown-package'],
     'uninit_var.ring': ['13:7 rpp/uninitialized-variable'],
     'uninit_method.ring': ['27:16 rpp/uninitialized-variable'],
+    # 2026-10-22, found by the body gate's adversarial court (haro/spike/v20/agent/bypass_court.py): the right-hand side of an assignment was walked by its
+    # CHILDREN, so `x = o.nHits` reported the attribute name as an unassigned variable (R24, on a program that runs) and `x = nTypo` -- a lone name -- was
+    # never looked at. Both rows are held to the oracle below.
+    'uninit_rhs.ring': ['6:6 rpp/uninitialized-variable'],
+    # 2026-10-22 (F-133): a builtin's NAME read as a variable was exempt, though Ring raises R24 on it; found when a model, told floor() was not allowed, wrote `floor + 0.5`.
+    'uninit_builtin_name.ring': ['7:7 rpp/uninitialized-variable'],
+    # ... and every name the program DEFINES (a function, a class) was exempt too; a definition's own name is skipped by position now.
+    'uninit_def_name.ring': ['8:6 rpp/uninitialized-variable', '12:6 rpp/uninitialized-variable'],
     # correctly silent: working code the rules must not shout at
     'alias.ring': [],
+    'uninit_member.ring': [],
     'cache_fib.ring': [],
     'cache_method.ring': [],
     'str_fold.ring': [],
@@ -87,8 +96,11 @@ EXPECT = {
 # line Ring stops on must be a line the checker reported -- see the header.
 ORACLE_CONFIRMS = [
     'string_escape.ring', 'undefined_fn.ring', 'unknown_class.ring',
-    'unknown_package.ring', 'uninit_var.ring', 'uninit_method.ring',
+    'unknown_package.ring', 'uninit_var.ring', 'uninit_method.ring', 'uninit_rhs.ring', 'uninit_builtin_name.ring', 'uninit_def_name.ring',
 ]
+
+# Silent fixtures the oracle must also run WITHOUT an error: the claim "this program is fine" is as much Ring's to check as "this line raises".
+ORACLE_CLEAN = ['uninit_member.ring']
 
 # Fixtures that must produce NOTHING, and why.
 #
@@ -188,6 +200,17 @@ def main():
         # Named, never quietly skipped: the gate without the oracle is only
         # the golden half of itself.
         print('SKIP  oracle confirmation -- no oracle at %s' % RING)
+
+    if os.path.exists(RING):
+        for name in ORACLE_CLEAN:
+            if only and not any(o in name for o in only):
+                continue
+            first = oracle_first_error(name)
+            if first is None:
+                print('RING  %-24s runs clean -- and the checker is silent' % name)
+            else:
+                bad += 1
+                print('RING  %-24s stops at line %d with %s -- the fixture is not clean' % ((name,) + first))
 
     silent = 0
     for name in sorted(NOT_CHECKED):

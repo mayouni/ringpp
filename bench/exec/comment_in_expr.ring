@@ -5,7 +5,7 @@
 # -- and the expression carries on around it. The grammar keeps the
 # comment as a node wherever it falls, so a binary expression's second
 # named child was the COMMENT and not the right operand, and Ring++
-# refused the statement ("comment"). stzUiDocument.ToFixture is that
+# refused the statement ("comment"). StzUiDocumentQ().ToFixture is that
 # shape: eight lines of `#` in the middle of a script built with `+`.
 # Every row taken from Ring 1.27 first.
 

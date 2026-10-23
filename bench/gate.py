@@ -105,12 +105,16 @@ def bridge():
     backend of that boundary, instead of Ring's. Building it and running
     bench/bridge.ring is the claim under test: a second backend carries the
     engine across and no bridge changes. Fourteen checks, each against the
-    same answer computed in plain Ring."""
-    code, out, secs = run(['zig', 'build-lib', '-dynamic', '-OReleaseFast', '-lc',
-                           'bridge_demo.zig', '--name', 'rppbridge'], HERE)
-    if code != 0:
-        record('bridge (ABI 2)', False, out.strip().split('\n')[0][:70], secs)
-        return False
+    same answer computed in plain Ring. Since 2026-10-22 it also holds the host's handle table (ABI 3):
+    a second DLL reads and frees an id the first made, a stale copy raises or answers NULL, a pointer
+    freed by address is retired, and an engine built for a later host is refused."""
+    secs = 0
+    for src, name in (('bridge_demo.zig', 'rppbridge'), ('bridge_demo_b.zig', 'rppbridge_b'), ('bridge_too_new.zig', 'rppnew')):
+        code, out, s1 = run(['zig', 'build-lib', '-dynamic', '-OReleaseFast', '-lc', src, '--name', name], HERE)
+        secs += s1
+        if code != 0:
+            record('bridge (ABI 3)', False, out.strip().split('\n')[0][:70], secs)
+            return False
     exe = os.path.join(ROOT, 'zig-out', 'bin', 'rnxc.exe')
     code, out, secs = run([exe, 'exec', 'bridge.ring'], HERE)
     ok = 'BRIDGE OK' in out
@@ -118,7 +122,7 @@ def bridge():
     if not ok:
         bad = [l for l in out.split('\n') if 'FAIL' in l]
         note = (bad[0][:70] if bad else 'no BRIDGE OK line')
-    record('bridge (ABI 2)', ok, note, secs)
+    record('bridge (ABI 3)', ok, note, secs)
     return ok
 
 

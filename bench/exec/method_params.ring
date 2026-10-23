@@ -23,7 +23,7 @@
 # it with the caller still holding it, and the string inside comes back as
 # pointer-shaped bytes. Only the LAST argument survives, because only its
 # register has not yet been reused -- and that asymmetry is what named the
-# defect. stzListParser.Parse is where it was found; on the build before
+# defect. StzListParserQ().Parse is where it was found; on the build before
 # the fix this probe prints `end len=2 [1]=<?=?U >` and then hangs.
 #
 # EVERY LINE OF THE READER IS LOad-BEARING, and each was verified by

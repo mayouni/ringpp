@@ -20,7 +20,7 @@ func UA4()
 // Both directions need the receiver's class PROVED -- `new T` here -- and
 // where it is not proved they refuse, which is the whole safety of it.
 // The Softanza shape this came from is a clone: every attribute of one
-// object copied into another of the same class (stzOrgChart._CloneChart).
+// object copied into another of the same class (StzOrgChartSimulationQ()._CloneChart).
 func UA6()
 	o = new T
 	o.@nCount = 42

@@ -922,7 +922,7 @@ on Mansour's delegation ("close those on my behalf").** F-120: Ring re-evaluates
 variable a bound reads, or the list a `len()` bound measures, changes how long the loop runs, and a call in the bound runs once per turn.
 Ring++ evaluates it once. **Why:** a loop whose length changes under it is almost always a defect, and the census says so -- of the 8,954
 numeric loops in Softanza's library (through rnxc's lossless export), none grows or shrinks what its bound reads, five of the six that
-reassign a bound variable leave or restore it before another turn, and the sixth, `stzTable.FindCellsCS`, was a defect Ring's rule made
+reassign a bound variable leave or restore it before another turn, and the sixth, `StzTableQ().FindCellsCS`, was a defect Ring's rule made
 real: its inner `_nLen_ = len(_aTemp_)` overwrote the outer bound, so on Ring `FindCells(["sara", "ali", "paris"])` searched one value
 of three. Fixed in his tree (e77bab17d, pushed 2026-10-15): the inner count is `_nLenTemp_`, and official Ring now answers all four cells, as Ring++
 did. And the once-read bound is F-41's whole performance point -- `for i = 1 to len(s)` re-copied the string every turn on Ring. **What it
@@ -950,6 +950,56 @@ first such call with R3 naming the function, so nothing runs on with a wrong ans
 its ENGINE -- a Zig domain with typed handles, the way every other native resource in the estate is held (C-22) -- not raw pointers in the
 VM. That is Softanza's design work, in his tree, and nothing here blocks it. **The guard:** core/test/stkBufferTest and its three
 siblings stop with R3 on Ring++, loudly, as recorded in the RingServ section of CLAUDE.md.
+
+---
+
+## C-32 · A `not` that leads a chain takes the whole chain, as on Ring
+
+**Verdict: fix silently. Decided 2026-10-20 by the session, on the brief that C-23 wrote down: the first estate site turns a shape into a fix.**
+F-130: Ring reads `not a = b` as `not (a = b)`, `not a + b` as `not (a + b)`, and stops the chain at `and`/`or`; the grammar's tree reads
+`(not a) = b`, and rnxc compiled the tree -- a silent wrong answer against the oracle (a = 0, b = 5: 1, 0, 0, 1 on Ring; 0, 6, 1, 5 here).
+The estate has 35 sites in 21 files of the Softanza unit, so C-23's condition is met many times over: the `if NOT len(x) > 1` guards of
+the library were never taken. **The fix** (src/lift.zig): where a file's text is loaded, every `not` or `!` that is the leftmost operand of a
+chain of tighter binary operators gets parentheses round the chain -- `not (a = b + c)` -- and the text is parsed again, so the compiler
+reads what Ring reads and every analysis of the compiler that looks at a chain (the classes, the element classes, the append idiom, the condition
+jumps: some thirty places) sees the same shape; a file with no such `not` is untouched, the same tree over the same bytes. It is made at the load
+and not in the codegen because the tree is immutable and each of those places would have had to be taught, one miss being one more silent
+answer. A `not` under parentheses is its own operand and is left alone; `and` and `or` end the chain; a `not` as the RIGHT operand of a
+tighter operator is Ring's C28 and is not touched. A runtime `eval` string is lifted the same way. A `not ...` statement is evaluated and
+its value discarded, as a binary expression statement always was. The graph (haro/spike/v18/l1.py `lift_not`) and the formatter
+(src/fmt.zig `liftNot`) read the `not` the same way, and the printer gives it a precedence between `and` and the comparisons, so `not (a = b)`
+built without a parenthesis node prints `not a = b` and `(not a) = b` keeps its parenthesis; v18 fixtures 25-27 were written first. The
+Python-shaped face's `not-precedence` collision is retired with its fixture (v21 fixture 62 prints now; 22 collisions stand).
+**What it costs:** compile time only. Looking costs 0.25 s over the 612 files of the Softanza unit and parsing again the 21 that hold a
+site 0.78 s -- the load goes from 3.6 s to 4.8 s, minima of three runs, on a unit that is compiled once into a prefix -- and nothing at run
+time. The census is unchanged (118,640 statements, 100% compiled, 0 refused, both build modes); the unit's code grows by 45 instructions
+(1,124,093 to 1,124,138), the `not` that now stands over a chain. **The pattern it could hurt:** a program whose behaviour rests on the wrong
+reading -- the 35 sites change from the answer Ring++ gave to the answer Ring gives (`StzStringsAreEqualCS(["a"], 1)` raises as on Ring;
+it ran on, silently, before) -- and nothing else is expected: where the wrong reading mattered, the oracle is the judge, and every row is
+its. Not done, and named: (1) a statement that begins a line with a `not` and holds an `=` is an assignment on Ring (F-130) and is refused
+here, as before -- the lift leaves it alone, because a lift would turn that refusal into a quiet comparison; (2) `not o` on an object does not
+call `operator("not")`; (3) the checker (`rnxc check`) parses each file itself and reads the grammar's tree, as it always did -- none of
+its rules looks at the operand of a `not` (check.zig reads a unary only for `char(-n)`; types.zig and why.zig not at all). **The guard:** bench/exec/not_precedence.ring (71 lines, identical on the oracle and the official 1.27; the build
+before differs on 42) and not_precedence_objects.ring (9 lines, differs on 5), a 3,716-row context matrix run once (41 chains in 23
+contexts, four value sets: 2,160 rows differ before, none after), v18 fixtures 25-27, `rnxc census` with `RNXC_LIFT_TRACE=1` (it lists every
+site, and prints `lift:` with the cost). `rnxc migrate`, `attrs`, `shadows` and `dump` read the file as it is, because the first three print
+byte offsets into it. Gate PASSED, ReleaseFast and ReleaseSafe; haro stages 25 and 26 PASS.
+
+---
+
+## C-33 - `new K()` on a class with no `init` makes the object
+
+**Verdict: keep. Decided 2026-10-21 by the session, on the author's delegation ("decide on my behalf").**
+F-131: with an empty parenthesis the constructor is asked for; Ring 1.27 has none to call and raises `Error (R3) : Calling Function without
+definition: init`, Ring++ makes the object and goes on (`new K` without parentheses makes it on both, and neither calls `init`; where `init` exists
+`new K()` and `new K(1)` call it on both). **Why keep:** the difference is on the permissive side -- a program that runs on Ring never meets it, because
+Ring stops there -- so it cannot fail one that passes on Ring, and the estate's wide suite passes every assertion Ring passes. Raising R3 here would
+make Ring++ refuse something its own `new K` form allows, for no program's benefit. **What it costs:** a Ring++ program written to rely on it does not run on
+Ring (Ring is retired for the author's projects, so that is a portability note, not a loss), and a model that writes `new K()` for a class with no
+constructor is not told it was wrong -- the K4 cloud rows rose from 19 to 20 of 20 on this alone. **The other half is Haro's and is decided there:** Haro's
+`new(Name)` is the constructor call, and for a class with no constructor it is to refuse loudly (D24: one exact spelling, refuse loudly) -- not yet built, and nothing in the
+face's reader does it today; `new_without_init(Name)` stays the spelling of "make it, call nothing".
+**The pattern it hurts:** none measured. **The guard:** `haro/spike/v22/scratch/probe_new.py` runs the five shapes on both runtimes and prints the one difference.
 
 ---
 
@@ -1073,7 +1123,7 @@ census could not see, which is the one outcome this project's rules
 forbid outright. It reached the estate: `stzTraceContext` declares
 `cTP = ""` and every one of its methods reads it bare, so a stopwatch's
 trace id came back empty and the failure surfaced three frames away as
-`R21` inside `stzLog.Where()`.
+`R21` inside `StzLogQ().Where()`.
 
 **Why this does not weaken Rule A.** Rule A exists because a bare
 assignment in a function could reach a CALLER's variable (F-25, the
@@ -1119,3 +1169,20 @@ its cost stated, which `ab-known.txt` does not record.
 and `rnx-spike` began on 2026-08-29, six days after that descoping, as a
 different thing. Left visible because the register should show its own
 corrections.)*
+
+---
+
+## C-34 - A handle is an id from the host's one table: generation-checked, retired on release or by address
+
+**Verdict: fix. Decided 2026-10-23 by the session, on the author's request** (stzlib-security's RINGPP-CPTR-RETIRE-01 and RINGPP-HOST-HANDLES-01, mailbox 2026-10-22; F-134).
+Ring hands a native's C pointer to the program as a value that every copy keeps after the owner frees it; Ring++'s backend carried the raw address in a number, which kept the same property across DLLs.
+Both are now an id the HOST minted: `generation * 2^32 + slot + 1`, exact in an f64. A release (or the library's `handle_retire(ptr)`, for a pointer it frees without holding the id) bumps the
+slot's generation, so every copy of the old id resolves to nothing: `getcpointer` answers NULL, and a bridge that wants an error calls `getHandleOrRaise` ("This ... was destroyed"). One object has one id however often it
+is returned; an id made in one DLL means the same in every other. **What it costs.** A handle is no longer an address: nothing in Ring or the estate reads one (`isPointer` and `!= NULL` are the whole of what a
+program may ask), but a bridge that did arithmetic on a handle, or kept a raw address in a number of its own, is not served by it -- stzlib's perf family still hands one raw pointer to the histogram bridge (it cannot be an id on Ring,
+whose C API has no host table, and the bridges are one source for both backends). An engine built for ABI 3 needs an rnxc that speaks it: LoadLib refuses one built for a later host by name (R46, "needs a newer host");
+an engine built for ABI 2 loads and keeps its old handles until it is rebuilt, which is why the package's engine is not protected until `bench/package.py` lays a rebuilt one. The generation wraps after 2^20 reuses of one slot,
+and freed slots are reused in the order they were freed. **The pattern it hurts:** a loop that creates, uses and frees engine objects -- 300,000 rounds of create / bump / free, minima of seven: 107 ns a round with raw addresses,
+143 ns with the table (+12 ns a handle operation, a mutex round each; the object's own allocation is most of both). **The guard:** `bench/bridge.ring` in the gate (step `bridge (ABI 3)`), `zig test src/handles.zig`, and
+`python bench/sec_guard.py` for stzlib-security's `stale_handle_narrated.ring`.
+

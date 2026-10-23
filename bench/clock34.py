@@ -49,7 +49,7 @@ TESTS = 'base/test'
 
 # NO VIEWER (2026-10-15, at Mansour's word). The diagram, dotcode, orgchart, graph and graphics tests call View() and Show(),
 # and every one opened its generated SVG in his browser -- a tab a test, dozens in a pass, while he worked. Softanza honours
-# STZ_NO_VIEW since then (stzSystemCall.OpenFile, stzCanvas.Show, stzScene.Show: the file is written, not opened), and every
+# STZ_NO_VIEW since then (StzSystemCallQ().OpenFile, StzCanvasQ().Show, StzSceneQ().Show: the file is written, not opened), and every
 # process this harness starts inherits it from here. It changes no output: the guard prints nothing, on all three runtimes.
 os.environ['STZ_NO_VIEW'] = '1'
 

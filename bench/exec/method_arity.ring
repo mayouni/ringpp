@@ -3,7 +3,7 @@
 # is never entered -- no "entered" line below prints for a bad call, on
 # either 1.27 build. Ring++ checked a FUNCTION's count and never a
 # method's: it entered them all, with a parameter missing or an argument
-# dropped. Softanza's stzString.FromHex() calls a helper's FromHex(cHex)
+# dropped. Softanza's StzStringQ().FromHex() calls a helper's FromHex(cHex)
 # with no argument, which is how this was found (2026-09-30).
 o = new K
 try  o.M()        catch  ? "few, proved      : " + cCatchError  done

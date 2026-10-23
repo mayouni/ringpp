@@ -2842,7 +2842,7 @@ So the rule is the SYMBOL on the left, not the shape of the line.
 **Softanza spells about a thousand arguments this way**, and Ring++ compiled
 every one of them as an equality, so each arrived as `0`. That is silent: the
 callee's `isList(pnStart)` is false, its unwrapping never runs, and the value
-it uses is a number nobody passed. `stzListParser.Parse` then ran
+it uses is a number nobody passed. `StzListParserQ().Parse` then ran
 
 ```
   for i = pnStart to pnEnd step pnStep      with pnStep = 0
@@ -2999,7 +2999,7 @@ A name the class declares BARE still reads as that attribute (C-12); the
 sigil row is its exact opposite, and the two together are why `@x` and `x`
 cannot be treated as one name.
 
-`stzFile.PreserveAndModify` reads `This.cOriginalContent` where the
+`StzFileOverwriterQ().PreserveAndModify` reads `This.cOriginalContent` where the
 attribute is declared `@cOriginalContent` -- a one-line latent bug in the
 estate that Ring reports when the line runs.
 
@@ -3323,7 +3323,7 @@ Measured on 1.27, both builds agreeing (`bench/exec/exit_levels.ring`):
 
 Ring++ read the number and ignored it until 2026-09-26: every `exit 2`
 left one loop. Softanza's natural-language layer is written with it --
-stzNatural.ProcessObjectCreation stops at the first literal with `exit 2`
+StzNaturalEngineQ().ProcessObjectCreation stops at the first literal with `exit 2`
 -- so "Create a string with 'ring' called first Create a string with 'zig'
 called second Use first Uppercase it" built 'zig' first, and six
 assertions of natural/semantic_resolver failed.
@@ -3409,7 +3409,7 @@ lines of a `+` continuation, among a call's arguments, inside a list
 literal, as `#`, `//` or `/* */` (`bench/exec/comment_in_expr.ring`, six
 rows, both builds). The tree-sitter grammar keeps it as a NODE where it
 falls, so it becomes a named child of the expression.
-stzUiDocument.ToFixture has eight `#` lines inside one `+` chain.
+StzUiDocumentQ().ToFixture has eight `#` lines inside one `+` chain.
 
 ### F-81. `F() = v` runs both sides, then raises R34 unless the result is a list
 
@@ -3498,7 +3498,7 @@ reported where the call closes instead -- `left(5,` NL `2)` is Line 8, the
 second line -- because the C function runs at CALL, after the arguments,
 and the trace then names it: `In left() in file ...`. Found on Linux, where
 six http tests stop at a missing engine domain on both runtimes and
-differed on that line alone (327 against 328 in stzHttpClient._Perform).
+differed on that line alone (327 against 328 in StzHttpClientQ()._Perform).
 
 ### F-88. Ring counts a METHOD's arguments at the call, as it counts a function's
 
@@ -3509,8 +3509,8 @@ method is never entered. It holds for a receiver of known class and one
 found by name, for `init` through `new K(...)`, for `super.M(...)`, and for
 a brace hook (`BraceEnd(z)` declares a parameter the brace never passes:
 R19). Both 1.27 builds, 2026-09-30; `bench/exec/method_arity.ring`. Found
-through Softanza's `stzString.FromHex()`, which calls
-`stzStringEncoder.FromHex(cHex)` with no argument -- R19 on Ring whenever
+through Softanza's `StzStringQ().FromHex()`, which calls
+`StzStringEncoderQ().FromHex(cHex)` with no argument -- R19 on Ring whenever
 it runs, while Ring++ entered the method with its parameter missing.
 
 ## F-89. A LOCAL read where nothing has assigned it is R24 on Ring, at the read
@@ -3525,7 +3525,7 @@ test). Both 1.27 builds, 2026-09-30; `bench/exec/r24_local.ring`, thirteen
 rows. Ring++ checked globals and attributes at the read (2026-09-21) and
 never a local: the register held whatever it held -- nil, or a value an
 earlier frame left there -- and the program ran on. Softanza's largest
-remaining line class in the wide suite was this shape: stzList.operator()
+remaining line class in the wide suite was this shape: StzListQ().operator()
 reads `_bTheseQ` and `_bAsObject` in branches where only another branch
 resets them, a Rule A migration leftover that fails on Ring too.
 
@@ -3546,7 +3546,7 @@ Ring++ cut it back NOWHERE: only a try body that fell through emitted
 such return, exit or loop unwound into the catch of a frame that had
 already gone, and 256 of them overflowed the stack, a panic. Found through
 Softanza's `@IsStzObject`, which is `try return p.IsStzObject() catch
-return 0 done`: the R24 that stzList.operator raises next (F-89) was caught
+return 0 done`: the R24 that StzListQ().operator raises next (F-89) was caught
 by that dead handler, whose `return 0` resumed the operator on a false
 answer, so `Q(1:5) - Q(3)` returned a list where Ring raises.
 
@@ -3561,7 +3561,7 @@ R24. Separately, `func pvtMax(n1, $n2)` declares a parameter NAMED `$n2`:
 the `$` is part of the name on Ring and the parameter is the innermost
 binding, read and written as such (P(3, 7) answers 7). Ring++ raised R24
 on the first and read the never-assigned global on the second -- the
-second is what stopped string/288-290 in stzListOfSections.pvtMax. Both
+second is what stopped string/288-290 in StzListOfSectionsQ().pvtMax. Both
 1.27 builds, 2026-10-02; `bench/exec/new_target.ring`, ten lines.
 
 ## F-92. A bare call in eval resolves on the RECEIVER; a call by name reaches functions only
@@ -3570,7 +3570,7 @@ Inside a method, `eval("x = (Size() > 2)")` calls the method of the
 object the method was called ON -- a subclass's own `Size()` -- not of the
 class that defines the method holding the eval. And `call "Size"()` where
 only methods carry that name is R3: a call by name never reaches a
-method. Softanza's stzObject.IfQ is that shape ('NumberOfItems() > 2' on a
+method. Softanza's StzObjectQ().IfQ is that shape ('NumberOfItems() > 2' on a
 stzList). Ring++ bound eval to the defining class, found no such method
 there, and then took a METHOD of that name from any class through its
 function-by-name map, running it with no receiver: "Bad parameter type!"
@@ -3779,7 +3779,7 @@ Both 1.27 builds, 2026-10-11, `bench/exec/print_list.ring`.
 function reads. Ring++ took only a name spelt in the eval string's literal prefix (F-72's pre-declaration): any other was an E1 refusal, or,
 in a function, a register of the eval's own that died with it; and a pre-declared one read before an assignment in a later call gave NULL.
 Kept as it was, under C-2: an eval in a function assigning a name the TOP LEVEL has makes a local here, where Ring writes the global.
-Both 1.27 builds, 2026-10-11, nine rows; `bench/exec/eval_dyn.ring`. Softanza's stzFuncs.Exec builds such names from a list of
+Both 1.27 builds, 2026-10-11, nine rows; `bench/exec/eval_dyn.ring`. Softanza's StzForEachObjectQ().Exec builds such names from a list of
 variable names, which is how base/test/global/21_pr met it.
 
 ## F-108. An eval string that does not parse is Ring's compile report, then R42 from inside eval()
@@ -3862,7 +3862,7 @@ first line -- NOT reproduced here, one row (listofstrings/08); its dynamic half 
 
 A list step is R28 and a step that is text and no number R41, before anything else; then a bound that is text and no number R41 (a list
 bound R29); then a start that is not a number R29. So `for i = :FirstRow to :LastRow` is R41, from the bound, where Ring++ raised R29,
-from the start, which it checked first. 17 combinations on both 1.27 builds, 2026-10-13; `bench/exec/for_order.ring`. stzTable.Section
+from the start, which it checked first. 17 combinations on both 1.27 builds, 2026-10-13; `bench/exec/for_order.ring`. StzTableQ().Section
 is that loop when its corners are symbols, which three table tests reach through Cells().
 
 ## F-116. A parameter holding a list or an object IS the caller's variable, through every assignment
@@ -3934,7 +3934,7 @@ list it walks by `len()` raises R2 here where Ring stops early.
 rnxc's lossless export (654 files, tests and archives excluded): 8,954 loops; no body adds to, deletes from or increments what its bound
 reads; 72 write an ELEMENT of the bound's list (no length changes); 44 bounds call something other than `len()`, every one a pure
 function or a count the body does not change (read); six bodies reassign a bound variable, and five of them either leave both loops
-right after or restore the same value. The sixth is `stzTable.FindCellsCS`: its outer `for i = 1 to _nLen_` walks the values, and the
+right after or restore the same value. The sixth is `StzTableQ().FindCellsCS`: its outer `for i = 1 to _nLen_` walks the values, and the
 inner `_nLen_ = len(_aTemp_)` overwrites that bound with the number of cells found for the current value -- so on Ring the walk stops
 once i passes that count, and the cells of the later values are never searched. Ring++ visits every value. Run on the library itself,
 a three-row table where "sara" fills one cell: `FindCells(["sara", "ali", "paris"])` answers sara's one cell on official Ring 1.27
@@ -3957,7 +3957,7 @@ metaprog-49, scope-04, scope-20 to -24, dynamicattributes, oop-25, the playgroun
 On Ring a lambda IS the string of its generated name, so `f3 = f1` then `f1 = f3` is 1, `f1 != f3` is 0, `find([f2, f1], f1)` is 2,
 two different `func { }` are never equal, and two calls of a function returning one `func` give equal values. Ring++'s lambda is the
 vector [id + bias, captures...], the assignment copies it, and lists compare by identity -- so every one of those answered the other
-way. 14 rows on both 1.27 builds, 2026-10-14: `bench/exec/lambda_eq.ring`. **Softanza depends on it**: `stzGraph._GetFunctionName` names
+way. 14 rows on both 1.27 builds, 2026-10-14: `bench/exec/lambda_eq.ring`. **Softanza depends on it**: `StzGraphQ()._GetFunctionName` names
 a rule's function by comparing it with `DerivationFunc_Transitivity()` and its siblings, each a function returning one lambda. On
 official Ring `_GetFunctionName(DerivationFunc_Symmetry())` answers `DerivationFunc_Symmetry`; on the package's Ring++ every built-in
 rule was `CustomFunction`. Found through RingServ's sweep (doc snippet on lambda values).
@@ -4036,8 +4036,78 @@ checks; it stopped at the first.
 
 `floor(14.15 / 1.9)` is 7 on both 1.27 builds; `floor(-7 / 2)` is -4, `floor("9" / 2)` is 4, and a zero divisor is R1
 `Can't divide by zero`, catchable. Ring++ compiled every `floor(a / b)` to its integer-division opcode, which reads both
-operands as integers -- 14 / 1 -- so Softanza's spectrum plot (stzSoundPlot.DrawSpectra, `floor(_pw_ * (log10(_hz_) -
+operands as integers -- 14 / 1 -- so Softanza's spectrum plot (StzSoundPlotQ().DrawSpectra, `floor(_pw_ * (log10(_hz_) -
 _lf_) / (_lt_ - _lf_))`) put every column at twice its pixel and drew 154 points of Ring's 442, silently. The opcode is
 emitted only when both sides are proved integers now, and the VM floors the real quotient should anything else reach it.
 bench/exec/floor_div.ring, which v2.0.1 gets wrong on three rows and stops at the fourth; ten million integer floor
 divisions 0.136 s before and 0.131 s after, minima of seven.
+
+## F-130. A `not` binds below a comparison and arithmetic, above `and` and `or` -- and a statement's first `=` is an assignment
+
+Both 1.27 builds, bench/exec/not_precedence.ring (71 lines) and not_precedence_objects.ring: with `a = 0` and `b = 5`, `? not a = b`
+is 1, `? not a + b` 0, `? not a < b` 0, `? not a * b` 1, `? !a = b` 1, `? 1 and not a = b` 1, and `if not a = b` takes its
+branch -- `not` takes the whole chain of operators as tight as `=` or tighter, and `and`/`or` end it (`not a and b` is
+`(not a) and b`). Ring's own parser says so (vendor/ring-vm/src/expr.c): `Expr -> LogicAnd {or LogicAnd}`, `LogicAnd -> LogicNot {and
+LogicNot}`, `LogicNot -> [not] EqualOrNot`, where `EqualOrNot -> Compare {=|!= Compare}` -- the rule does not recurse, so `not not a`
+and `a = not b`, `a + not b`, `- not a` are the error C28 `Expression is expected`, and the parenthesized forms (`(not a) = b`,
+`a = (not b)`) are fine. tree-sitter-ring binds `not` and `!` like a unary minus, tighter than every binary operator (its table
+names PREC.NOT = 4 and never uses it), so rnxc, the formatter and the graph read `(not a) = b` and answered 0, 6, 1, 5, 0 and
+0 where Ring answers 1, 0, 0, 1, 1 and 1: a silent wrong answer. **The estate holds 35 sites in 21 of the 612 files of Softanza's
+unit** (20 with `=`, 12 with `>`, 2 with `>=`, 1 with `<`; `not` is the left operand in every one), one of them in Ring's own
+stdlibcore.ring (`Not sNthElementType = sElementType`): `if NOT len(pacStr) > 1` in StzStringsAreEqualCS raises on Ring for one
+string and never did here; `if NOT _nLen_ = 2` in IsCaseSensitiveNamedParam and `if NOT len(paList) = 2` in IsTree are the same
+guard. **The one exception is a statement.** A plain expression statement is parsed with Ring's assignment flag up
+(`lAssignmentFlag`, expr.c; `if`, `elseif`, `while`, `for`, `return`, `?`, an argument, the right of an assignment and a
+parenthesis clear it): there an identifier followed by `=` is an ASSIGNMENT wherever the `not` stands. On a line of its own
+`not a = b` sets `a` to `b` (`a` is 5 afterwards), `not a = b and c` sets it to `b and c`, and `not Id(a) = b` is R34 `Variable is
+required for the assignment operation`; `not a + b = c` assigns `b`. rnxc refuses such a statement, loudly, as before.
+Separate, found on the way and not touched: `not o` on an OBJECT calls the class's `operator("not")` and answers its result on
+Ring (`? not o` answers 7 from an `operator` that returns 7); rnxc negates the object's truth and calls nothing.
+Correction: C-32.
+
+## F-131. `new K()` on a class with no `init` makes the object on Ring++ and raises R3 on Ring
+
+Both builds, `haro/spike/v22/scratch/probe_new.py`: `o = new K()` where class K declares no `init` -- Ring 1.27 (the oracle) answers `Line 1 Error (R3) : Calling Function without definition: init`
+(the parentheses ask for the constructor call, and there is none); **rnxc makes the object and the program goes on**. Without parentheses (`new K`) both make it and neither calls `init`; with an `init`,
+`new K()` and `new K(1)` call it on both. So Ring++ is **more permissive** at the one shape: a program that runs on Ring never meets the difference (Ring stops there), and a Ring++ program that
+relies on it does not run on Ring. Found by the K4 study, whose face writes `new(Name)` (the constructor call) and which a model reaches for on a class with no `init`; the cloud models' rows rose from 19 to 20 of 20
+when the baseline moved from the oracle to rnxc for this alone. **Decided 2026-10-21 as C-33: keep** (the permissive side cannot fail a program that passes on Ring), and let Haro refuse it loudly -- its `new(Name)` is the constructor call (D24: one exact spelling, refuse loudly).
+
+## F-132. `rnxc check` read the right of an assignment by its children: a member name was an unassigned variable, a lone name was never read
+
+`x = $oBox.nHits` in a function was reported `rpp/uninitialized-variable` -- "nHits is read here, and nothing anywhere assigns it -- Error (R24) the moment this line runs" -- on a program
+that runs and prints (`tests/fixtures/uninit_member.ring`: the oracle runs it clean). `$oBox.nHits = 5` and `f($oBox.nHits)` did the same, and `x = y.z` reported `z` as well as `y`. And the
+opposite: `x = nTypo`, a lone name on the right that nothing assigns, was **never looked at** -- a real R24 (`tests/fixtures/uninit_rhs.ring`: Ring stops there, `Using uninitialized variable:
+ntypo`) that no check reported, while `x = nTypo + 1` was. The walk of an assignment (`walkReads`, `src/types.zig`) handed each non-target child to `walkReads`, which reads that node's
+CHILDREN: for a member expression that skipped the member rule (the head is a read, the property is an attribute name), and for a bare identifier it read nothing at all. One function now
+reads one child (`readChild`) and both the loop and the assignment use it. Found by the body gate's adversarial court (`haro/spike/v20/agent/bypass_court.py`): the derivation stage refused
+the body `x = $oBox.secret`, and the refusal was for the wrong reason -- so the direct getter read looked safe until the mistake was fixed. **Fixed, not decided** (a checker false positive is
+a defect): both fixtures fail on the build before and pass after, held to the oracle (`uninit_member` as clean, `uninit_rhs` as the line Ring stops on); the checker gate is 20 fixtures and
+38 rules; `rnxc check` on Softanza's 612 files reads the same (16 errors, 23 warnings, 930 perf, 5,315 notes, before and after -- the rule is shut on that unit, which loads a library and
+evals). Cost: none at run time; the checker only.
+
+## F-133. `rnxc check` never reported a builtin's name, or a name the program defines, read as a variable
+
+`nR = floor + 0.5` in a function: Ring raises `Error (R24) : Using uninitialized variable: floor` on the oracle and on rnxc; `rnxc check` said nothing. The rule (`rpp/uninitialized-variable`, F-47) exempted every BUILTIN's name and every name the unit
+DEFINES -- functions, methods, classes -- though F-47's own pinned semantics say "a function name is not a value". Measured on 1.27: a function's name read bare, a class's name read bare, the function's own name indexed (`zerolist[x] = 0`
+inside `func ZeroList`): R24 each. The defined-names exemption was doing a second job, found by removing it: the walk hands a definition's OWN name to the read rule (`func F` reported as a read of F), and the grammar's misreading of
+`return func t { ... }` -- a bare return and a braced definition named `t`, the shape the compiler learned to absorb on 2026-10-05 -- makes the lambda's parameter look like a read of that definition's name. Both are skipped by position now, and neither set
+exempts a read. Found by a model: Qwen2.5-Coder-1.5B, told `floor()` was not allowed, wrote `floor + 0.5`, and rung 5's gate -- whose derivation stage is this check -- admitted it (HF-120). **Fixed, not decided** (a false negative
+of a rule that claims a runtime error is a defect): `src/types.zig`; fixtures `uninit_builtin_name` and `uninit_def_name`, held to the oracle and failing on the build before; 477 Ring files of the repository give no new finding
+(two did on the first version -- the lambda shape above -- and none after); the checker gate 22 fixtures, 41 rules, 9 confirmed by the oracle; gate PASSED. **Not covered, and not chased:** a method's name read bare inside its own class
+(R24 on Ring; the checker silent before and after). Cost: none at run time.
+
+## F-134. A native library's handle outlived its object -- on Ring, and on Ring++ in a second way
+
+stzlib-security, reading PHP2Shell (CVE-2026-109618/9) against Softanza on 2026-10-22 (SECURITY-R16): a Ring copy of a destroyed engine object read freed, reused memory with no error -- the copy of a
+destroyed ledger answered 1, then 0 once the memory was reused. On Ring that is the nature of `retcpointer`: it hands out a real pointer and every copy of the value keeps it. **On Ring++ it was a
+second hole of the same shape.** The engine backend (`bench/ring_api_rpp.zig`) made a handle the raw ADDRESS, carried in the f64 the ABI already uses (2026-09-12, so an id would cross engine DLLs --
+each DLL had its own table and id 5 of one was another object in the next); nothing could retire an address, so every copy of the number read the memory after its owner freed it. **Not the hole the report
+named:** `cptr_tab` in `src/main.zig` is rnxc's own C-pointer family (`fopen` and its siblings). A native never receives one -- a `cptr` crosses the ABI as nil -- and it retires itself at `fclose`
+(Ring NULLs the pointer, all copies share the index). The ledger the report measured went through the backend's handles. Found, in passing, that stzlib's security branch could not have built on Ring++ at all: its bridges call
+`retHandleOnce`, `releaseParam` and `getHandleOrRaise`, which the backend did not export. **Fixed, and decided as C-34:** the host keeps one handle table (`src/handles.zig`), offered through the
+HostApi (ABI 3: `handle_store`, `handle_resolve`, `handle_state`, `handle_release`, `handle_retire`), and the backend's handles are its ids. An id is `generation * 2^32 + slot + 1`, the same encoding stzlib's own
+table uses; a release bumps the slot's generation so every copy is stale, a stale release is ignored, a library that frees a pointer without holding the id retires it by address. Proved: 9 unit tests (`zig test src/handles.zig`);
+31 checks in `bench/bridge.ring` over two engine DLLs and a deliberately too-new third, each made to fail by three mutations of the backend; stzlib-security's own guard `stale_handle_narrated.ring` 13 of 13 on rnxc against a Ring++ build of its
+engine (`bench/sec_guard.py`), and 10 of 13 when the host's release is made to retire nothing -- the three stale-copy assertions are the ones that fail.
+

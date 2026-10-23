@@ -1,5 +1,5 @@
 # F-92, measured on both 1.27 builds. A bare call inside eval, in a
-# method, resolves on the RECEIVER's class -- Softanza's stzObject.IfQ
+# method, resolves on the RECEIVER's class -- Softanza's StzObjectQ().IfQ
 # evals 'NumberOfItems() > 2' on whatever subclass it was called on --
 # and a call BY NAME reaches functions, never a method. Ring++ resolved on
 # the class that DEFINES the method holding the eval, then took a method

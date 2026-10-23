@@ -159,6 +159,11 @@ pub fn hostInstall(vm: *VM) void {
         .list_num = &hostListNum,
         .list_str = &hostListStr,
         .list_list = &hostListList,
+        .handle_store = &native.hostHandleStore,
+        .handle_resolve = &native.hostHandleResolve,
+        .handle_state = &native.hostHandleState,
+        .handle_release = &native.hostHandleRelease,
+        .handle_retire = &native.hostHandleRetire,
     };
 }
 
@@ -566,7 +571,7 @@ fn describeValue(v: Value) []const u8 {
 /// `isPointer` is TRUE and `isNumber` FALSE, and which cannot even be
 /// concatenated (R21 on 1.27). Ours returned the integer 1, so a faithful
 /// `isPointer` would have answered FALSE for a library that HAD loaded --
-/// and stzGraph._EngineAvailable() would have switched the whole engine
+/// and StzGraphQ()._EngineAvailable() would have switched the whole engine
 /// graph path off in silence, which is what its own comment warns about.
 /// An ENGINE handle is a different thing and stays a NUMBER, as it is on
 /// Ring (`o.Engine()` is type NUMBER, isPointer 0).
@@ -1370,7 +1375,7 @@ pub const Vec = struct {
     /// set by `vnew` with b = 1 at the closure build and carried by every
     /// copy. On Ring a lambda IS a string, "_ring_anonymous_func_NNN", and
     /// the estate's guards are written that way: `isString(f) and
-    /// isFunction(f)` (stzReactiveObject.Watch). So to `type()`, `isString`,
+    /// isFunction(f)` (StzReactiveObjectQ().Watch). So to `type()`, `isString`,
     /// `isList` and `isFunction` a closure answers as Ring's lambda does --
     /// STRING, 1, 0, 1 -- while its list shape stays for `calli`. A flag,
     /// not the biased id alone: a list of epoch seconds starts with an
@@ -2159,7 +2164,7 @@ pub const VM = struct {
                 if (nm.len == 0 or nm.len > 250) continue;
                 // A METHOD IS NOT A FUNCTION BY NAME (F-92). `call "f"()` and
                 // a bare call inside eval reach functions only, as on Ring;
-                // this map held methods too, so an eval in stzObject.IfQ
+                // this map held methods too, so an eval in StzObjectQ().IfQ
                 // asking for NumberOfItems() ran stzIntSeq's METHOD as a plain
                 // function, with no receiver -- "Bad parameter type!".
                 if (i < fn_owner.len and fn_owner[i] != 0xFFFF) continue;
@@ -5935,7 +5940,7 @@ pub const VM = struct {
                                 // A DLL value, not 1: Ring answers something
                                 // whose type() is "DLL" and for which
                                 // isPointer is true, and
-                                // stzGraph._EngineAvailable() asks that.
+                                // StzGraphQ()._EngineAvailable() asks that.
                                 libs_loaded += 1;
                                 out = Value.dllh(libs_loaded);
                             },
@@ -5974,6 +5979,15 @@ pub const VM = struct {
                             .no_init => {
                                 outPrint("\nLibrary File : {s}", .{path});
                                 self.pending = "Error (R46) : The dynamic library doesn't contain the rpp_init() function!";
+                                continue :dispatch .raise;
+                            },
+                            // Built for a LATER host (rpp_abi_version above what this
+                            // runtime speaks): it would read the vtable past its end.
+                            // Ring has no such case; the nearest of its errors is R46,
+                            // and the message says what is actually wrong.
+                            .too_new => {
+                                outPrint("\nLibrary File : {s}", .{path});
+                                self.pending = "Error (R46) : The dynamic library needs a newer host: its rpp_abi_version is above what this runtime speaks";
                                 continue :dispatch .raise;
                             },
                         }

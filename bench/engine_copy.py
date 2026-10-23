@@ -7,6 +7,8 @@ boundary -- from a COPY of the engine sources, never Mansour's tree.
                                                       (runtime/engine-oracle)
     python bench/engine_copy.py --official            his own build, to validate an
                                                       engine change on official Ring
+    python bench/engine_copy.py --src=D:\GitHub\_wts\libraries\stzlib\engine --dst=runtime\engine-sec stz_string ...
+                                                      another engine tree, beside the clock copy
     ONLY=stz_string,stz_list zig build -j2          (in the copy)
 
 BUILD WITH HIS DEFAULT, ReleaseSafe -- no -Doptimize (2026-10-03). His
@@ -105,7 +107,7 @@ export fn rpp_init(h: *const RPP.HostApi) callconv(.c) c_int {
     return 0;
 }
 export fn rpp_abi_version() callconv(.c) u32 {
-    return 2;
+    return 3;
 }
 """
 RPP_B = RPP_A.replace('ring_bridge.ringlib_init(@ptrCast(&dummy));', 'ringlib_init(@ptrCast(&dummy));')
@@ -118,6 +120,32 @@ def rw(path):
 
 def save(path, s):
     io.open(path, 'w', encoding='utf-8', newline='').write(s)
+
+NEURAL_OLD = "    const mem_size: usize = 128 * 1024 * 1024 + kv_len * n_new * n_head * n_layer * 24 + n_new * n_embd * n_layer * 64;"
+NEURAL_NEW = (
+    "    const mem_size_est: usize = 128 * 1024 * 1024 + kv_len * n_new * n_head * n_layer * 24 + n_new * n_embd * n_layer * 64;\n"
+    "    // Ring++ copy only (K4, 2026-10-20): the estimate above is a few hundred KB short for Qwen2.5-1.5B on a 40-token prompt and 16 MB short at 512 tokens\n"
+    "    // (ggml_new_object: needed 264244144, available 264048128) -- so the model cannot run at all. A quarter more.\n"
+    "    const mem_size: usize = mem_size_est + mem_size_est / 4 + 1024 * 1024 * 1024;     // and a constant gigabyte: the estimate under-counts something that does not grow with the prompt "
+    "(a 368-token prompt on the 1.5B was short by 1.1 MB even with a quarter more)")
+
+
+def neural_pool_patch():
+    """THE POOL FIX LIVES IN THIS COPY ONLY (v22/k4/ENGINE_NOTES.md, prompt 55 to stzlib): the engine's estimate of the ggml pool is too small for Qwen2.5-1.5B, so the model cannot run.
+    A refresh from the live tree used to drop it silently -- the first re-lay of the package after the handle table would have, and the local models (rung 5's agent runs) with it. Applied
+    after every copy; a tree that has fixed the line itself is left alone."""
+    p = os.path.join(DST, 'src', 'neural_gen.zig')
+    if not os.path.exists(p):
+        return
+    s, nl = rw(p)
+    old = NEURAL_OLD
+    if s.count(old) == 1:
+        save(p, s.replace(old, NEURAL_NEW.replace('\n', nl)))
+        print('neural_gen.zig: the pool-size patch re-applied (the live tree still has the old estimate)')
+    elif 'mem_size_est' in s:
+        print('neural_gen.zig: already carries the pool-size fix')
+    else:
+        print('neural_gen.zig: the live tree changed this line -- the pool-size patch was NOT applied; check the 1.5B model still runs')
 
 
 def linux_curl(patch):
@@ -195,6 +223,14 @@ def linux_curl(patch):
 
 
 def main():
+    # --src=<engine dir> --dst=<copy dir> (2026-10-22): build ANOTHER engine tree (a worktree of the library, a branch) beside the clock copy
+    # without touching it. Seed <dst>/.zig-cache from runtime/engine-copy first and only what changed is compiled.
+    global SRC, DST
+    for a in sys.argv[1:]:
+        if a.startswith('--src='):
+            SRC = a[6:]
+        elif a.startswith('--dst='):
+            DST = a[6:]
     if not os.path.isdir(SRC):
         print('SKIP engine copy: no engine tree at ' + SRC)
         return 0
@@ -214,7 +250,6 @@ def main():
     oracle = '--oracle' in sys.argv
     official = '--official' in sys.argv
     args = [a for a in sys.argv[1:] if not a.startswith('--')]
-    global DST
     if oracle:
         DST = os.path.join(ROOT, 'runtime', 'engine-oracle')
     if official:
@@ -255,6 +290,7 @@ def main():
     print('copied %d files in %.0f s' % (n, time.time() - t0))
     if not oracle:
         shutil.copyfile(BACKEND, os.path.join(DST, 'src', 'ring_api.zig'))
+        neural_pool_patch()
 
     patched, skipped = [], []
     for dom in ([] if oracle else domains):
@@ -300,7 +336,10 @@ def main():
     patch('    for (base_domains) |dom| {\n', '    for (base_domains) |dom| {\n        if (!wanted(b, dom.name)) continue;\n')
     for old in ('        b.installArtifact(studio);', '    b.installArtifact(static_lib);', '    b.installArtifact(gen_refdata);'):
         patch(old, old.replace('b.installArtifact', 'if (false) b.installArtifact'))
-    linux_curl(patch)
+    try:
+        linux_curl(patch)
+    except AssertionError as e:      # another tree's build.zig (a worktree, a branch): its libcurl block is not the one this patch was written against; only a LINUX build needs it
+        print('linux libcurl patch skipped: the build.zig of this tree differs (%s) -- Windows builds do not need it' % (e.args[0],))
     if official:
         save(bz, s)
         print('build.zig: ONLY from the environment, extra installs off; addRing and '

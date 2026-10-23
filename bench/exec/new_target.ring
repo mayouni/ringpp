@@ -2,7 +2,7 @@
 # object into x BEFORE the arguments are evaluated: `o = new K([1] + o)`
 # appends the object itself, `q = new K(q)` hands init the object. A plain
 # self-read is still R24 (row 1). And a PARAMETER spelt with `$` is the
-# parameter (row 4): Softanza's stzListOfSections.pvtMax(n1, $n2).
+# parameter (row 4): Softanza's StzListOfSectionsQ().pvtMax(n1, $n2).
 # Ring++ raised R24 on rows 2, 3, 5 and read the global on row 4.
 
 ? "1 top, string        : " + R1()

@@ -1,7 +1,7 @@
 # What a LAMBDA VALUE is to the type predicates, measured on 1.27: it is a
 # STRING naming a generated function, so type() says STRING, isString 1,
 # isList 0, and isFunction 1 -- which is how Softanza guards a callback:
-# `isString(f) and isFunction(f)` (stzReactiveObject.Watch and Computed).
+# `isString(f) and isFunction(f)` (StzReactiveObjectQ().Watch and Computed).
 # Ring++ keeps a closure as a vector for `call`, flagged at birth, and
 # answers these four as Ring does. isfunction on a number or a list is
 # "Bad parameter type!" on both.

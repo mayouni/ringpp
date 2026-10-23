@@ -9,7 +9,7 @@
 # The trigger is a comment line before the def: without one the same text
 # parses whole. So the comments below are LOAD-BEARING. Do not tidy them.
 #
-# Found 2026-09-12 from stzStopwatch.TraceId(), which returned an object
+# Found 2026-09-12 from StzStopwatchQ().TraceId(), which returned an object
 # where Ring returns a string, and took perf/stopwatch out of the 34.
 
 o = new A()

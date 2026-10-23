@@ -4,7 +4,7 @@
 # raised later unwound into the catch of a frame that had already
 # returned, and 256 returns from a try overflowed the stack (a panic).
 # Found through Softanza: @IsStzObject is `try return p.IsStzObject()
-# catch return 0 done`, and the R24 stzList.operator raises next was
+# catch return 0 done`, and the R24 StzListQ().operator raises next was
 # caught by THAT dead handler, which returned 0 into the operator.
 #
 # Measured on both 1.27 builds. Ring cuts its try list back at a METHOD's

@@ -6,7 +6,7 @@
 # Catchable, the name folded to lower case, the program running on.
 # Measured on 1.27 for all three shapes below -- and Ring++ REFUSED them at
 # compile time, which is stricter than Ring and cost whole methods:
-# `stzFile.PreserveAndModify` reads `This.cOriginalContent` where the
+# `StzFileOverwriterQ().PreserveAndModify` reads `This.cOriginalContent` where the
 # attribute is declared `@cOriginalContent`, a one-line latent bug that
 # compiled the method away rather than raising where Ring raises.
 #

@@ -8,7 +8,7 @@
 #
 # Before: the counter lived in a LOCAL named "@i" while every read in the
 # body went to the attribute slot the loop never touched -- so
-# stzRegex.CaptureGroups() passed nil to the engine on every iteration and
+# StzRegexQ().CaptureGroups() passed nil to the engine on every iteration and
 # three linguistic tests failed their assertions, silently, until gattr
 # began raising R24 on a nil slot and they stopped on line 852 instead.
 #

@@ -9,7 +9,7 @@
 # Ring++ compiled all of them as equalities, so every named argument in
 # Softanza -- about a thousand sites -- arrived as 0. Silently: the callee's
 # `isList()` guard is then false, its unwrapping never runs, and the value it
-# uses is a number nobody passed. stzListParser.Parse ended up at
+# uses is a number nobody passed. StzListParserQ().Parse ended up at
 # `for i = 3 to 9 step 0`, a loop that appends for ever, which was the last
 # `panic: oom` in the wide clock.
 #

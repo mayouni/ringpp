@@ -22,6 +22,7 @@ const fmt = @import("fmt.zig");
 const graph = @import("graph.zig");
 const zip = @import("zip.zig");
 const prefix = @import("prefix.zig");
+const lift = @import("lift.zig");
 
 /// THE VM HEAP FREES; the compiler's arena does not, and must not -- parse
 /// trees, the code stream and the constant table live until exit, and a bump
@@ -42,6 +43,12 @@ var vmheap: std.mem.Allocator = undefined;
 const Unit = struct {
     trees: std.ArrayListUnmanaged(ts.Tree) = .{},
     roots: std.ArrayListUnmanaged(ts.Node) = .{},
+    /// Parallel to roots: each file's bytes as they stand ON DISK. A root's `src` is the text its tree indexes, which is the file's own
+    /// unless a `not` was lifted (src/lift.zig); the image stamps and anything printed for an applier are of the file.
+    origs: std.ArrayListUnmanaged([]const u8) = .{},
+    /// Read Ring's `not` as Ring does (C-32). Off for the commands that print a BYTE OFFSET into the file (migrate, attrs, shadows) and
+    /// for `dump`, which shows the grammar's own tree.
+    lift: bool = true,
     paths: std.ArrayListUnmanaged([]const u8) = .{},
     /// Parallel to paths: each file as Ring NAMES it in a report (F-111) --
     /// the root as typed, a loaded file as the folder its load was resolved
@@ -525,10 +532,13 @@ fn loadUnit(
             }
         }
         var tp = std.time.Timer.start() catch unreachable;
-        const tree = parser.parse(src) orelse continue;
+        const parsed = parser.parse(src) orelse continue;
         t_parse_ns += tp.read();
+        const lf: lift.Lifted = if (u.lift) lift.apply(alloc, parser, parsed, src, p) else .{ .tree = parsed, .src = src };
+        const tree = lf.tree;
         try u.trees.append(alloc, tree);
         try u.roots.append(alloc, tree.root());
+        try u.origs.append(alloc, src);
         try u.paths.append(alloc, p);
         try u.names.append(alloc, qnames.items[qi]);
 
@@ -1291,7 +1301,7 @@ fn evalHook(m: *vm.VM, src: []const u8, caller_fid: u32, base: u32, fsp: u32, hs
 
     // THE RECEIVER'S CLASS, not the class that DEFINES the method holding
     // the eval (F-92). Ring resolves a bare call and a bare name in eval on
-    // the object: stzObject.IfQ('NumberOfItems() > 2') called on a stzList
+    // the object: StzObjectQ().IfQ('NumberOfItems() > 2') called on a stzList
     // answers through stzList's method. The static owner is the fallback
     // when r0 holds no object.
     const static_owner: ?u16 = if (fid < vm.fn_owner.len and vm.fn_owner[fid] != 0xFFFF) vm.fn_owner[fid] else null;
@@ -1691,6 +1701,9 @@ pub fn main() !void {
     if (std.process.getEnvVarOwned(alloc, "RNXC_TRACE_ADD")) |v| {
         vm.trace_add = !(v.len == 0 or std.mem.eql(u8, v, "0"));
     } else |_| {}
+    if (std.process.getEnvVarOwned(alloc, "RNXC_LIFT_TRACE")) |v| {
+        lift.trace = !(v.len == 0 or std.mem.eql(u8, v, "0"));
+    } else |_| {}
     var want_onto = false;
     if (std.process.getEnvVarOwned(alloc, "RNXC_ONTO")) |v| {
         want_onto = !(v.len == 0 or std.mem.eql(u8, v, "0"));
@@ -1738,6 +1751,8 @@ pub fn main() !void {
     // calls its siblings, so compiling one file alone can only ever refuse
     // them -- which is exactly what the 64% census was measuring.
     var unit = Unit{};
+    unit.lift = !(std.mem.eql(u8, argv[1], "dump") or std.mem.eql(u8, argv[1], "migrate") or
+        std.mem.eql(u8, argv[1], "attrs") or std.mem.eql(u8, argv[1], "shadows"));
     var pre_start: u32 = 0;
     var t_load = try std.time.Timer.start();
     if (pre_c != null) {
@@ -1758,6 +1773,8 @@ pub fn main() !void {
         for (0..nlib) |_| try unit.roots.append(alloc, ts.Node{ .raw = std.mem.zeroes(@TypeOf(on_top.roots.items[0].raw)), .src = "" });
         try unit.roots.appendSlice(alloc, on_top.roots.items);
         try unit.trees.appendSlice(alloc, on_top.trees.items);
+        for (0..nlib) |_| try unit.origs.append(alloc, "");
+        try unit.origs.appendSlice(alloc, on_top.origs.items);
         const srcs = try alloc.alloc([*]const u8, unit.paths.items.len);
         for (srcs) |*x| x.* = @ptrCast(&no_src);
         for (on_top.roots.items, 0..) |r, k| srcs[nlib + k] = r.src.ptr;
@@ -1858,12 +1875,12 @@ pub fn main() !void {
         // program happens to run, and `../../stzBase.ring` means nothing
         // two directories away.
         var stamps = try alloc.alloc(image.Stamp, unit.roots.items.len);
-        for (unit.roots.items, 0..) |r, i| {
+        for (unit.roots.items, 0..) |_, i| {
             const rp = unit.paths.items[i];
             stamps[i] = .{
                 .path = std.fs.cwd().realpathAlloc(alloc, rp) catch rp,
-                .len = r.src.len,
-                .hash = image.hashOf(r.src),
+                .len = unit.origs.items[i].len,
+                .hash = image.hashOf(unit.origs.items[i]),
             };
         }
         // The parse trees are the compiler's, and this compile is over.
@@ -2150,7 +2167,7 @@ pub fn main() !void {
                 for (pre_stamps.items, 0..) |st, i| {
                     stamps[i] = .{ .path = try H.dupe(u8, st.path), .len = st.len, .hash = st.hash };
                 }
-                const rs = unit.roots.items[unit.roots.items.len - 1].src;
+                const rs = unit.origs.items[unit.origs.items.len - 1];
                 stamps[pre_stamps.items.len] = .{
                     .path = try H.dupe(u8, argv[2]),
                     .len = rs.len,
@@ -2160,7 +2177,7 @@ pub fn main() !void {
                 const n = @min(unit.paths.items.len, unit.roots.items.len);
                 stamps = try H.alloc(image.Stamp, n);
                 for (0..n) |i| {
-                    const src = unit.roots.items[i].src;
+                    const src = unit.origs.items[i];
                     stamps[i] = .{
                         .path = try H.dupe(u8, unit.paths.items[i]),
                         .len = src.len,
@@ -2657,6 +2674,8 @@ pub fn main() !void {
             @as(f64, @floatFromInt(t_load_ns -| t_read_ns -| t_parse_ns)) / 1e9,
             @as(f64, @floatFromInt(t_census_ns)) / 1e9,
         });
+        // C-32: the `not`s that led a chain and were read as Ring reads them, and what looking for them cost (it is inside "other" above)
+        try w.print("lift: {d} `not` site(s) in {d} file(s), {d:.2} s (of it {d:.2} s parsing the rewritten files)\n", .{ lift.sites, lift.files, @as(f64, @floatFromInt(lift.ns)) / 1e9, @as(f64, @floatFromInt(lift.ns_reparse)) / 1e9 });
         try w.print("scans: knownGlobal {d}  globalSlot {d}  nameIndex {d}  findClass {d}  funcIndex {d}  findFunc {d}  attrSlotOf {d}  konstIndex {d}  methodOf {d}  lookup {d}   tables: globals {d} names {d} funcs {d} konst {d}\n", .{
             co.scans[0], co.scans[1], co.scans[2], co.scans[3], co.scans[4], co.scans[5], co.scans[6], co.scans[7], co.scans[8], co.scans[9],
             co.sizes[0], co.sizes[1], co.sizes[2], co.sizes[3],

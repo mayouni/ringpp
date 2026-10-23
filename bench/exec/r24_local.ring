@@ -2,7 +2,7 @@
 # Ring, naming it, the moment the read runs -- catchable. Ring++ checked
 # globals and attributes at the read, never a local: a local whose other
 # assignment sat in a branch not taken read nil and ran on. The estate's
-# largest remaining line class was this shape -- stzList.operator() tests
+# largest remaining line class was this shape -- StzListQ().operator() tests
 # `$_bTheseQ` and then re-reads a bare `_bTheseQ` it only resets inside
 # another branch, left behind by the Rule A migration of 2026-09-01.
 

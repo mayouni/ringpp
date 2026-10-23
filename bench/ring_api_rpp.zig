@@ -70,6 +70,12 @@ pub const HostApi = extern struct {
     list_num: *const fn (RppList, u32) callconv(.c) f64,
     list_str: *const fn (RppList, u32, *u32) callconv(.c) [*]const u8,
     list_list: *const fn (RppList, u32) callconv(.c) RppList,
+    // ABI 3 (2026-10-22): the HOST's handle table -- src/handles.zig, src/native.zig has the contract.
+    handle_store: *const fn (?*anyopaque) callconv(.c) f64,
+    handle_resolve: *const fn (f64) callconv(.c) ?*anyopaque,
+    handle_state: *const fn (f64) callconv(.c) c_int,
+    handle_release: *const fn (f64) callconv(.c) ?*anyopaque,
+    handle_retire: *const fn (?*anyopaque) callconv(.c) c_int,
 };
 
 var host: *const HostApi = undefined;
@@ -238,68 +244,78 @@ pub fn ring_vm_error(p: *anyopaque, cStr: [*:0]const u8) void {
 
 // ---- handles ----------------------------------------------------------
 //
-// ring_api.zig keeps a TABLE here and hands out small ids. That is right
-// for a build where one table serves the whole process; it is wrong for
-// this one, and the block below says why. The table is deleted rather than
-// left sitting dead beside its replacement.
-
-// A HANDLE IS THE POINTER ITSELF, not an index into a table.
+// THE HOST'S TABLE (ABI 3, 2026-10-22). A handle is an id the HOST minted: `generation * 2^32 + slot + 1`, a
+// number, exact in an f64 (src/handles.zig). Three earlier designs, each replaced for a reason:
 //
-// The table cannot work here, and the reason is structural: this file is
-// compiled INTO EVERY DOMAIN DLL, so each one gets its own `handle_table`
-// and its own `next_slot`. Id 5 minted by stz_perf.dll is a different
-// object from id 5 in stz_histogram.dll -- and the estate passes handles
-// between domains as a matter of course. stzMetricFamily asks the PERF
-// domain for a child's histogram and then asks the HISTOGRAM domain to
-// count it; every count came back 0, silently, while the series beside it
-// worked (found 2026-09-12 from perf/labels).
+//   1. a table in THIS file, as ring_api.zig has: this file is compiled INTO EVERY domain DLL, so each had its own
+//      and id 5 from stz_perf was another object in stz_histogram -- every histogram counted 0 (found 2026-09-12);
+//   2. the raw ADDRESS carried in the f64 (2026-09-12 to 2026-10-22): ids now crossed DLLs, but nothing could
+//      retire one -- a Ring copy of the number read the memory after the owner freed it, no error, and once the
+//      memory was reused the copy read ANOTHER object (SECURITY-R16, stzlib-security, measured on Ring++ too);
+//   3. this: one table in the host, so an id crosses DLLs and the VM knows when an object is gone. A release bumps
+//      the slot's generation, so every copy of the old id is STALE: it resolves to nothing, and a stale release
+//      is ignored.
 //
-// Ring does not have this problem: ring_vm_api_retcpointer hands back a
-// real pointer, which means the same thing in every DLL in the process. So
-// this does the same, carried in the f64 our ABI already uses for handles.
-//
-// EXACT, not approximate: an f64 carries 53 bits of integer without loss,
-// and user-space addresses are far below that on every target here --
-// x86-64 and ARM64 both cap user VA at 47 or 48 bits. The round-trip is
-// checked anyway, and a pointer that cannot survive it answers 0 (a null
-// handle, which fails loudly at the next call) rather than a truncated
-// address, which would not.
+// `ring_vm_api_getcpointer` on a stale id answers NULL, as RINGPP-CPTR-RETIRE-01 asked; a bridge that wants the
+// stale use to be an ERROR calls `getHandleOrRaise`. A library that frees a pointer WITHOUT holding its id
+// (a child object freed with its parent) calls `retirePtr(ptr)`.
 pub fn storeHandle(ptr: ?*anyopaque) f64 {
-    const raw = ptr orelse return 0;
-    const addr = @intFromPtr(raw);
-    const as_f: f64 = @floatFromInt(addr);
-    if (@as(usize, @intFromFloat(as_f)) != addr) return 0;
-    return as_f;
+    return host.handle_store(ptr);
 }
 
 pub fn resolveHandle(id: f64) ?*anyopaque {
-    if (!(id > 0)) return null;
-    return @ptrFromInt(@as(usize, @intFromFloat(id)));
+    return host.handle_resolve(id);
 }
 
-/// Nothing to release: the id IS the pointer, and the engine owns the
-/// object's lifetime exactly as it does under Ring.
+/// Retire the id: every copy of it goes stale. A stale or unknown id releases nothing.
 pub fn releaseSlot(id: f64) void {
-    _ = id;
+    _ = host.handle_release(id);
+}
+
+/// The library freed `ptr` without holding the id it was handed out under: retire that id, if it has one.
+pub fn retirePtr(ptr: ?*anyopaque) bool {
+    return host.handle_retire(ptr) != 0;
 }
 
 pub fn retHandle(p: *anyopaque, ptr: ?*anyopaque) void {
     ring_vm_api_retnumber(p, storeHandle(ptr));
 }
 
+/// One object, one id, however often it is returned. The host's table does that for every pointer, so this is
+/// `retHandle`; the name stays because stzlib's bridges call it.
+pub fn retHandleOnce(p: *anyopaque, ptr: ?*anyopaque) void {
+    retHandle(p, ptr);
+}
+
 pub fn getHandle(p: *anyopaque, n: c_int) ?*anyopaque {
     return resolveHandle(ring_vm_api_getnumber(p, n));
 }
 
+/// Resolve and retire in one: the pointer for the caller to free, and every copy of the id stale from here on.
 pub fn releaseHandle(p: *anyopaque, n: c_int) ?*anyopaque {
+    return host.handle_release(ring_vm_api_getnumber(p, n));
+}
+
+/// Retire the id in param n -- every copy of it goes stale. Call it in a destroy, after reading the pointer and
+/// before freeing it. NULL ("") and other non-numbers are not handles and release nothing.
+pub fn releaseParam(p: *anyopaque, n: c_int) void {
+    if (ring_vm_api_isnumber(p, n) == 0) return;
+    releaseSlot(ring_vm_api_getnumber(p, n));
+}
+
+/// `getHandle` for an object whose stale use must be an ERROR rather than a silent null: a nonzero NUMBER that no
+/// longer resolves raises in Ring. NULL ("") or anything that is not a number is not a handle at all.
+pub fn getHandleOrRaise(p: *anyopaque, n: c_int, comptime what: []const u8) ?*anyopaque {
+    if (ring_vm_api_isnumber(p, n) == 0) return null;
     const id = ring_vm_api_getnumber(p, n);
+    if (id == 0) return null;
     const ptr = resolveHandle(id);
-    releaseSlot(id);
+    if (ptr == null) ring_vm_error(p, "This " ++ what ++ " was destroyed: a copy of it holds a handle that is no longer valid.");
     return ptr;
 }
 
-/// Present for source compatibility; the handle wrappers above are what
-/// every bridge actually calls.
+/// Present for source compatibility; the handle wrappers above are what every bridge actually calls. A stale id
+/// answers NULL.
 pub fn ring_vm_api_retcpointer(p: *anyopaque, ptr: ?*anyopaque, _: [*:0]const u8) void {
     retHandle(p, ptr);
 }

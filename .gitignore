@@ -73,6 +73,8 @@ bench/demo.dll
 # The demo engine and the demo bridge: build output of bench/engine_shim.zig
 # and bench/bridge_demo.zig, rebuilt by the gate in seconds.
 bench/rppbridge.*
+bench/rppbridge_b.*
+bench/rppnew.*
 
 # bench/stop34.py imports clock34 for its tree paths, so Python
 # writes bytecode beside the scripts.

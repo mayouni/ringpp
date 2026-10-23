@@ -1291,10 +1291,25 @@ const Walker = struct {
         globals: *const std.StringHashMap(void),
         defined: *const std.StringHashMap(void),
         reported: *std.StringHashMap(void),
-    ) !void {
+    ) std.mem.Allocator.Error!void {
         var i: u32 = 0;
         while (i < n.childCount()) : (i += 1) {
-            const c = n.child(i);
+            try self.readChild(n.child(i), suppress, globals, defined, reported);
+        }
+    }
+
+    /// One child of a node being walked for reads. It is its own function because an assignment's right-hand side is walked
+    /// child by child: handing the whole `$o.attr` node to walkReads read its CHILDREN, so the member rule below never saw it
+    /// and `attr` was reported as an unassigned variable (R24, on a program that runs).
+    fn readChild(
+        self: *Walker,
+        c: ts.Node,
+        suppress: *const std.StringHashMap(void),
+        globals: *const std.StringHashMap(void),
+        defined: *const std.StringHashMap(void),
+        reported: *std.StringHashMap(void),
+    ) std.mem.Allocator.Error!void {
+        {
             const k = c.kind();
             // other scopes, and positions that are not variable reads
             if (std.mem.eql(u8, k, "anonymous_function") or
@@ -1303,7 +1318,7 @@ const Walker = struct {
                 std.mem.eql(u8, k, "function_definition") or
                 std.mem.eql(u8, k, "param_list") or
                 std.mem.eql(u8, k, "qualified_identifier") or
-                std.mem.eql(u8, k, "symbol")) continue;
+                std.mem.eql(u8, k, "symbol")) return;
             if (std.mem.eql(u8, k, "call_expression")) {
                 // child 0 is the callee -- rpp/undefined-function territory.
                 // Arguments are ordinary reads.
@@ -1311,7 +1326,7 @@ const Walker = struct {
                 while (j < c.childCount()) : (j += 1) {
                     try self.walkReads(c.child(j), suppress, globals, defined, reported);
                 }
-                continue;
+                return;
             }
             if (std.mem.eql(u8, k, "new_expression")) {
                 // `new X { ... }`: the head is a class name and the brace
@@ -1327,7 +1342,7 @@ const Walker = struct {
                         try self.walkReads(nc, suppress, globals, defined, reported);
                     }
                 }
-                continue;
+                return;
             }
             if (std.mem.eql(u8, k, "member_expression")) {
                 // a.b: `a` is a read, `b` is an attribute name on a
@@ -1339,7 +1354,7 @@ const Walker = struct {
                         try self.walkReads(head, suppress, globals, defined, reported);
                     }
                 }
-                continue;
+                return;
             }
             if (std.mem.eql(u8, k, "assignment_expression") or
                 std.mem.eql(u8, k, "for_statement") or
@@ -1363,7 +1378,7 @@ const Walker = struct {
                         // q[1] = 6 and a.b = 5: the BASE is a read (verified
                         // R24 on an unassigned q), the rest of the target too
                         skipped_target = true;
-                        try self.walkReads(ch, suppress, globals, defined, reported);
+                        try self.readChild(ch, suppress, globals, defined, reported);
                         if (std.mem.eql(u8, ch.kind(), "subscript_expression") and ch.childCount() > 0) {
                             const base = ch.child(0);
                             if (std.mem.eql(u8, base.kind(), "identifier")) {
@@ -1372,13 +1387,15 @@ const Walker = struct {
                         }
                         continue;
                     }
-                    try self.walkReads(ch, suppress, globals, defined, reported);
+                    // through readChild, not walkReads: this child IS the right-hand side (or a bound), and walkReads would read its children --
+                    // `x = $o.attr` would report `attr`, and `x = y` would never look at y at all
+                    try self.readChild(ch, suppress, globals, defined, reported);
                 }
-                continue;
+                return;
             }
             if (std.mem.eql(u8, k, "identifier")) {
                 try self.considerRead(c, suppress, globals, defined, reported);
-                continue;
+                return;
             }
             try self.walkReads(c, suppress, globals, defined, reported);
         }
@@ -1397,9 +1414,18 @@ const Walker = struct {
         const lk = lower(self.arena, raw) catch return;
         if (suppress.contains(lk)) return;
         if (globals.contains(lk)) return;
-        if (defined.contains(lk)) return;
+        // A definition's OWN name (`func F`, `class K`) is not a read: the walk hands it here as a child of the definition, and the `defined` set used to
+        // hide it -- along with every READ of such a name, which is R24 on Ring like any other: a function, a class, the function's own name indexed
+        // (`zerolist[x] = 0`), all measured on 1.27 (F-133). So the definition's name is skipped by position, and `defined` no longer exempts a read.
+        _ = defined;
+        const par = n.parent();
+        if (!par.isNull() and (std.mem.eql(u8, par.kind(), "function_definition") or std.mem.eql(u8, par.kind(), "class_definition"))) return;
+        // The grammar reads `return func t { ... }` as a bare return and a BRACED definition named `t`, so the lambda's parameter arrives here as a read
+        // of that definition's own name (bench/exec/lambda_return.ring). A braced definition is the lambda; its "name" is a parameter.
+        if (bracedDefNamed(n, lk)) return;
         if (isPredefinedVar(lk)) return;
-        if (builtins.isBuiltin(lk)) return;
+        // A builtin's NAME read as a variable is R24 on Ring like any other name (`x = floor + 0.5`: both runtimes stop there, F-133) -- a function name is not a
+        // value (F-47). Only a CALL of a builtin is exempt, and a callee never reaches this function.
         if (reported.contains(lk)) return;
         try reported.put(lk, {});
         try self.report.add(self.gpa, self.file, n, .warn, "rpp/uninitialized-variable", "{s} is read here, and nothing anywhere assigns it -- Error (R24) the moment this line runs", .{n.text()}, "A Ring local is born by assignment, and this function never assigns this name; no file main scope assigns it as a global either, no parameter carries it, and it is not one of the fifteen variables ring.exe predefines. Verified on 1.27: the read raises R24, and it ships silently in any branch tests skip. With case-insensitive identifiers (F-18) the usual cause is one typo. See FINDINGS F-47.");
@@ -1641,6 +1667,25 @@ const predefined_vars = [_][]const u8{
     "stdin",  "stdout", "stderr", "tab",  "cr",     "ccatcherror",
     "ring_gettemp_var", "ring_settemp_var", "ringoptionalfunctions",
 };
+
+/// Is `n` inside a braced function definition (`func t { ... }`) whose name is `lk`? That shape is a lambda the grammar misreads (see considerRead).
+fn bracedDefNamed(n: ts.Node, lk: []const u8) bool {
+    var cur = n.parent();
+    var hops: u32 = 0;
+    while (!cur.isNull() and hops < 256) : (hops += 1) {
+        if (std.mem.eql(u8, cur.kind(), "function_definition")) {
+            var braced = false;
+            var i: u32 = 0;
+            while (i < cur.childCount()) : (i += 1) {
+                if (std.mem.eql(u8, cur.child(i).kind(), "{")) braced = true;
+            }
+            const nm = cur.field("name");
+            if (braced and !nm.isNull() and std.ascii.eqlIgnoreCase(nm.text(), lk)) return true;
+        }
+        cur = cur.parent();
+    }
+    return false;
+}
 
 fn isPredefinedVar(lowname: []const u8) bool {
     for (predefined_vars) |v| if (std.mem.eql(u8, v, lowname)) return true;

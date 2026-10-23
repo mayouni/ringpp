@@ -3,7 +3,7 @@
 # 1, find() finds it, and two different `func { }` are never equal. A lambda
 # here is the vector [id + bias, captures...] and the assignment copies it,
 # so the identity test answered 0 for all of them. Softanza depends on it:
-# stzGraph._GetFunctionName names a rule's function by comparing it with
+# StzGraphQ()._GetFunctionName names a rule's function by comparing it with
 # DerivationFunc_Transitivity() and its siblings, and answered
 # "CustomFunction" for every built-in rule. Measured on both 1.27 builds
 # 2026-10-14, every row the same on both.

@@ -2,7 +2,7 @@
 # variable of the FRAME the eval runs in -- later evals and the function's
 # own code read it -- and at the top level a GLOBAL every function reads.
 # A callee does not see its caller's, and every call starts fresh: a read
-# before any assignment is R24, naming it. Softanza's stzFuncs.Exec builds
+# before any assignment is R24, naming it. Softanza's StzForEachObjectQ().Exec builds
 # such names from a list (`@acVars[j] + ' = ...'`), which is how
 # base/test/global/21_pr met it; Ring++ refused the name, or kept it in a
 # register of the eval's own that died with it. Uncaught at the end.

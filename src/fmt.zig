@@ -807,11 +807,8 @@ const Abs = struct {
             if (ret.len == 0 or stray.len == 0) return error.Shape;
             var e = stray[0].e orelse return error.Shape;
             if (e.k == .assign and textIs(e.op, "=")) {
-                const b = try self.mk(.bin); // the value of a return is an expression: its `=` compares
-                b.op = "=";
-                b.l = e.l;
-                b.r = e.r;
-                e = b;
+                // the value of a return is an expression: its `=` compares
+                e = try self.liftNot("=", e.l orelse return error.Shape, e.r orelse return error.Shape);
             }
             const joined = try self.mk(.ret);
             joined.e = e;
@@ -1311,13 +1308,37 @@ const Abs = struct {
     }
 
     fn xBinaryLike(self: *Abs, n: *CN, k: K) Err!*G {
-        const g = try self.mk(k);
         const l = try self.ex(n.kids, 0);
-        g.l = l.g;
         const opk = (try kid(n, l.next)).kind;
-        g.op = if (k == .bin) keywordOp(opk) else opk;
-        g.r = (try self.ex(n.kids, l.next + 1)).g;
+        const op = if (k == .bin) keywordOp(opk) else opk;
+        const r = (try self.ex(n.kids, l.next + 1)).g;
+        if (k == .bin) return self.liftNot(op, l.g, r);
+        const g = try self.mk(k);
+        g.l = l.g;
+        g.op = op;
+        g.r = r;
         return g;
+    }
+
+    /// A binary node, with Ring's reading of a `not` on its left. Ring's parser reads `LogicNot -> not EqualOrNot` (vendor/ring-vm/src/expr.c):
+    /// a `not` takes everything as tight as `=` or tighter, so it stands BELOW those operators and above `and` and `or`; the grammar binds it
+    /// like a unary minus, and `not a = b` arrives as bin(=, un(not, a), b) where Ring means un(not, bin(=, a, b)). `not a + b = c`, built from
+    /// the inside out, is lifted a second time. Only an unparenthesized `not` is (a parenthesized one is a `paren` node and stays an operand),
+    /// only below `and` and `or`, and a `not` on the RIGHT of a tighter operator is Ring's error C28 and is left as it is (HF-105; l1.py `lift_not`).
+    fn liftNot(self: *Abs, op: []const u8, l: *G, r: *G) Alloc.Error!*G {
+        if (binPrec(op) > not_prec and l.k == .un and textIs(l.op, "not")) {
+            if (l.e) |inner| {
+                const u = try self.mk(.un);
+                u.op = "not";
+                u.e = try self.liftNot(op, inner, r);
+                return u;
+            }
+        }
+        const b = try self.mk(.bin);
+        b.op = op;
+        b.l = l;
+        b.r = r;
+        return b;
     }
 
     fn xCall(self: *Abs, n: *CN) Err!*G {
@@ -1427,6 +1448,7 @@ fn binPrec(op: []const u8) u8 {
 }
 
 const unary_prec: u8 = 14;
+const not_prec: u8 = 4; // between `and` (3) and `=` (5): its operand is parenthesized only when looser than a comparison
 const postfix_prec: u8 = 15;
 const atom_prec: u8 = 99;
 
@@ -1434,7 +1456,7 @@ fn precOf(n: *G) u8 {
     return switch (n.k) {
         .bin => binPrec(n.op orelse ""),
         .assign => 1,
-        .un => unary_prec,
+        .un => if (textIs(n.op, "not")) not_prec else unary_prec,
         .post, .call, .member, .index, .brace, .callkw => postfix_prec,
         else => atom_prec,
     };
@@ -1503,7 +1525,7 @@ const Printer = struct {
                 const op = n.op orelse return error.Shape;
                 if (eq(op, "not")) {
                     try self.w("not ");
-                    try self.operand(try req(n.e), unary_prec, false, d);
+                    try self.operand(try req(n.e), not_prec + 1, false, d);
                 } else {
                     try self.w(op);
                     const at = self.out.items.len;

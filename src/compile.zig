@@ -15,6 +15,7 @@
 const std = @import("std");
 const ts = @import("ts.zig");
 const vm = @import("main.zig");
+const lift = @import("lift.zig");
 
 pub const Error = error{ Unsupported, OutOfMemory, BadNumber, PrefixInapplicable };
 
@@ -2637,7 +2638,7 @@ pub const Compiler = struct {
             return;
         }
         // eval(acCodes[i]): THE STRING IS AN ELEMENT of a list this function
-        // fills -- stzTable.InsertCalculatedRow builds `'_value_ = ' +
+        // fills -- StzTableQ().InsertCalculatedRow builds `'_value_ = ' +
         // _cCode_` into _cCode_, appends it with `_acCodes_ + _cCode_`, and
         // evals each element, then reads _value_. Every value written INTO
         // the list is read as the eval's own argument would be, so the
@@ -3210,7 +3211,7 @@ pub const Compiler = struct {
                 // verdict userCall already carries for R19: a refusal is the
                 // safe answer only when the alternative is a WRONG one, and
                 // here the alternative is Ring's own answer. It cost whole
-                // methods -- `stzFile.PreserveAndModify` reads
+                // methods -- `StzFileOverwriterQ().PreserveAndModify` reads
                 // `This.cOriginalContent` where the attribute is declared
                 // `@cOriginalContent`, a one-line latent bug that compiled
                 // the method away.
@@ -3422,7 +3423,7 @@ pub const Compiler = struct {
         // child is a `symbol`, and only the LIST LITERAL path (where it
         // arrives as a `hash_pair`) ever built the pair. Everywhere else it
         // fell through to an equality, so every named argument in the
-        // estate arrived as 0 -- and stzListParser.Parse then ran
+        // estate arrived as 0 -- and StzListParserQ().Parse then ran
         // `for i = 3 to 9 step 0`, a loop that appends for ever, which was
         // the last `panic: oom` in the wide clock. About a thousand sites
         // spell an argument this way.
@@ -6561,8 +6562,8 @@ pub const Compiler = struct {
             //     done
             //
             // -- where the CONSTRUCTION is the test and the object is
-            // thrown away. Six sites in Softanza (stzTable.IsTable,
-            // stzEntity.IsEntity, stzSection.IsSection, stzHashList's
+            // thrown away. Six sites in Softanza (IsTable(),
+            // IsEntity(), IsSection(), stzHashList's
             // NumberOfPairsQ and two _normalizeDateTime), every one of
             // them refused, and each took its whole function with it.
             // `init` runs and may raise either way, which is the point.
@@ -6589,7 +6590,13 @@ pub const Compiler = struct {
             // one-line `if`). The point is not that they work; it is that
             // Ring REACHES them and says what is wrong, where a refusal
             // took the whole method away.
-            if (std.mem.eql(u8, ek, "binary_expression")) {
+            //
+            // A `not` that leads a chain is the whole of it (C-32, src/lift.zig): `not a = b` as a statement is the comparison, negated, and
+            // discarded -- the same, and a binary expression before the lift put the `not` where Ring does.
+            if (std.mem.eql(u8, ek, "binary_expression") or
+                (std.mem.eql(u8, ek, "unary_expression") and
+                    (std.mem.eql(u8, opText(e), "not") or std.mem.eql(u8, opText(e), "!"))))
+            {
                 const t = try self.tmp();
                 return self.expr(e, t);
             }
@@ -7484,7 +7491,7 @@ pub const Compiler = struct {
             //
             // BUT NOT OVER A WIDER CLASS. The classifier joins every write to
             // the name, and a loop variable the function ALSO assigns a value
-            // of another kind -- stzMathDiagram._MintShape loops `for _v_ = 1
+            // of another kind -- StzMathDiagramQ()._MintShape loops `for _v_ = 1
             // to _nV_` and later does `_v_ = This._Prop(...)`, any value -- is
             // a reference there. Forcing int here mid-codegen made every read
             // compiled after this point an unboxed, uncounted copy of whatever
@@ -9898,15 +9905,17 @@ pub fn compileEval(c: *Compiler, src: []const u8, ev: *EvalCtx, locals: []const 
 
     const snippet = std.mem.concat(c.scratch, u8, &.{ "func __eval()\n", src, "\n" }) catch return Error.OutOfMemory;
     if (c.eval_parser == null) c.eval_parser = ts.Parser.init();
-    const tree = c.eval_parser.?.parse(snippet) orelse return Error.Unsupported;
+    var tree = c.eval_parser.?.parse(snippet) orelse return Error.Unsupported;
     defer tree.deinit();
-    const root = tree.root();
     // A STRING THAT DOES NOT PARSE is Ring's compile report, then R42 (F-108)
-    if (root.hasError()) {
-        try evalSyntaxReport(c, root, src);
+    if (tree.root().hasError()) {
+        try evalSyntaxReport(c, tree.root(), src);
         c.fail_kind = "eval-syntax";
         return Error.Unsupported;
     }
+    // a `not` that leads a chain is read as Ring reads it, here as in a file (C-32)
+    tree = lift.apply(c.scratch, c.eval_parser.?, tree, snippet, "eval").tree;
+    const root = tree.root();
 
     // ONE Func, reused: its lists keep their buffers
     if (c.funcs.items.len == 0) {
@@ -10053,7 +10062,7 @@ fn refusalTrap(c: *Compiler, st: ts.Node, mark: u32, fxmark: usize) void {
     // rows and files are PARALLEL to code (C-8): rolling back the code
     // without them shifted every later instruction's row and file by the
     // length of whatever the refused statement half-emitted, and the drift
-    // grew with each refusal -- an R21 inside stzLog.Where() was reported
+    // grew with each refusal -- an R21 inside StzLogQ().Where() was reported
     // in stzBpmnDiagram.ring (found 2026-09-11). One truncation, three
     // arrays.
     c.rows.shrinkRetainingCapacity(mark);
@@ -10102,7 +10111,7 @@ fn refusalTrap(c: *Compiler, st: ts.Node, mark: u32, fxmark: usize) void {
 /// then `This.CtxQ()` holding the dangling dot, then `TraceId()` alone,
 /// re-anchored to This. So the next statement on that row CONTINUES this
 /// one, and the span has to swallow it (found 2026-09-12; it is why
-/// stzStopwatch.TraceId() returned an object where Ring returns a string).
+/// StzStopwatchQ().TraceId() returned an object where Ring returns a string).
 ///
 /// Safe by construction: extending the span only asks for the joined text
 /// to be re-read, and a join that does not parse backs the whole re-read
@@ -10391,7 +10400,7 @@ fn rereadSpan(c: *Compiler, stmts: []const ts.Node, si: usize) ?struct { pieces:
     // comment wherever a newline may stand -- between the lines of a `+`
     // continuation, among arguments, in a list literal -- and the grammar
     // keeps it as a NODE, so `namedChild(1)` of a binary expression was the
-    // comment, not the right operand. stzUiDocument.ToFixture has eight `#`
+    // comment, not the right operand. StzUiDocumentQ().ToFixture has eight `#`
     // lines inside one `+` chain. The comment bytes are blanked -- newlines
     // kept, so every row still maps -- and the span is read again. The byte
     // test first: nearly no statement holds a `#` or a `/` at all.
@@ -10463,7 +10472,7 @@ fn noteUnnamed(c: *Compiler, st: ts.Node, nref: usize) void {
     if (!c.census or c.refusals.items.len != nref) return;
     const t0 = st.text();
     // the one bare Unsupported measured so far: `define` and `tmp` at the
-    // edge of the register window. stzDiagram.ToCanvasXT is 3,909 lines
+    // edge of the register window. StzDiagramQ().ToCanvasXT is 3,909 lines
     // with about 630 locals, and Ring has no limit to match.
     const full = c.cur.window_full or c.cur.locals.items.len >= MAXREG;
     c.refusals.append(c.alloc, .{
@@ -10478,7 +10487,7 @@ fn noteUnnamed(c: *Compiler, st: ts.Node, nref: usize) void {
 
 /// THE REGISTER WINDOW (2026-10-18). An instruction names a register in a
 /// byte and MAXREG is 200, so a function gets one register per local only up
-/// to there. stzDiagram.ToCanvasXT has 618 locals in 3,909 lines, and Ring
+/// to there. StzDiagramQ().ToCanvasXT has 618 locals in 3,909 lines, and Ring
 /// has no such limit, so it was refused -- yet no more than about fifty of
 /// them are in use over any one stretch of it. Its locals SHARE registers.
 ///

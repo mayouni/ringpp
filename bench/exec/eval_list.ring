@@ -1,6 +1,6 @@
 # eval(aCodes[i]): THE STRING IS AN ELEMENT OF A LIST THE FUNCTION FILLED.
 #
-# stzTable.InsertCalculatedRow builds `'_value_ = ' + formula` into a
+# StzTableQ().InsertCalculatedRow builds `'_value_ = ' + formula` into a
 # variable, appends it to a list, evals each element and reads _value_.
 # The literal-prefix rule (F-72) declared a name spelled in the eval's own
 # argument, or in an assignment to the variable passed; an element of a list

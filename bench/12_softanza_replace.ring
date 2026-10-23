@@ -8,7 +8,7 @@
 # by absolute path for the same reason — and with FORWARD slashes, because
 # a backslash inside a `load` path is a syntax error (C27) in Ring 1.27.
 #
-# WHAT THIS MEASURES. `stzString.ReplaceByMany` walks a text replacing every
+# WHAT THIS MEASURES. `StzStringQ().ReplaceByMany` walks a text replacing every
 # occurrence of a substring, cycling through a list of replacements. Its two
 # helpers, `_FindFrom` and `_EngineSlice`, are engine-backed and each one
 # does this:

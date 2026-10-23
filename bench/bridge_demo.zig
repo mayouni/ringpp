@@ -115,6 +115,64 @@ fn bridgeCounterFree(p: *anyopaque) callconv(.c) void {
     R.ring_vm_api_retnumber(p, 0);
 }
 
+// ---- objects on the HOST's handle table (ABI 3, 2026-10-22) -----------
+//
+// The security branch's bridge shape (stzlib a8e48c99): an object crosses as a checked id, a destroy stales every
+// copy before the memory goes, and a stale use is a Ring error. Written with the three names it uses:
+// retHandleOnce, releaseParam, getHandleOrRaise. bridge_demo_b.zig is a SECOND DLL that reads and frees them.
+
+const Obj = struct { n: i64 };
+
+fn bridgeObjNew(p: *anyopaque) callconv(.c) void {
+    const o = std.heap.c_allocator.create(Obj) catch {
+        R.ring_vm_error(p, "out of memory");
+        return;
+    };
+    o.n = @intFromFloat(R.ring_vm_api_getnumber(p, 1));
+    R.retHandleOnce(p, o);
+}
+
+fn bridgeObjRead(p: *anyopaque) callconv(.c) void {
+    const raw = R.getHandleOrRaise(p, 1, "object") orelse {
+        R.ring_vm_api_retnumber(p, -1);
+        return;
+    };
+    R.ring_vm_api_retnumber(p, @floatFromInt(@as(*Obj, @ptrCast(@alignCast(raw))).n));
+}
+
+/// What a bridge written the OLD way asks: `getcpointer`. A stale id is NULL, not an error.
+fn bridgeObjPeek(p: *anyopaque) callconv(.c) void {
+    const raw = R.ring_vm_api_getcpointer(p, 1, "Obj") orelse {
+        R.ring_vm_api_retnumber(p, -1);
+        return;
+    };
+    R.ring_vm_api_retnumber(p, @floatFromInt(@as(*Obj, @ptrCast(@alignCast(raw))).n));
+}
+
+fn bridgeObjFree(p: *anyopaque) callconv(.c) void {
+    const raw = R.getHandleOrRaise(p, 1, "object") orelse return;
+    R.releaseParam(p, 1);
+    std.heap.c_allocator.destroy(@as(*Obj, @ptrCast(@alignCast(raw))));
+    R.ring_vm_api_retnumber(p, 0);
+}
+
+/// A library that frees a pointer WITHOUT keeping the id it handed out (a child freed with its parent): it tells
+/// the host by ADDRESS (RINGPP-CPTR-RETIRE-01), and every copy of the id goes stale.
+fn bridgeObjFreeRaw(p: *anyopaque) callconv(.c) void {
+    const raw = R.getHandle(p, 1) orelse return;
+    std.heap.c_allocator.destroy(@as(*Obj, @ptrCast(@alignCast(raw))));
+    R.ring_vm_api_retnumber(p, if (R.retirePtr(raw)) 1 else 0);
+}
+
+/// The same object returned again: one object, one id.
+fn bridgeObjSame(p: *anyopaque) callconv(.c) void {
+    const raw = R.getHandle(p, 1) orelse {
+        R.ring_vm_api_retnumber(p, 0);
+        return;
+    };
+    R.retHandleOnce(p, raw);
+}
+
 // ---- reading a list ---------------------------------------------------
 
 /// Sum every number, recursing into sublists -- the shape 21 of Softanza's
@@ -223,6 +281,12 @@ const regs = [_]R.Reg{
     .{ .name = "BridgeCounterNew", .func = &bridgeCounterNew },
     .{ .name = "BridgeCounterBump", .func = &bridgeCounterBump },
     .{ .name = "BridgeCounterFree", .func = &bridgeCounterFree },
+    .{ .name = "BridgeObjNew", .func = &bridgeObjNew },
+    .{ .name = "BridgeObjRead", .func = &bridgeObjRead },
+    .{ .name = "BridgeObjPeek", .func = &bridgeObjPeek },
+    .{ .name = "BridgeObjFree", .func = &bridgeObjFree },
+    .{ .name = "BridgeObjFreeRaw", .func = &bridgeObjFreeRaw },
+    .{ .name = "BridgeObjSame", .func = &bridgeObjSame },
     .{ .name = "BridgeListSum", .func = &bridgeListSum },
     .{ .name = "BridgeListChars", .func = &bridgeListChars },
     .{ .name = "BridgeListMake", .func = &bridgeListMake },
@@ -240,5 +304,5 @@ export fn rpp_init(h: *const R.HostApi) callconv(.c) c_int {
 }
 
 export fn rpp_abi_version() callconv(.c) u32 {
-    return 2;
+    return 3;
 }

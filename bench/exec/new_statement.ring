@@ -11,8 +11,8 @@
 #             return 0
 #         done
 #
-# Six sites in Softanza (stzTable.IsTable, stzEntity.IsEntity,
-# stzSection.IsSection, stzHashList.NumberOfPairsQ and two
+# Six sites in Softanza (IsTable(), IsEntity(),
+# IsSection(), StzHashListQ().NumberOfPairsQ and two
 # _normalizeDateTime), every one refused, and each took its whole function
 # with it. `init` runs and may raise either way, which is the entire point
 # of the idiom.
