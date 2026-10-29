@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ring++ -- Moving from Ring</title>
+<meta name="description" content="What a Ring program may need to run on Ring++: one command, one rule for globals, the few answers that differ on purpose, and what is refused, loudly.">
+<meta name="author" content="Mansour Ayouni">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://mayouni.github.io/ringpp/move.html">
+<meta property="og:title" content="Ring++ -- Moving from Ring">
+<meta property="og:description" content="What a Ring program may need to run on Ring++: one command, one rule for globals, the few answers that differ on purpose, and what is refused, loudly.">
+<meta property="og:image" content="https://mayouni.github.io/ringpp/ringpp-logo.jpg">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="style.css?v=2.0.1">
+</head>
+<body>
+
+<nav>
+  <div class="wrap">
+    <a class="brand" href="index.html"><img src="favicon.svg" alt="">Ring<span>++</span></a>
+    <a href="why.html">Why we left Ring</a><a href="issues.html">Issues solved</a><a href="move.html" class="active">Moving from Ring</a><a href="how.html">How it works</a><a href="start.html">Start here</a>
+    <a class="repo" href="https://github.com/mayouni/ringpp" target="_blank" rel="noopener" aria-label="Ring++ on GitHub"><svg viewBox="0 0 16 16" width="22" height="22" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg></a>
+    <a class="cta" href="https://github.com/mayouni/ringpp/releases/latest" target="_blank" rel="noopener">Get it <span class="newtab" aria-hidden="true">&#8599;</span></a>
+  </div>
+</nav>
+
+<header class="page wrap narrow">
+  <h1>Moving <em>from Ring</em></h1>
+  <p class="lead">A Ring program runs on Ring++ as it is, or it is refused with a reason. This page lists what a program may
+  need to change. It is short: Softanza is about 300,000 lines, and the whole of its move was one rule.</p>
+</header>
+
+<section class="wrap narrow">
+  <h2>1. The command</h2>
+  <pre class="code"><span class="c"># Ring</span>
+ring program.ring
+
+<span class="c"># Ring++, with the same arguments after it</span>
+rnxc program.ring</pre>
+  <p>Ring's standard library is in the package and loads as it does on Ring: <code>load "stdlibcore.ring"</code>.
+  <code>load "stdlib.ring"</code> also loads Ring's extensions written in C, which Ring++ does not run (section 4), so the
+  program is refused at that line; write <code>stdlibcore.ring</code>.</p>
+</section>
+
+<section class="wrap narrow">
+  <h2>2. The one rule: a global used in a function is <code>$name</code></h2>
+  <p>On Ring, a function that assigns a name which also exists at the top of the program writes that global, without a word.
+  Ring++ keeps the global and the local apart by their spelling: <code>$name</code> is a global, <code>@name</code> an
+  attribute, a bare name a local. A bare top-level name used inside a function is refused, at the line, with its reason:</p>
+  <pre class="code">nCount = <span class="n">0</span>
+<span class="k">?</span> Bump()
+
+<span class="k">func</span> Bump
+    nCount++
+    <span class="k">return</span> nCount</pre>
+  <pre class="code"><span class="c"># Ring 1.27 prints</span>
+1
+
+<span class="c"># Ring++ prints</span>
+Line 5 Ring++ refused this statement (identifier `nCount`, line 5 of a.ring) and did not compile it -- running past it would give a wrong answer
+In function bump() in file a.ring</pre>
+  <p>Written <code>$nCount</code> in all three places, it prints <code>1</code> on both: <code>$nCount</code> is an ordinary
+  name to Ring, so the program stays a Ring program. <code>rnxc migrate program.ring</code> lists every such use inside a
+  function &mdash; the file, the byte where the name starts, the name &mdash; for the program and every file it loads; the
+  name's own lines at the top of the program take the <code>$</code> with them. Softanza's main branch took
+  1,105 of them in 60 files, and 30 of its tests print the same on Ring 1.27 before and after.</p>
+</section>
+
+<section class="wrap narrow">
+  <h2>3. What Ring++ answers differently, on purpose</h2>
+  <p>A few of Ring's behaviours are defects no correct program relies on, and Ring++ answers them the other way. Each is a
+  decision on record, with what it costs, in <a href="https://github.com/mayouni/ringpp/blob/main/docs/CORRECTIONS.md">CORRECTIONS.md</a>.
+  Those a program is most likely to meet:</p>
+  <ul class="plain">
+    <li><b>Reading a missing key of a hash list does not add it.</b> On Ring, <code>aHash[:x]</code> inserts
+    <code>:x</code> when it is not there.</li>
+    <li><b>A numeric <code>for</code> reads its bound once.</b> On Ring a body that grows the list its <code>len()</code>
+    bound measures walks the new items too; on Ring++ it stops at the length the loop began with. A loop whose limit moves
+    is a <code>while</code> on both.</li>
+    <li><b>Assigning to a parameter rebinds the parameter.</b> On Ring, <code>p = [9]</code> inside a function rewrites the
+    list the caller passed. On Ring++ every write <em>through</em> the parameter &mdash; <code>p[1] = 9</code>,
+    <code>add(p, 9)</code> &mdash; reaches the caller, as on Ring, and an assignment <em>to</em> it does not.</li>
+    <li><b>An exact tie rounds to even</b> when a number is printed with fewer decimals: IEEE's rule, where Ring's official
+    build rounds away from zero.</li>
+  </ul>
+</section>
+
+<section class="wrap narrow">
+  <h2>4. What Ring++ does not run, and says so</h2>
+  <p>Each of these stops the program where it stands, with an error naming the call or a refusal naming the line. None of
+  them runs on with a different answer.</p>
+  <ul class="plain">
+    <li><b>Ring's extensions written in C</b> &mdash; RingQt, RingLibCurl, RingOpenSSL and the rest. They call into Ring's own
+    VM, so no other VM can host them; <code>loadlib()</code> on one is an error (R38, or R46). Softanza's engine is where
+    Ring++ programs get strings and Unicode, regular expressions, HTTP, files, graphs, graphics and sound.</li>
+    <li><b>Packages</b> (<code>package</code>, <code>import</code>), the commands that change Ring's syntax
+    (<code>ChangeRingKeyword</code>, <code>ChangeRingOperator</code>, <code>LoadSyntax</code>), Ring's implicit files
+    (<code>ringsyntax.ring</code>, <code>startup.ring</code>, <code>ring.ring</code>), and assigning <code>NULL</code>,
+    <code>TRUE</code> or <code>FALSE</code>.</li>
+    <li><b>Raw pointers</b> (<code>varptr</code>, <code>memcpy</code>, <code>getptr</code> and their family), and the VM
+    inside the VM (<code>ring_state_*</code>, <code>ringvm_*</code>).</li>
+    <li><b>A function or a class defined inside <code>eval()</code></b>. An <code>eval</code> that computes, assigns or calls
+    runs as on Ring, in its caller's scope.</li>
+  </ul>
+</section>
+
+<section class="wrap narrow">
+  <h2>5. Before it runs</h2>
+  <pre class="code"><span class="c"># every statement of the program and of what it loads: what compiles, what is refused, and why</span>
+rnxc census program.ring
+
+<span class="c"># the sites of section 2</span>
+rnxc migrate program.ring
+
+<span class="c"># what Ring would only find when the line runs: an undefined function, an unknown class</span>
+rnxc check program.ring</pre>
+  <p>And when a question is about what Ring itself does, Ring 1.27 is in the repository, built from its own source: it is the
+  reference every answer of Ring++ is measured against, and it is never shipped.</p>
+</section>
+
+<footer>
+  <div class="wrap">
+    <span>Ring++ &copy; 2026 Mansour Ayouni &middot; MIT</span>
+    <span>A <a href="https://mayouni.github.io/stzsite/" target="_blank" rel="noopener">Softanza</a> project, towards Haro</span>
+    <span>Ring is the work of Mahmoud Fayed (MIT); its 1.27 VM is vendored here, unchanged, as the oracle Ring++ is measured against</span>
+    <a href="https://github.com/mayouni/ringpp-old" target="_blank" rel="noopener">The library era, archived</a>
+    <a class="sp" href="https://github.com/mayouni/ringpp" target="_blank" rel="noopener">GitHub</a>
+  </div>
+</footer>
+
+</body>
+</html>

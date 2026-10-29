@@ -4,6 +4,13 @@ that runs a Softanza program from anywhere, on Windows or Linux.
     python bench/package.py                     Windows, from zig-out
     python bench/package.py --platform=linux    Linux, from zig-out-linux
     python bench/package.py --with-tests        ...and the three test folders
+    python bench/package.py --stz=<tree>\\libraries\\stzlib --engine=runtime\\engine-main
+                                                Softanza from another tree (a worktree of stzlib MAIN) and
+                                                the engine copy built from that tree's engine (2026-10-29)
+
+A tree from a clean checkout carries no models (models/*.gguf are git-ignored): they are taken from
+--models=<dir> (default: Mansour's tree), each under the file cap and, where models/SHA256SUMS of the
+Softanza tree names it, only if its hash matches. bin/../PACKAGE.txt records the commits that went in.
 
     runtime/package/ringpp-<platform>/
       bin/rnxc[.exe]                 the one binary (commitment 5)
@@ -26,10 +33,13 @@ engine by bench/engine_copy.py -- so this copies and never compiles. The
 Softanza sources come from Mansour's tree, read-only; archive/ and future/
 are not loaded by anything and stay out, and the test folders only with
 --with-tests. Nothing is published: runtime/ is gitignored."""
-import os, shutil, sys, time
+import hashlib, os, shutil, subprocess, sys, time
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
-STZ = r'D:\GitHub\stzlib\libraries\stzlib'
+STZ_DEFAULT = r'D:\GitHub\stzlib\libraries\stzlib'
+STZ = next((a[6:] for a in sys.argv[1:] if a.startswith('--stz=')), STZ_DEFAULT)
+MODELS = next((a[9:] for a in sys.argv[1:] if a.startswith('--models=')), os.path.join(STZ_DEFAULT, 'models'))
+ENGINE = next((a[9:] for a in sys.argv[1:] if a.startswith('--engine=')), os.path.join(ROOT, 'runtime', 'engine-copy'))
 OUT = os.path.join(ROOT, 'runtime', 'package')
 MAX_FILE = 256 * 1024 * 1024
 SKIP_DIRS = {'.git', '.zig-cache', 'zig-out', 'zig-out-linux', 'node_modules', '__pycache__', 'archive', 'future'}
@@ -71,8 +81,7 @@ def main():
     plat = 'linux-x64' if linux else 'win64'
     zo = os.path.join(ROOT, 'zig-out-linux' if linux else 'zig-out')
     exe = os.path.join(zo, 'bin', 'rnxc' if linux else 'rnxc.exe')
-    eng = os.path.join(ROOT, 'runtime', 'engine-copy', 'zig-out-linux' if linux else 'zig-out',
-                       'lib' if linux else 'bin')
+    eng = os.path.join(ENGINE, 'zig-out-linux' if linux else 'zig-out', 'lib' if linux else 'bin')
     for what, p in (('rnxc', exe), ('the Ring++ engine', eng), ('Softanza', STZ)):
         if not os.path.exists(p):
             print('SKIP package: no %s at %s' % (what, p))
@@ -109,9 +118,46 @@ def main():
             shutil.copyfile(os.path.join(eng, f), os.path.join(edst, f))
             m += 1
             esize += os.path.getsize(os.path.join(eng, f))
+    # 4. the models, when the Softanza tree is a clean checkout (they are git-ignored), checked against its SHA256SUMS
+    mdst = os.path.join(pkg, 'libraries', 'stzlib', 'models')
+    os.makedirs(mdst, exist_ok=True)
+    have = [f for f in os.listdir(mdst) if f.endswith('.gguf')]
+    sums = {}
+    sp = os.path.join(STZ, 'models', 'SHA256SUMS')
+    if os.path.exists(sp):
+        for line in open(sp, encoding='utf-8', errors='replace'):
+            parts = line.split()
+            if len(parts) >= 2:
+                sums[parts[-1].lstrip('*')] = parts[0].lower()
+    models = []
+    if not have and os.path.isdir(MODELS):
+        for f in sorted(os.listdir(MODELS)):
+            p = os.path.join(MODELS, f)
+            if not f.endswith('.gguf') or os.path.getsize(p) > MAX_FILE:
+                continue
+            if f in sums:
+                h = hashlib.sha256()
+                with open(p, 'rb') as fh:
+                    for chunk in iter(lambda: fh.read(1 << 22), b''):
+                        h.update(chunk)
+                if h.hexdigest() != sums[f]:
+                    print('  model %s does NOT match SHA256SUMS -- left out' % f)
+                    continue
+            shutil.copyfile(p, os.path.join(mdst, f))
+            models.append(f)
+    # 5. what went in, by commit
+    def head(d):
+        r = subprocess.run(['git', '-C', d, 'log', '-1', '--format=%h %cd %s', '--date=format:%Y-%m-%d'], capture_output=True, text=True)
+        return r.stdout.strip()[:110] or '(not a git tree)'
+    with open(os.path.join(pkg, 'PACKAGE.txt'), 'w', encoding='utf-8', newline='\n') as f:
+        f.write('Ring++ package %s, laid %s\n' % (plat, time.strftime('%Y-%m-%d %H:%M')))
+        f.write('  rnxc       ringpp %s\n' % head(ROOT))
+        f.write('  Softanza   stzlib %s\n' % head(STZ))
+        f.write('  engine     built for Ring++ by bench/engine_copy.py from %s (%d libraries)\n' % (ENGINE, m))
+        f.write('  models     %s\n' % (', '.join(models or have) or 'none'))
     total = sum(os.path.getsize(os.path.join(dp, f)) for dp, _, fs in os.walk(pkg) for f in fs)
-    print('package %s: rnxc + Ring\'s library + Softanza (%d files, %.0f MB) + %d engine libraries (%.0f MB)'
-          % (pkg, n, size / 1e6, m, esize / 1e6))
+    print('package %s: rnxc + Ring\'s library + Softanza (%d files, %.0f MB) + %d engine libraries (%.0f MB) + %d model(s)'
+          % (pkg, n, size / 1e6, m, esize / 1e6, len(models)))
     print('  %.0f MB in all, %.1f s%s' % (total / 1e6, time.time() - t0, '' if tests else '  (tests left out)'))
     return 0
 

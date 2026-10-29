@@ -4111,3 +4111,106 @@ table uses; a release bumps the slot's generation so every copy is stale, a stal
 31 checks in `bench/bridge.ring` over two engine DLLs and a deliberately too-new third, each made to fail by three mutations of the backend; stzlib-security's own guard `stale_handle_narrated.ring` 13 of 13 on rnxc against a Ring++ build of its
 engine (`bench/sec_guard.py`), and 10 of 13 when the host's release is made to retire nothing -- the three stale-copy assertions are the ones that fail.
 
+## F-135. `str2list` kept a trailing empty line and the carriage return of every CRLF line
+
+`len(str2list(read("AGENTS.md")))` was 131 on Ring 1.27 and on the oracle and 132 on Ring++, for the same LF-only file of 7,513 bytes. Ring's rule (`vendor/ring-vm/src/genlib_e.c:525`): a piece ends at each newline, a carriage return
+just before the newline is dropped, and what follows the LAST newline is a piece only if it is not empty. So `"a" + nl + "b" + nl` is two lines on Ring and was three here, `""` is none on Ring and was one here, and `"a" + cr + nl + "b"`
+gave `"a" + cr` where Ring gives `"a"`. Fourteen rows measured on the oracle and the official 1.27 (`bench/exec/str2list.ring`; they agree on every one). Ring++ split on the newline alone. Found by a guard test of stzlib's
+(`base/test/render/agents_door_narrated.ring`, stzlib's render plane) that counts the lines of a file it reads: it printed `(131)` on Ring and `(132)` on Ring++, in a run that was being read for another reason (2026-10-23: what a
+guard test meets when it runs on rnxc). **Fixed, not decided** (a silent wrong answer, and the wrong way for a program that counts lines): `VM.splitLines`, out of the run loop on purpose. The estate's own use is wide -- every reader of a file's lines
+-- so the full pass is expected to move a few rows toward Ring; it was not run (the figure published with 2.0.3 and 2.0.4 predates the fix). The probe fails on the build before (`a/b/ -> 3`, Ring 2) and passes after; gate PASSED, 162 probes in both modes.
+Cost: none at run time (the same scan, `indexOfScalarPos`, in a function of its own). **Not covered:** `str2list` of a non-string (R-error text), which was not probed.
+
+## F-136. `shutdown(n)` was R3: a guard died on its last line
+
+Ring's `shutdown(n)` (`vendor/ring-vm/src/os_e.c:235`) ends the program where it stands with exit code n (0 with no argument), inside a function, an `if` or a loop, and nothing after it runs. A non-number is "Bad parameter type!",
+a number outside an int "Bad parameters value, error in range!", more than one argument "Bad parameters count, the function expect one parameter" -- all three catchable. Ring++ had the name in its list of Ring's builtins and
+no implementation, so `shutdown($nFail)` -- how a stzlib guard makes its exit code say what its last line says (`base/test/render/agents_door_narrated.ring` ends on it) -- raised R3 on the LAST line, after the verdict had printed.
+The three error texts and a program that ends inside a function, a loop and an `if`: the official 1.27, the oracle and Ring++ agree on all six output lines and on exit code 7 (`bench/exec/shutdown.ring`). **Fixed**: a native of ours registered at start-up (`ringShutdown`, `src/rnxc.zig`, the way
+the zip functions are), not a builtin of the VM -- an edit inside the run loop moves the layout of every kernel (F-118). Windows keeps all 32 bits of the code, POSIX the low eight, as Ring's `exit()` does. Gate PASSED, 163 probes in both modes.
+Cost: none at run time. Found by the same reading as F-135. **Not measured:** how many more of Ring's 258 builtins a guard test will call -- 103 of them were absent on 2026-10-13 (RingServ's census; several have landed since) and this is the one a guard needed.
+
+## F-137. A multi-line string literal keeps the CR of a CRLF file on Ring++ and loses it on Ring (Windows)
+
+`s = "ab` / `cd` / `ef"` in a CRLF file is **8 bytes on Ring and 10 on Ring++**: the official 1.27 and the oracle agree on `8 3 97 98 10 99 100 10 101 102` (length, then the codes), Ring++ answers `10 3 97 98 13 10 99 100 13 10 101 102`. The mechanism is in Ring, not in its scanner: `ring_state_runfile` opens every source file with `ring_general_fopen(cFileName, "r")` (`vendor/ring-vm/src/state.c:163`), text mode, so on Windows the C runtime turns each CRLF into LF before the scanner reads a byte. On Linux "r" and "rb" are the same and Ring keeps the CR, as Ring++ does there; the divergence is Windows only. Ring++ reads the bytes as they are. Nothing else of a source file is affected: `read()` opens its file "rb" on both (`file_e.c:492`), a `#` comment and the code around a literal are CR-tolerant, and a one-line string has no line break.
+
+Found by the A/B of the Rule A migration of stzlib `main` (the third run of its probe): `_cLocaleAbbreviations` is 9,889 bytes on the oracle and 10,058 on Ring++, for the same tree, and the migrated and the pristine library on the oracle agree on it -- so it is the runtime's. **Measured on Softanza**: 8 of the 814 library files hold a multi-line string literal, 149 literals, 1,916 line breaks inside them, every one in a CRLF file as a Windows checkout writes it -- `base/extercode/stzExterCodeTransFuncs.ring` 570, `max/data/stzStopWordsData.ring` 545 (a word list: split on `nl`, every word but the last would end in a CR on Ring++), `base/data/stzStringArtData.ring` 483, `base/data/stzLocaleData.ring` 171, `stzExterCode.ring` 66, `stzDataModelData.ring` 48, `stzConstraintsData.ring` 23, `stzFuncs.ring` 10. **Why no pass saw it**: every comparison of output here drops the CR of each line (`clock34.lines()`, `why432`, the A/B harness), and the wide pass counts assertions, which compare a string with itself. A `len()`, an `=` against a literal in a LF file, a `split(s, nl)` or a hash of such a string is where it shows; `str2list` is not one (F-135 drops the CR of every line, as Ring does).
+
+**Fixed 2026-10-28, at his word ("fix silently", as proposed).** `Compiler.literalText` (`src/compile.zig`), at the one site where a literal becomes a constant: a Windows build of rnxc turns each CR LF inside the literal's text into LF; a POSIX build leaves it, as Ring does there (`builtin.os.tag`, decided when rnxc is built, as the CRT decides it for Ring). Eval'd code keeps its CR LF (the compiler's eval mode), as on Ring. The file's bytes are not touched, so `migrate`, `attrs`, `shadows` and `dump --json` print the offsets they printed (the gate's `dump --json` step: every span and gap the file's own). The compiled image and the prefix need nothing: both are keyed by the executable's size and mtime, so the rebuild retires every unit compiled before the fix, and the file hashes in their manifests are of bytes that did not change. **The probe** is `bench/exec/crlf_literal.ring`, CRLF on purpose (`.gitattributes` gives it `-text`, after the `*.ring eol=lf` rule), eight rows: `"`, `'` and backtick literals across lines, a blank line inside one, a literal ending in its line break, `s = "ab" + nl + "cd" + nl + "ef"`, a literal in a list, one returned by a function, and an eval'd `'x' + cr + nl + 'y'`. The official 1.27 and the oracle agree on all eight; the build before differed on seven (all but the eval: `8 : 97 98 10 ...` against `10 : 97 98 13 10 ...`) and the build after agrees. On Linux (`bench/exec_wsl.py`, the cross-built rnxc and the Linux oracle, the same file through /mnt/d) both keep the CR, `10 : 97 98 13 10 ...`, before and after. **On the estate**: the literal of `_cLocaleAbbreviations`, loaded alone from `stzLocaleData.ring` in D:\GitHub\stzlib (branch ringpp/migrate-rule-a), is 9,892 bytes on the oracle and the official 1.27 and now on Ring++ (10,063 before; 1,482 lines, 171 line breaks inside the literal). The 9,889 above is AFTER stzlib's own `Trim()`; Ring's builtin `trim()` leaves the 9,892 alone, and Ring++'s did not until F-139 (fixed the same day). Gate PASSED, 164 probes in both modes. **Cost**: one search for CR LF per literal at compile time, and a copy only for a literal that holds one; nothing at run time. **Not covered, measured** (Windows, oracle against the build after): a lone CR inside a literal is kept by both -- text mode converts the pair only, so `a CR b CR CR LF c` is `97 13 98 13 10 99` on both. A Ctrl-Z (byte 26) ENDS the file on Ring: `? "before"`, a line holding Ctrl-Z, `? "after"` prints `before` on Ring, and Ring++ reads on (R24 at line 2); a Ctrl-Z inside a literal is `Error (S1) ... Literal not closed` on Ring and a 3-byte string here. None of the 6,078 `.ring` files under stzlib's `libraries/stzlib` holds a Ctrl-Z, so that one is recorded, not fixed. The fix is in `next`; not in the installed copy (`D:\ringpp\ringpp-win64`), the package or a release.
+
+## F-138. An assignment whose value is an `and`/`or` chain can be parsed as a comparison, and rnxc drops the assignment
+
+`_bOk_ = isNumber(a) and isNumber(b) and isNumber(c) and isNumber(d)` as a statement is an ASSIGNMENT on Ring: a statement that begins with a name and `=` assigns
+everything after the `=` (Ring's assignment flag, the rule C-32 records). The grammar resolves this statement two ways depending on what surrounds it -- the
+GLR ambiguity of F-58: in a plain function it gives `assignment_expression` with the `and` chain as its value; in a method of a class followed by an `if NOT
+_bOk_` and a `for` loop it gives a `binary_expression` chain whose LEFTMOST operand is the comparison `_bOk_ = isNumber(a)`. rnxc compiles what it is given:
+`rnxc dis` shows `r24 _bOk_` then `cmpv`, a comparison whose value is discarded, and `_bOk_` is not even a local of the method. So the assignment never
+happens: loud (R24 at the next read) when the name was assigned nowhere before, SILENT (a stale value read on) when it was.
+
+Found by the A/B of the Rule A migration of stzlib main: base/test/geo/stzGeoFeatures_defects_narrated.ring passes 100 of 100 on the oracle, before the
+migration and after, and stops after 3 on rnxc with `Error (R24) : Using uninitialized variable: _bok_` in StzGeoFeaturesQ().IndicesWithin()
+(stzGeoFeatures.ring:792, a file the migration does not touch). Shrunk, line by line, keeping every step a program Ring runs cleanly, to a class with one
+method: the four-term assignment, `if _bOk_ ok`, `if NOT _bOk_ ok`, `for _i_ = 1 to len(@aFeat) next` -- removing any of the four makes the grammar pick
+the assignment again. `!` for `NOT` and `(NOT _bOk_)` fail alike; the not-lift (C-32) reports no site, so it is not the lift.
+
+**Census of the shape**, every library file of main through `rnxc dump --json` (815 files): an expression statement whose leftmost operand, under a chain of
+other operators, is `name = ...` -- 2 sites: stzGeoFeatures.ring:792 (above) and stzDiagram.ring:2966, `_bSameKind_ = (isNumber(pLeft) and
+isNumber(pRight)) or ...`. No statement has `name = ...` alone as a top binary expression.
+
+**Fixed 2026-10-28, at his word ("fix F-138"): silently, as proposed.** Ring's rule, read in its parser: `Factor --> Identifier {mixer} [ '=' Expr ]`
+(`vendor/ring-vm/src/expr.c:397`), so the place is a name with its `.x`, `[i]` and `(...)`, and the value is the whole expression after the `=`. In
+`src/compile.zig`: `misreadEq` finds the shape -- an expression statement whose left spine, under `and`, `or`, `=` and `!=` (the only operators the grammar
+binds as loosely as a comparison), ends in `place = x`; a statement holding a parse error is left alone. `rereadAssign` reads its text again alone in a
+function, as the F-71/F-80 re-reads do, and when that still reads a comparison, with the value in parentheses -- `_bOk_ =(...)`, the space after the `=`
+taking the `(` so every byte maps to the file. The hook is at the top of `stmt()`, not in `rereadSpan`, because an eval's statements and a load inside a
+block never pass through a span; a statement neither reading makes an assignment is REFUSED, never compiled as the comparison. **The type table moves
+with it**: `classifyStmt` classifies the same re-read node (`_bOk_` is a local typed int; before, it was no local at all), and the four walks that look
+for an assignment's target in the parsed tree see it too -- a for-in's write-back (`writesName`), a lambda's own names (`scanAssigned`), a class region's
+attributes (`regionNamesInto`) and a global's proved class (`scanAssigns`).
+
+**Probe** `bench/exec/assign_misread.ring`, 8 lines: three classes, each keeping the method's four statements -- the loud R24, the SILENT stale value (an
+attribute holding 1: Ring 0, the build before 1) and an R3 raised inside the re-read chain, whose `Line 49` is the file's. The build before differs from
+the first line; the build after is identical to the oracle and to the official 1.27, and so is a build forced onto the parenthesised reading. **On main's
+tree** (a worktree of it, e32288cce) both sites misparse and compile as assignments now: `IndicesWithin` no longer opens with the R24 check (`chkl`) and
+a discarded `cmpv`, and `_bSameKind_` is a local of `_NodeValueSatisfies`. Of main's 1,371 library files outside the test folders, 5 statements have
+the shape: the two above and three in `max/temp/tempo.ring`, a file the grammar cannot read (its `/*====` banners come back as `/`, `*=` and `=`) and no
+unit loads -- the parse-error guard leaves those. **Census unchanged**: the gate's unit 118,640 statements, 0 refused; stzlib's `ringpp/migrate-rule-a`
+(dd9d06b8f), max unit, 120,726 statements, 0 refused, 1,147,662 instructions, 122,257 locals before and after -- that tree holds neither site.
+`rnxc check` reads the grammar's tree itself and fires no rule on the probe's `_bOk_` (no false R24). Cost: compile time only, one parse per such
+statement per emission pass and per classify round. **Not covered:** `shadows`, `migrate` and `attrs` still read the comparison; the narrated guard
+`stzGeoFeatures_defects_narrated.ring` was not re-run on rnxc (its A/B layout is not a script); a `place =` that does not lead the statement is F-140.
+
+## F-139. Ring's builtin `trim()` removes spaces only; Ring++'s removed tabs, CRs and newlines too
+
+Ring's `trim` (`vendor/ring-vm/src/genlib_e.c:788`) keeps everything between the first and the last byte that is not a SPACE (`cStr[x] != ' '`): a tab, a CR or a newline at either end stays. Ring++'s
+(`src/main.zig:5480`) is `std.mem.trim(u8, src, " \t\r\n")`. Five rows of `len(trim(...))`, the official 1.27 and the oracle agreeing on every one: `nl + tab + "a" + nl` is 4 on Ring and 1 here;
+`"  a  "` 1 and 1; `cr + nl + " a " + tab` 6 and 1; `" " + nl + " "` 1 and 0; `"   "` 0 and 0. **It reaches Ring's own library**: stdlibcore's `endswith`, `startswith` and `split` trim their string first
+(`vendor/ring-stdlib/libraries/stdlib/stdlibcore.ring:252, 412, 423`), so `endswith("abc" + nl, "c")` and `startswith(tab + "abc", "a")` are 0 on Ring and 1 here.
+
+Found measuring F-137's fix: the `_cLocaleAbbreviations` literal begins with LF TAB and ends with LF; it is 9,892 bytes on both runtimes now, and its `trim()` is 9,892 on Ring and 9,889 here.
+**Masked in Softanza**: stzlib defines its own `Trim(pcStr)` (`base/string/stzStringFunc.ring:654`, the engine's whitespace trim), which takes the name from the builtin on both runtimes -- which is why
+F-137's A/B saw 9,889 on Ring too. Code that does not load the library gets the builtin: a guard test, RingServ, Ring's stdlib as above.
+
+**Fixed 2026-10-28, at his word ("fix F-139 here"): silently, as proposed.** Ring++'s `trim` removes `' '` alone (`src/main.zig`, the `.trim` arm: `std.mem.trim(u8, src, " ")`); Ring's
+all-spaces case (empty) and empty string (empty) fall out of the same call. **Probe** `bench/exec/trim_spaces.ring`, 14 lines: nine strings (the five above, `""`, `tab + " "`, `" " + tab + " x " + tab + " "`,
+`char(0) + " "`), stdlibcore's `endswith`, `startswith` and `split` through it, and a number and a list raising "Bad parameter type!". The official 1.27 and the oracle agree on all 14; the build
+before differed on 7 (five strings, endswith, startswith -- `split(" a b " + tab, " ")` is 2 on both), the build after agrees; Linux (`bench/exec_wsl.py`) agrees after. Gate PASSED, 165 probes in both
+modes. **Cost, priced because the arm is inside the run loop (F-118)**: `rnxc bench kernels.ring`, the build before (a11749e) against the build after, interleaved, minima. Three runs: 9 rounds read
+geomean 1.10 (sieve 1.15, matmul 1.21) and did not repeat; 9 rounds then read 0.999 (each within 1%), and 15 rounds 0.999 (sieve 0.97, matmul 1.02, fib 0.96, mergesort 1.03, binsearch 1.02).
+The floor, the build before against its own copy, 9 rounds: 0.98, each within 5%; the absolute times drifted 20% between runs (other work on the machine). No kernel calls `trim`.
+**The pattern it hurts**: none measured; a program that relied on Ring++'s trim to take a newline or a tab off now keeps it, as on Ring.
+
+## F-140. `a and b = c` as a statement assigns c to b on Ring; rnxc compares
+
+Ring's assignment flag is cleared inside parentheses, in an assignment's value and in some statement headers -- not by `and` or `or`, whose operands are
+parsed with the flag as it stands (`ring_parser_logicand`, `vendor/ring-vm/src/expr.c:33`). So in a STATEMENT a place followed by `=` assigns wherever an
+operand of the chain begins with it, not only at the head (F-138). Measured in a function with a = 1, b = 2, c = 3, x = 0: after `a and b = c`, b is 3 on
+the oracle and the official 1.27, and 2 on rnxc; after `x or b = 7`, 7 and 2. rnxc compiles the comparison and the value is discarded, silently. Found
+fixing F-138, by reading the parser it cites.
+
+**No site in the estate.** Main's 1,371 library files outside the test folders hold 8 expression statements with a `place = x` after an operand, and all 8
+are `return X and Y = Z` lines whose `return` the grammar cut (`stzCalendar.ring:909` and `:918`, `stzBuilder.ring:938`, `stzsystemcall.ring:945`,
+`stzPanel.ring:137`, `stzAgentGraph.ring:467`, `stzSecurityGraph.ring:520`, `dataphore/stzdatamodel-copy.ring:1653`): rnxc rejoins those as
+`return <expr>`, where Ring's flag is down too, so they compare on both. **Not fixed, proposed: fix silently** with the next change to this reading --
+`misreadEq` would look at each operand's head, not the spine's bottom alone. Not measured: a `place =` after an arithmetic operator (`a + b = c`).
+

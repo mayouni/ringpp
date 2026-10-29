@@ -2,21 +2,25 @@
 
 # Ring++
 
-**Ring programs, on ground you control.** Ring++ is a register VM and a compiler from Ring source to its bytecode, in one
+**The runtime that replaces Ring.** Ring++ is a register VM and a compiler from Ring source to its bytecode, in one
 5 MB Zig binary. It runs the Ring code that exists -- the 300,000 lines of [Softanza](https://github.com/mayouni/stzlib) and
-the applications built on them -- with no Ring underneath, on Windows and Linux. It is the bridge to **Haro**, the language
-that comes next.
+the applications built on them -- with no Ring underneath, on Windows and Linux. Since 29 October 2026 Softanza's main branch
+is written for Ring++ and ships with it, and Ring 1.27 stays here only as the reference every answer is measured against. It is
+the bridge to **Haro**, the language that comes next.
 
 | | measured 2026-10-17 |
 |---|---|
 | Softanza's checks that pass on Ring and pass on Ring++ | **12,924 of 13,008** (Windows), **12,170 of 12,255** (Linux) -- [the rest, named](https://mayouni.github.io/ringpp/how.html#parity) |
+| Softanza's main branch, compiled whole (2026-10-29) | **136,346** statements in 697 files, every one compiled |
 | Ring programs compared with Ring, line by line | **5,112** |
 | faster than Ring 1.27 on the same programs | **4x to 2,030x** ([the table](https://mayouni.github.io/ringpp/issues.html#speed)) |
 | what it needs | one binary: no Ring, no C compiler |
 
 **[Why Ring++ left Ring](https://mayouni.github.io/ringpp/why.html)** -- the technical and the governance reasons, with the
 record behind each. **[Ring's issues, solved](https://mayouni.github.io/ringpp/issues.html)** -- every issue run on Ring 1.27
-and on Ring++, side by side. **[Start here](https://mayouni.github.io/ringpp/start.html)** -- the package and the first program.
+and on Ring++, side by side. **[Moving from Ring](https://mayouni.github.io/ringpp/move.html)** -- what a Ring program may
+need: one command, one rule for globals, and what is refused. **[Start here](https://mayouni.github.io/ringpp/start.html)** --
+the package and the first program.
 
 ## Build it
 
@@ -28,7 +32,7 @@ zig-out/bin/rnxc program.ring
 ```
 
 `python bench/gate.py` is the gate every change passes: the vendored trees' hashes, A/B against the oracle, the Softanza census,
-156 exec probes in two build modes, the checker, the native interface, the formatter and the graph.
+166 exec probes in two build modes, the checker, the native interface, the formatter and the graph.
 
 ## The tree
 

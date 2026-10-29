@@ -2707,6 +2707,25 @@ pub const VM = struct {
         return sp;
     }
 
+    /// str2list: Ring's rule (genlib_e.c:525). A piece ends at each "\n"; a "\r" just before it is
+    /// dropped (CRLF text gives clean lines); and what follows the LAST "\n" is a piece only if it
+    /// is not empty -- so "a\nb\n" is two lines and "" is none. This VM split on "\n" alone, which
+    /// gave one extra empty piece after a final newline (and one for the empty string) and kept the
+    /// "\r" of every CRLF line: `len(str2list(read(f)))` read one high on every file ending in a
+    /// newline. Found 2026-10-23 by a guard test counting the lines of AGENTS.md (131 on Ring, 132 here).
+    /// Out of the run loop on purpose: an edit inside it reshuffles the layout of every kernel.
+    fn splitLines(self: *VM, s: []const u8) *Vec {
+        const v = self.newVec(4);
+        var start: usize = 0;
+        while (std.mem.indexOfScalarPos(u8, s, start, '\n')) |x| {
+            const end = if (x > start and s[x - 1] == '\r') x - 1 else x;
+            self.vecPushB(v, Value.str(self.newStr(s[start..end])), true);
+            start = x + 1;
+        }
+        if (s.len > start) self.vecPushB(v, Value.str(self.newStr(s[start..])), true);
+        return v;
+    }
+
     /// Every occurrence of `needle` in `hay` replaced by `with`.
     /// The buffer is owned by the VM's scratch arena and copied by newStr.
     fn replaceAll(self: *VM, hay: []const u8, needle: []const u8, with: []const u8) []const u8 {
@@ -5457,8 +5476,10 @@ pub const VM = struct {
                         out = Value.str(self.newStr(buf));
                     },
                     .trim => {
+                        // SPACES only, as Ring's (genlib_e.c:807): a tab, CR or newline at
+                        // either end stays (F-139; this trimmed " \t\r\n").
                         const src = strOf(regs[A]);
-                        out = Value.str(self.newStr(std.mem.trim(u8, src, " \t\r\n")));
+                        out = Value.str(self.newStr(std.mem.trim(u8, src, " ")));
                     },
                     .left => {
                         const src = strOf(regs[A]);
@@ -6145,13 +6166,7 @@ pub const VM = struct {
                         out = Value.str(self.newStr(buf[0..n]));
                     },
                     .str2list => {
-                        const s = strOf(regs[A]);
-                        const v = self.newVec(4);
-                        var it = std.mem.splitScalar(u8, s, '\n');
-                        while (it.next()) |line| {
-                            self.vecPushB(v, Value.str(self.newStr(line)), true);
-                        }
-                        out = Value.vec(v);
+                        out = Value.vec(self.splitLines(strOf(regs[A])));
                     },
                     .substr4 => {
                         const sv = strOf(regs[A]);

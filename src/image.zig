@@ -330,7 +330,68 @@ pub fn save(
     }
     std.fs.cwd().rename(tmp, path) catch {
         std.fs.cwd().deleteFile(tmp) catch {};
+        return;
     };
+    prune(path);
+}
+
+/// THE CACHE IS BOUNDED. There is one image per root file ever run, 30-40 MB
+/// each, and nothing ever retired one: the wide suite's 5,112 programs and a
+/// month of runs left 54 GB in it (2026-10-29), which filled C: and would
+/// have stopped every build on the machine. So after an image is written, the
+/// folder's images are summed, and while they exceed the cap the least
+/// recently WRITTEN go first -- a hit does not touch its image, so an old one
+/// still in use is rebuilt once and is then the newest. Only images (`.rnxi`):
+/// a prefix (`.rnxp`) is written on purpose by `rnxc prefix`, and losing one
+/// costs every later program a cold compile. A temporary left by a writer that
+/// died (`.tmp`) older than an hour goes too. The cap is RNXC_CACHE_MB
+/// megabytes, 4096 when unset; 0 means unbounded. Silent on failure, as the
+/// write is: the cache must never cost a program more than its time.
+pub fn prune(just_written: []const u8) void {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var cap_mb: u64 = 4096;
+    if (std.process.getEnvVarOwned(a, "RNXC_CACHE_MB")) |v| {
+        cap_mb = std.fmt.parseInt(u64, std.mem.trim(u8, v, " "), 10) catch cap_mb;
+    } else |_| {}
+    if (cap_mb == 0) return;
+    const cap = cap_mb * 1024 * 1024;
+    const dir_path = std.fs.path.dirname(just_written) orelse return;
+    const keep = std.fs.path.basename(just_written);
+    var d = std.fs.cwd().openDir(dir_path, .{ .iterate = true }) catch return;
+    defer d.close();
+
+    const Ent = struct { name: []const u8, size: u64, mtime: i128 };
+    var ents = std.ArrayListUnmanaged(Ent){};
+    var total: u64 = 0;
+    const hour_ago = std.time.nanoTimestamp() - std.time.ns_per_hour;
+    var it = d.iterate();
+    while (it.next() catch return) |e| {
+        if (e.kind != .file) continue;
+        const st = d.statFile(e.name) catch continue;
+        if (std.mem.endsWith(u8, e.name, ".tmp")) {
+            if (st.mtime < hour_ago) d.deleteFile(e.name) catch {};
+            continue;
+        }
+        if (!std.mem.endsWith(u8, e.name, ".rnxi")) continue;
+        total += st.size;
+        if (std.mem.eql(u8, e.name, keep)) continue;
+        const name = a.dupe(u8, e.name) catch return;
+        ents.append(a, .{ .name = name, .size = st.size, .mtime = st.mtime }) catch return;
+    }
+    if (total <= cap) return;
+    std.mem.sort(Ent, ents.items, {}, struct {
+        fn older(_: void, x: Ent, y: Ent) bool {
+            return x.mtime < y.mtime;
+        }
+    }.older);
+    const goal = cap / 4 * 3;
+    for (ents.items) |e| {
+        if (total <= goal) break;
+        d.deleteFile(e.name) catch continue;
+        total -= e.size;
+    }
 }
 
 // ------------------------------------------------------------- reading

@@ -23,6 +23,43 @@ const graph = @import("graph.zig");
 const zip = @import("zip.zig");
 const prefix = @import("prefix.zig");
 const lift = @import("lift.zig");
+const native = @import("native.zig");
+
+/// Ring's `shutdown(n)` (vendor/ring-vm/src/os_e.c:235): end the program HERE with exit code n -- 0 with no argument,
+/// as `bye` -- wherever it stands; nothing after it runs. A guard ends with `shutdown($nFail)` so that its exit code
+/// says what its last line says; without it the call was R3 and the guard died on its LAST line, after printing its verdict.
+/// A native of ours rather than a builtin of the VM: an edit inside the run loop moves the layout of every kernel (F-118).
+/// A non-number is "Bad parameter type!", a number outside an int is "...error in range!", more than one argument is an error.
+fn ringShutdown(args: [*]const native.RppVal, argc: u32, out: *native.RppVal) callconv(.c) c_int {
+    var code: i32 = 0;
+    if (argc > 1) {
+        out.* = native.RppVal.str("Bad parameters count, the function expect one parameter");
+        return 1;
+    }
+    if (argc == 1) {
+        const a = args[0];
+        const d: f64 = switch (a.tag) {
+            @intFromEnum(native.Tag.int) => @floatFromInt(@as(i64, @bitCast(a.bits))),
+            @intFromEnum(native.Tag.num) => @bitCast(a.bits),
+            else => {
+                out.* = native.RppVal.str("Bad parameter type!");
+                return 1;
+            },
+        };
+        if (d != d or d < -2147483648.0 or d > 2147483647.0) {
+            out.* = native.RppVal.str("Bad parameters value, error in range!");
+            return 1;
+        }
+        code = @intFromFloat(d);
+    }
+    vm.outFlush();
+    // Windows keeps all 32 bits of the code; POSIX keeps the low eight, which is what Ring's exit() gets there too.
+    if (@import("builtin").os.tag == .windows) {
+        std.os.windows.kernel32.ExitProcess(@bitCast(code));
+    } else {
+        std.process.exit(@truncate(@as(u32, @bitCast(code))));
+    }
+}
 
 /// THE VM HEAP FREES; the compiler's arena does not, and must not -- parse
 /// trees, the code stream and the constant table live until exit, and a bump
@@ -1601,6 +1638,7 @@ pub fn main() !void {
     // commitment 5 says this is one binary, so the twelve names are
     // published here, through the same table `rpp_init` fills.
     zip.registerAll(vmheap);
+    native.register("shutdown", &ringShutdown);
     if (vm.poison_on) std.debug.print("note: POISONING HEAP -- freed memory is 0xDD and never reused\n", .{});
     if (std.process.getEnvVarOwned(std.heap.page_allocator, "RNXC_TRACE_RET")) |v| {
         vm.trace_ret_name = v;

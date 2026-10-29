@@ -2853,6 +2853,15 @@ pub const Compiler = struct {
         return Error.Unsupported;
     }
 
+    /// A place written bare in a function -- `n++`, `add(aL, v)`, `insert(...)`, `del(...)` -- that is no local: when the
+    /// name is a top-level global of the unit, the refusal is Rule A's, as the read and the indexed write already say.
+    /// Filed under the node's own kind (`identifier`), `rnxc migrate`, which selects on the Rule A kind, skipped them.
+    fn nopeName(self: *Compiler, n: ts.Node) Error {
+        if (self.knownGlobal(n.text()) != null)
+            return self.nopeKind(n, "bare name is not a local (Rule A)");
+        return self.nope(n);
+    }
+
     fn nope(self: *Compiler, n: ts.Node) Error {
         self.noteRefusal(n, n.kind());
         if (self.census) {
@@ -2933,7 +2942,7 @@ pub const Compiler = struct {
             return;
         }
         if (std.mem.eql(u8, k, "string")) {
-            _ = try self.emit(.loadk, dst, 0, 0, try self.konstIndex(n.text()));
+            _ = try self.emit(.loadk, dst, 0, 0, try self.konstIndex(try self.literalText(n.text())));
             return;
         }
         if (std.mem.eql(u8, k, "symbol")) {
@@ -4090,7 +4099,7 @@ pub const Compiler = struct {
                 _ = try self.emit(.loadi, lst, 1, 0, 0); // the borrow ends here
                 return;
             }
-            const l = self.lookup(tname) orelse return self.nope(target);
+            const l = self.lookup(tname) orelse return self.nopeName(target);
             const val = try self.tmp();
             try self.expr(args.namedChild(1), val);
             // `add(w, y)` appends a COPY of y on Ring (measured: y[1] = 11
@@ -4182,7 +4191,7 @@ pub const Compiler = struct {
                 _ = try self.emit(.gattrw, lst, 0, 0, @intCast(slot));
                 borrowed = true;
             } else {
-                const l = self.lookup(tn) orelse return self.nope(tgt);
+                const l = self.lookup(tn) orelse return self.nopeName(tgt);
                 lst = l.reg;
             }
             const pr = try self.tmp();
@@ -4248,7 +4257,7 @@ pub const Compiler = struct {
                 _ = try self.emit(.loadi, lst, 1, 0, 0); // borrow ends
                 return;
             }
-            const l = self.lookup(tgt.text()) orelse return self.nope(tgt);
+            const l = self.lookup(tgt.text()) orelse return self.nopeName(tgt);
             const save2 = self.temp;
             defer self.temp = save2;
             const ir = try self.tmp();
@@ -4718,6 +4727,30 @@ pub const Compiler = struct {
         }
         self.konst.append(self.alloc, vm.Value.num(d)) catch return Error.OutOfMemory;
         return @as(i32, @intCast(self.konst.items.len - 1)) + kb;
+    }
+
+    /// A literal's text as Ring's scanner receives it (F-137). Ring opens
+    /// every source file in TEXT mode (`ring_state_runfile`, state.c:163,
+    /// "r"), so on Windows the C runtime turns each CR LF into LF before a
+    /// byte is scanned: `"ab` / `cd` / `ef"` in a CRLF file is 8 bytes on
+    /// Ring and was 10 here. On POSIX "r" is "rb" and Ring keeps the CR, so
+    /// this is the host's rule, decided when rnxc is built. Here and not
+    /// where the file is read: migrate, attrs, shadows and dump --json print
+    /// byte offsets into the file, which must stay the file's own. An eval'd
+    /// string is not a file and keeps its CR on Ring (bench/exec/
+    /// crlf_literal.ring). A literal without CR LF is returned as it is.
+    fn literalText(self: *Compiler, raw: []const u8) Error![]const u8 {
+        if (@import("builtin").os.tag != .windows or self.eval != null) return raw;
+        if (std.mem.indexOf(u8, raw, "\r\n") == null) return raw;
+        // Heap, not stack: konstIndex keeps the slice.
+        const buf = self.alloc.alloc(u8, raw.len) catch return Error.OutOfMemory;
+        var j: usize = 0;
+        for (raw, 0..) |ch, i| {
+            if (ch == '\r' and i + 1 < raw.len and raw[i + 1] == '\n') continue;
+            buf[j] = ch;
+            j += 1;
+        }
+        return buf[0..j];
     }
 
     /// A string constant, deduplicated. Ring escapes are not handled yet;
@@ -5385,11 +5418,21 @@ pub const Compiler = struct {
     }
 
     fn scanAssigns(self: *Compiler, n: ts.Node, name: []const u8, found: *?u16, bad: *bool) void {
-        if (std.mem.eql(u8, n.kind(), "assignment_expression") and n.namedChildCount() >= 2 and
-            std.mem.eql(u8, n.namedChild(0).kind(), "identifier") and
-            std.ascii.eqlIgnoreCase(n.namedChild(0).text(), name))
+        // the target and the value; for a statement the grammar read as a
+        // comparison (F-138) the value is the whole chain after the `=`,
+        // which is a `new` only when nothing follows it
+        var tgt: ?ts.Node = null;
+        var rhs: ts.Node = n;
+        if (std.mem.eql(u8, n.kind(), "assignment_expression") and n.namedChildCount() >= 2) {
+            tgt = n.namedChild(0);
+            rhs = n.namedChild(n.namedChildCount() - 1);
+        } else if (misreadEq(n)) |eq| {
+            tgt = eq.namedChild(0);
+            rhs = if (eq.endByte() == n.namedChild(0).endByte()) eq.namedChild(1) else n.namedChild(0);
+        }
+        if (tgt != null and std.mem.eql(u8, tgt.?.kind(), "identifier") and
+            std.ascii.eqlIgnoreCase(tgt.?.text(), name))
         {
-            const rhs = n.namedChild(n.namedChildCount() - 1);
             const rk = rhs.kind();
             var cid: ?u16 = null;
             if (std.mem.eql(u8, rk, "new_expression") or std.mem.eql(u8, rk, "new_with_parens")) {
@@ -6147,6 +6190,23 @@ pub const Compiler = struct {
         return self.nope(n);
     }
 
+    /// F-138: a statement the grammar read as a comparison whose leftmost
+    /// operand is `place = x` compiles as the assignment Ring makes of it
+    /// (`rereadAssign`). Here and not in rereadSpan because every caller of
+    /// stmt() needs it -- an eval's statements and a load inside a block never
+    /// pass through a span. Its nodes are a snippet's, so it carries a re-read
+    /// piece's bookkeeping: refusals and lines name the statement's own place.
+    fn misreadStmt(self: *Compiler, n: ts.Node) Error!void {
+        const node = rereadAssign(self, n) orelse
+            return self.nopeKind(n, "an assignment the grammar reads as a comparison (F-138)");
+        if (self.reread_src != null) return self.stmt(node);
+        self.reread_src = n.src;
+        self.reread_byte = n.startByte();
+        self.reread_row = n.start().row + 1;
+        defer self.reread_src = null;
+        return self.stmt(node);
+    }
+
     /// Emit `return <expr>` when the parse split the two apart.
     fn returnExpr(self: *Compiler, e: ts.Node) Error!void {
         self.temp = @max(self.floor, self.bottom());
@@ -6160,6 +6220,9 @@ pub const Compiler = struct {
 
     fn stmt(self: *Compiler, n: ts.Node) Error!void {
         if (self.depth > 200) return self.nope(n);
+        // F-138: before anything of this statement is begun, so the
+        // assignment it is read as is the one statement compiled
+        if (misreadEq(n) != null) return self.misreadStmt(n);
         self.lnStmtStart(n);
         const ln_need = self.ln_has_next or self.ln_block_quirk;
         self.ln_has_next = false;
@@ -6772,7 +6835,9 @@ pub const Compiler = struct {
                     _ = try self.emit(.sattr, 0, t, 0, @intCast(slot));
                     return;
                 }
-                return self.nope(tgt);
+                // a top-level global used bare in a function: Rule A's refusal, as `aL[i]++` above says it --
+                // filed as `identifier`, `rnxc migrate` skipped every `nPass++` of a program moving from Ring
+                return self.nopeName(tgt);
             }
             return self.nope(tgt);
         }
@@ -9017,6 +9082,9 @@ fn scanAssigned(c: *Compiler, out: *std.ArrayListUnmanaged([]const u8), n: ts.No
             try out.append(alloc, lhs.text());
         }
     }
+    if (misreadTarget(n)) |lhs| {
+        if (std.mem.eql(u8, lhs.kind(), "identifier")) try out.append(alloc, lhs.text());
+    }
     // A loop variable is seeded like any assigned name, so the classify pass
     // -- which reasons by NAME before any code exists -- knows it and every
     // value derived from it (`k = i * i`) as an integer: without the seed
@@ -9127,18 +9195,19 @@ fn regionNamesInto(ci: anytype, n: ts.Node, alloc: std.mem.Allocator) !void {
         std.mem.eql(u8, k, "anonymous_function") or std.mem.eql(u8, k, "function_definition") or
         std.mem.eql(u8, k, "class_definition") or std.mem.eql(u8, k, "private_section")) return;
     var name: []const u8 = "";
-    if (std.mem.eql(u8, k, "assignment_expression") and n.namedChildCount() > 0 and
-        std.mem.eql(u8, n.namedChild(0).kind(), "identifier")) name = n.namedChild(0).text();
-    // `this.name = v` and `self.name = v` in the region declare `name` too
-    // (Ring's oop-36 sample: the class body sets this.name and this.version)
-    if (std.mem.eql(u8, k, "assignment_expression") and n.namedChildCount() > 0 and
-        std.mem.eql(u8, n.namedChild(0).kind(), "member_expression"))
-    {
-        const m = n.namedChild(0);
-        if (m.namedChildCount() == 2) {
-            const recv = m.namedChild(0).text();
+    // what an assignment writes -- one the grammar read as a comparison too (F-138)
+    const tgt: ?ts.Node = if (std.mem.eql(u8, k, "assignment_expression") and n.namedChildCount() > 0)
+        n.namedChild(0)
+    else
+        misreadTarget(n);
+    if (tgt) |t| {
+        if (std.mem.eql(u8, t.kind(), "identifier")) name = t.text();
+        // `this.name = v` and `self.name = v` in the region declare `name` too
+        // (Ring's oop-36 sample: the class body sets this.name and this.version)
+        if (std.mem.eql(u8, t.kind(), "member_expression") and t.namedChildCount() == 2) {
+            const recv = t.namedChild(0).text();
             if ((std.ascii.eqlIgnoreCase(recv, "this") or std.ascii.eqlIgnoreCase(recv, "self")) and
-                std.mem.eql(u8, m.namedChild(1).kind(), "identifier")) name = m.namedChild(1).text();
+                std.mem.eql(u8, t.namedChild(1).kind(), "identifier")) name = t.namedChild(1).text();
         }
     }
     if (std.mem.eql(u8, k, "for_statement") and !Compiler.forIsIn(n) and n.namedChildCount() > 0 and
@@ -10327,6 +10396,111 @@ fn parseSnippet(c: *Compiler, piece: []const u8, src: []const u8, body_at: i64) 
     return null;
 }
 
+/// AN ASSIGNMENT THE GRAMMAR READ AS A COMPARISON (F-138). On Ring a
+/// statement that begins with a name -- with its `.x`, `[i]` and `(...)`
+/// after it -- and `=` ASSIGNS everything after the `=` (the assignment flag,
+/// `Factor --> Identifier {mixer} [ '=' Expr ]`, expr.c:397; C-32 records it
+/// for `not`). The grammar reads `_bOk_ = isNumber(a) and isNumber(b) and ...`
+/// two ways depending on what surrounds it (F-58's GLR tie-break): as that
+/// assignment, or as an `and` chain whose LEFTMOST operand is the comparison
+/// `_bOk_ = isNumber(a)` -- and compiled as written the assignment never
+/// happened: R24 at the next read, or, where the name held a value already,
+/// that stale value read on with no error (stzGeoFeatures.ring:792, a method
+/// of four statements). The `=` such a statement assigns at: the bottom of
+/// its left spine, under `and`, `or`, `=` and `!=` -- the only operators the
+/// grammar binds as loosely as a comparison or more -- with a place on its
+/// left. null for every other statement, and for one holding a parse error,
+/// which is no reading of Ring's statement at all (max/temp/tempo.ring's
+/// `/*====` banners come back as `/`, `*=` and `=`).
+fn misreadEq(st: ts.Node) ?ts.Node {
+    if (!std.mem.eql(u8, st.kind(), "expression_statement") or st.namedChildCount() != 1 or st.hasError()) return null;
+    var e = st.namedChild(0);
+    while (std.mem.eql(u8, e.kind(), "binary_expression") and e.namedChildCount() >= 2) {
+        const op = Compiler.logicOp(Compiler.opText(e));
+        if (std.mem.eql(u8, op, "=") and isPlace(e.namedChild(0))) return e;
+        if (!(std.mem.eql(u8, op, "and") or std.mem.eql(u8, op, "or") or
+            std.mem.eql(u8, op, "=") or std.mem.eql(u8, op, "!="))) return null;
+        e = e.namedChild(0);
+    }
+    return null;
+}
+
+/// What Ring's flag assigns to: a name and its `.x`, `[i]` and `(...)`.
+fn isPlace(n: ts.Node) bool {
+    var p = n;
+    var guard: u32 = 0;
+    while (guard < 64) : (guard += 1) {
+        const k = p.kind();
+        if (std.mem.eql(u8, k, "identifier")) return true;
+        if (!(std.mem.eql(u8, k, "member_expression") or std.mem.eql(u8, k, "subscript_expression") or
+            std.mem.eql(u8, k, "call_expression")) or p.namedChildCount() == 0) return false;
+        p = p.namedChild(0);
+    }
+    return false;
+}
+
+/// The place a misread assignment writes, for the walks that look for an
+/// assignment's target in the tree as parsed (attributes, a lambda's own
+/// names, a for-in's write-back, a global's class).
+fn misreadTarget(st: ts.Node) ?ts.Node {
+    const eq = misreadEq(st) orelse return null;
+    return eq.namedChild(0);
+}
+
+/// The misread statement `st` read again as Ring reads it, as a statement
+/// node: its text alone in a function -- where the grammar keeps the
+/// assignment, F-138's own observation -- and when that still reads a
+/// comparison, with the value after the `=` in parentheses, `_bOk_ =(isNumber(a)
+/// and ...)`: the space after the `=` takes the `(`, so every byte stays where
+/// the file has it. The parenthesised form only for a CHAIN, whose value is
+/// a number; a lone `x = v` in parentheses would change what is copied
+/// (needsCopyAssign does not look inside them). Emission (`stmt`) and the
+/// type table (`classifyStmt`) both take this node: a rule and the class
+/// that describes it are one change. null when neither reading is the
+/// assignment -- the statement is then refused, never compiled as the
+/// comparison.
+fn rereadAssign(c: *Compiler, st: ts.Node) ?ts.Node {
+    const eq = misreadEq(st) orelse return null;
+    const a = st.startByte();
+    if (st.endByte() <= a or st.endByte() > st.src.len) return null;
+    var text = st.src[a..st.endByte()];
+    // a comment inside the chain is a node to the grammar and nothing to
+    // Ring (F-80): blanked, newlines kept, as rereadSpan does
+    if (std.mem.indexOfAny(u8, text, "#/") != null and exprComment(st, 0)) {
+        const copy = c.alloc.dupe(u8, text) catch return null;
+        blankComments(st, a, copy, 0);
+        text = std.mem.trimRight(u8, copy, " \t\r\n");
+    }
+    if (parseSnippet(c, text, st.src, a)) |p| {
+        if (isAssignStmt(p)) return p.node;
+    }
+    if (eq.endByte() == st.namedChild(0).endByte()) return null;
+    // the end of the `=` token, as a byte of `text`
+    var e: ?usize = null;
+    var i: u32 = 0;
+    while (i < eq.childCount()) : (i += 1) {
+        const ch = eq.child(i);
+        if (!ch.isNamed() and std.mem.eql(u8, ch.kind(), "=")) {
+            e = ch.endByte() - a;
+            break;
+        }
+    }
+    const at = e orelse return null;
+    if (at > text.len) return null;
+    const keep = at < text.len and (text[at] == ' ' or text[at] == '\t');
+    const wrapped = std.mem.concat(c.alloc, u8, &.{ text[0..at], "(", text[if (keep) at + 1 else at..], ")" }) catch return null;
+    // without a space to take the `(` the value is one byte on, and its
+    // mapping is the one kept (only it can hold a lambda), as parseOne does
+    const p = parseSnippet(c, wrapped, st.src, if (keep) @as(i64, a) else @as(i64, a) - 1) orelse return null;
+    return if (isAssignStmt(p)) p.node else null;
+}
+
+fn isAssignStmt(p: Parsed) bool {
+    if (p.as_return or !std.mem.eql(u8, p.node.kind(), "expression_statement") or p.node.namedChildCount() != 1) return false;
+    const e = p.node.namedChild(0);
+    return std.mem.eql(u8, e.kind(), "assignment_expression") and std.mem.eql(u8, Compiler.opText(e), "=");
+}
+
 /// A `comment` node whose parent is an EXPRESSION -- the only place one
 /// breaks an operand index. A comment between statements is a sibling of
 /// them and every statement walk already skips it.
@@ -11142,6 +11316,9 @@ fn writesName(n: ts.Node, from: u32, name: []const u8) bool {
             const t = ch.namedChild(0);
             if (std.mem.eql(u8, t.kind(), "identifier") and std.ascii.eqlIgnoreCase(t.text(), name)) return true;
         }
+        if (misreadTarget(ch)) |t| {
+            if (std.mem.eql(u8, t.kind(), "identifier") and std.ascii.eqlIgnoreCase(t.text(), name)) return true;
+        }
         if (writesName(ch, 0, name)) return true;
     }
     return false;
@@ -11311,6 +11488,11 @@ fn joinElem(c: *Compiler, f: *Func, name: []const u8, cl: Class) bool {
 }
 
 fn classifyStmt(c: *Compiler, f: *Func, ch: ts.Node) Error!bool {
+    // F-138: the statement emission compiles, an assignment, not the
+    // comparison the grammar read
+    if (misreadEq(ch) != null) {
+        if (rereadAssign(c, ch)) |node| return classifyStmt(c, f, node);
+    }
     var changed = false;
     {
         const k = ch.kind();

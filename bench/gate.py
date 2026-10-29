@@ -386,6 +386,29 @@ def refusal():
     return ok
 
 
+def migrate_sites(exe=None):
+    """`rnxc migrate` lists every site Rule A needs changed, and selects them by the refusal's KIND. A bare global
+    written in a function through `n++`, add(), insert() or del() was filed under the node's own kind (`identifier`),
+    so a program moving from Ring got only its other uses listed, and was refused again at the next (2026-10-29).
+    bench/migrate_sites.ring marks each site with `# site`; the step compares the lines migrate names with them."""
+    exe = exe or os.path.join(ROOT, 'zig-out', 'bin', 'rnxc.exe')
+    t0 = time.time()
+    probe = os.path.join(ROOT, 'bench', 'migrate_sites.ring')
+    src = open(probe, 'rb').read()
+    want = {i + 1 for i, l in enumerate(src.split(b'\n')) if l.rstrip().endswith(b'# site')}
+    r = subprocess.run([exe, 'migrate', probe], cwd=ROOT, capture_output=True, text=True)
+    got = set()
+    for l in r.stdout.replace('\r', '').split('\n'):
+        parts = l.split('\t')
+        if len(parts) == 3 and parts[1].isdigit():
+            got.add(1 + src[:int(parts[1])].count(b'\n'))
+    ok = got == want
+    note = ('%d of %d sites listed' % (len(got & want), len(want)) if ok else
+            'lines missed %s, lines not sites %s' % (sorted(want - got) or '-', sorted(got - want) or '-'))
+    record('migrate lists every site', ok, note, time.time() - t0)
+    return ok
+
+
 def quiet():
     """A plain run prints the PROGRAM's output and nothing of rnxc's own. Ring
     prints nothing around a program; rnxc's three status lines went to stderr,
@@ -459,6 +482,7 @@ def main():
 
     ok &= console()
     ok &= refusal()
+    ok &= migrate_sites()
     ok &= quiet()
     ok &= execprobes()
     ok &= onto()

@@ -16,7 +16,11 @@ The libraries land in runtime/engine-copy/zig-out-linux/lib. Check them under WS
 import glob, os, subprocess, sys, time
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
-EC = os.path.join(ROOT, 'runtime', 'engine-copy')
+# --dir=<engine copy> (2026-10-29): another copy than runtime/engine-copy, e.g. runtime/engine-main, built from stzlib MAIN's engine. With
+# --windows the same batches build the Windows libraries (no -Dtarget, --prefix zig-out), and the names come from engine_copy.PORTABLE
+# when that copy has no Windows build yet to read them from.
+EC = next((a[6:] for a in sys.argv[1:] if a.startswith('--dir=')), os.path.join(ROOT, 'runtime', 'engine-copy'))
+WINDOWS = '--windows' in sys.argv
 N_BATCHES = 5
 HEAVY = ('stz_reactor', 'stz_http', 'stz_crypto', 'stz_db', 'stz_polyglot', 'stz_neural', 'stz_matrix', 'stz_gpu', 'stz_unidata',
          'stz_sound', 'stz_voice', 'stz_audiodev', 'stz_a11y')
@@ -25,7 +29,11 @@ NOT_LINUX = ('accesskit', 'wgpu_native', 'stz_gui', 'stz_window')
 
 def batches():
     names = sorted(os.path.basename(f)[:-4] for f in glob.glob(os.path.join(EC, 'zig-out', 'bin', '*.dll')))
-    names = [n for n in names if n not in NOT_LINUX]
+    if WINDOWS or not names:
+        sys.path.insert(0, HERE)
+        import engine_copy
+        names = sorted(set(names) | set(engine_copy.PORTABLE)) if WINDOWS else sorted(engine_copy.PORTABLE)
+    names = [n for n in names if n not in (('accesskit', 'wgpu_native') if WINDOWS else NOT_LINUX)]
     out = [[] for _ in range(N_BATCHES)]
     heavy = [n for n in names if n in HEAVY]
     light = [n for n in names if n not in HEAVY]
@@ -41,15 +49,17 @@ def main():
     if not names:
         print('SKIP: no Windows build in %s -- run bench/engine_copy.py and build it first (the domain names come from its DLLs)' % EC)
         return 0
-    if len(sys.argv) < 2:
-        print('%d domains' % len(names))
+    pos = [a for a in sys.argv[1:] if not a.startswith('--')]
+    if not pos:
+        print('%d domains (%s, %s)' % (len(names), 'windows' if WINDOWS else 'linux', EC))
         for i, b in enumerate(bs):
             print(i + 1, len(b), ','.join(b)[:110])
         return 0
-    k = int(sys.argv[1]) - 1
+    k = int(pos[0]) - 1
     env = dict(os.environ, ONLY=','.join(bs[k]))
     t = time.time()
-    r = subprocess.run(['zig', 'build', '-j2', '-Dtarget=x86_64-linux-gnu', '--prefix', 'zig-out-linux'], cwd=EC, env=env)
+    cmd = ['zig', 'build', '-j2', '--prefix', 'zig-out'] if WINDOWS else ['zig', 'build', '-j2', '-Dtarget=x86_64-linux-gnu', '--prefix', 'zig-out-linux']
+    r = subprocess.run(cmd, cwd=EC, env=env)
     print('batch %d: %d domains, exit %d, %.0f s' % (k + 1, len(bs[k]), r.returncode, time.time() - t))
     return r.returncode
 

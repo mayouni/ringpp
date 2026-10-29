@@ -148,7 +148,7 @@ def neural_pool_patch():
         print('neural_gen.zig: the live tree changed this line -- the pool-size patch was NOT applied; check the 1.5B model still runs')
 
 
-def linux_curl(patch):
+def linux_curl(patch, text=None):
     """LIBCURL ON LINUX (2026-10-17). His build.zig vendors libcurl for Windows
     only -- `addLibcurl` panics elsewhere, "POSIX needs a generated
     curl_config.h" -- so stz_http and stz_reactor did not build for Linux, and
@@ -160,7 +160,54 @@ def linux_curl(patch):
     needs, and mbedTLS's sources added to a curl domain off Windows (stz_http
     has none of its own). Windows compiles exactly what it compiled before.
     It is a change for HIS build.zig too; until he takes it, every flavour of
-    the copy carries it."""
+    the copy carries it.
+
+    STZLIB MAIN'S LAYOUT (2026-10-29): main upgraded curl to 8.22 and gives
+    it a curl_config.h of its own, vendor/curl/lib/curl_config.h, selected by
+    -DHAVE_CONFIG_H -- a WINDOWS configuration. curl includes it with quotes
+    from its own lib/ folder, so on Linux it would win over any include path.
+    In the copy that file becomes a dispatcher: `_WIN32` includes main's own,
+    renamed curl_config_win32.h beside it and unchanged; anything else
+    includes curl_config_linux.h (bench/curl_config_linux.h). The flags are
+    split as before, so Windows compiles the same command line, in the same
+    order. `text` is the build.zig the patch is applied to."""
+    main_layout = text is not None and '"-DHAVE_CONFIG_H", // vendor/curl/lib/curl_config.h' in text.replace('\r\n', '\n')
+    if main_layout:
+        lib = os.path.join(DST, 'vendor', 'curl', 'lib')
+        win, cfgh = os.path.join(lib, 'curl_config_win32.h'), os.path.join(lib, 'curl_config.h')
+        if not os.path.exists(win):
+            os.replace(cfgh, win)
+        with open(cfgh, 'w', encoding='utf-8', newline='\n') as f:
+            f.write('/* Ring++ engine copy (bench/engine_copy.py): curl_config.h chosen by platform. Windows: the engine\'s own\n'
+                    '   file, unchanged, renamed curl_config_win32.h. Linux: bench/curl_config_linux.h (glibc x86_64, mbedTLS). */\n'
+                    '#if defined(_WIN32)\n#include "curl_config_win32.h"\n#else\n#include "curl_config_linux.h"\n#endif\n')
+        shutil.copyfile(os.path.join(HERE, 'curl_config_linux.h'), os.path.join(lib, 'curl_config_linux.h'))
+        patch('    if (os_tag != .windows) {\n'
+              '        std.debug.panic("libcurl vendoring is currently Windows-only (POSIX needs a generated curl_config.h)", .{});\n'
+              '    }\n',
+              '    // Linux (Ring++ copy): vendor/curl/lib/curl_config.h dispatches to curl_config_linux.h, and mbedTLS is\n'
+              '    // the TLS where Windows uses Schannel -- the domain loop adds its sources for a curl domain off Windows.\n'
+              '    if (os_tag != .windows and os_tag != .linux) {\n'
+              '        std.debug.panic("libcurl vendoring builds for Windows and Linux only (another POSIX needs its own curl_config.h)", .{});\n'
+              '    }\n'
+              '    const linux = os_tag == .linux;\n'
+              '    if (linux) mod.addIncludePath(b.path("vendor/mbedtls/include"));\n')
+        patch('    const flags = [_][]const u8{\n'
+              '        "-DBUILDING_LIBCURL",\n'
+              '        "-DHAVE_CONFIG_H", // vendor/curl/lib/curl_config.h -- Softanza-owned, see its header\n'
+              '        "-DCURL_STATICLIB",\n'
+              '        "-DUSE_WINDOWS_SSPI",\n'
+              '        "-DUSE_SCHANNEL",\n'
+              '        "-DUSE_NGHTTP2",',
+              '    const tls_flags: []const []const u8 = if (linux)\n'
+              '        &.{"-D_GNU_SOURCE"}\n'
+              '    else\n'
+              '        &.{ "-DUSE_WINDOWS_SSPI", "-DUSE_SCHANNEL" };\n'
+              '    const head_flags = [_][]const u8{ "-DBUILDING_LIBCURL", "-DHAVE_CONFIG_H", "-DCURL_STATICLIB" };\n'
+              '    const common_flags = [_][]const u8{\n'
+              '        "-DUSE_NGHTTP2",')
+        linux_curl_tail(patch)
+        return
     cfg = os.path.join(DST, 'vendor', 'curl-config', 'linux')
     os.makedirs(cfg, exist_ok=True)
     shutil.copyfile(os.path.join(HERE, 'curl_config_linux.h'), os.path.join(cfg, 'curl_config.h'))
@@ -191,6 +238,37 @@ def linux_curl(patch):
           '    const head_flags = [_][]const u8{ "-DBUILDING_LIBCURL", "-DCURL_STATICLIB" };\n'
           '    const common_flags = [_][]const u8{\n'
           '        "-DUSE_NGHTTP2",')
+    linux_curl_tail(patch)
+
+
+def linux_portability(patch, text):
+    """THE THREE LINUX PORTABILITY FIXES OF e0263f582 (2026-09-28), on a tree that lacks them. They went into Mansour's branch
+    ringpp/migrate-rule-a and never reached stzlib main, so main's engine did not build for Linux: stz_matrix (ggml: glibc declares
+    CPU_ZERO and pthread_setaffinity_np only under _GNU_SOURCE) and stz_polyglot (tree-sitter: le16toh/be16toh and fdopen need
+    _DEFAULT_SOURCE and _POSIX_C_SOURCE) failed with 26 errors (2026-10-29), and stz_system calls std.c.setenv, which Zig 0.15 dropped.
+    Linux only, in the copy; Windows compiles what it compiled before. bench/engine_linux_portability.patch is the commit's own diff,
+    for stzlib to take. Returns the edit of src/system.zig to make, or None when the tree already carries the fixes."""
+    if 'cflags_common' in text:
+        return None
+    patch('    const cflags = &[_][]const u8{\n        "-DGGML_VERSION=\\"0.0.0-stz\\"",',
+          '    const cflags_common = [_][]const u8{\n        "-DGGML_VERSION=\\"0.0.0-stz\\"",')
+    patch('        "-fno-sanitize=undefined",\n    };\n    lib.addCSourceFiles(.{\n        .files = &.{\n            g ++ "/src/ggml.c",',
+          '        "-fno-sanitize=undefined",\n    };\n'
+          '    // Ring++ copy (e0263f582): on glibc CPU_ZERO and pthread_setaffinity_np need _GNU_SOURCE. Linux only.\n'
+          '    const gnu = [_][]const u8{"-D_GNU_SOURCE"};\n'
+          '    const cflags: []const []const u8 = if (lib.rootModuleTarget().os.tag == .linux) &(cflags_common ++ gnu) else &cflags_common;\n'
+          '    lib.addCSourceFiles(.{\n        .files = &.{\n            g ++ "/src/ggml.c",')
+    patch('        .flags = &.{ "-std=c11", "-fno-sanitize=undefined" },',
+          '        // Ring++ copy (e0263f582): off Windows glibc hides le16toh/be16toh and fdopen without a feature level.\n'
+          '        .flags = if (lib.rootModuleTarget().os.tag == .windows)\n'
+          '            &.{ "-std=c11", "-fno-sanitize=undefined" }\n'
+          '        else\n'
+          '            &.{ "-std=c11", "-fno-sanitize=undefined", "-D_DEFAULT_SOURCE", "-D_POSIX_C_SOURCE=200809L" },')
+    return [('std.c.setenv(', 'c_setenv('), ('std.c.unsetenv(', 'c_unsetenv(')]
+
+
+def linux_curl_tail(patch):
+    """The part of the Linux libcurl patch both layouts share: the flags joined, nghttp2's, pthread, mbedTLS for a curl domain."""
     # the TLS definitions stay where they stood, so Windows compiles with the very same command line
     patch('    lib.addCSourceFiles(.{ .files = files.items, .flags = &flags });',
           '    lib.addCSourceFiles(.{ .files = files.items, .flags = std.mem.concat(b.allocator, []const u8, '
@@ -336,9 +414,30 @@ def main():
     patch('    for (base_domains) |dom| {\n', '    for (base_domains) |dom| {\n        if (!wanted(b, dom.name)) continue;\n')
     for old in ('        b.installArtifact(studio);', '    b.installArtifact(static_lib);', '    b.installArtifact(gen_refdata);'):
         patch(old, old.replace('b.installArtifact', 'if (false) b.installArtifact'))
+    s_before_port = s
     try:
-        linux_curl(patch)
+        sysedits = linux_portability(patch, s)
+        if sysedits:
+            sp = os.path.join(DST, 'src', 'system.zig')
+            t, tnl = rw(sp)
+            if all(t.count(o) == 1 for o, _ in sysedits) and 'c_setenv' not in t:
+                for o, n2 in sysedits:
+                    t = t.replace(o, n2)
+                t = t.rstrip('\r\n') + (tnl + '// Ring++ copy (e0263f582): Zig 0.15\'s std.c no longer declares setenv/unsetenv; the libc symbols'
+                                        + tnl + '// are there on every POSIX target. Referenced only off Windows.'
+                                        + tnl + 'extern "c" fn setenv(name: [*:0]const u8, value: [*:0]const u8, overwrite: c_int) c_int;'
+                                        + tnl + 'extern "c" fn unsetenv(name: [*:0]const u8) c_int;'
+                                        + tnl + 'const c_setenv = setenv;' + tnl + 'const c_unsetenv = unsetenv;' + tnl)
+                save(sp, t)
+            print('linux portability (e0263f582): ggml, tree-sitter and system.zig patched in the copy')
+    except AssertionError as e:
+        s = s_before_port
+        print('linux portability patch skipped: this tree differs (%s)' % (e.args[0],))
+    s_before_curl = s
+    try:
+        linux_curl(patch, s)
     except AssertionError as e:      # another tree's build.zig (a worktree, a branch): its libcurl block is not the one this patch was written against; only a LINUX build needs it
+        s = s_before_curl              # all or nothing: a half-applied patch (the flags split, the join not) would break the WINDOWS build too
         print('linux libcurl patch skipped: the build.zig of this tree differs (%s) -- Windows builds do not need it' % (e.args[0],))
     if official:
         save(bz, s)

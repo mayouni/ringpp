@@ -44,6 +44,11 @@ vendor/** -text
 # that passes only where the files happen to exist. Vendored bytes are bytes.
 vendor/**/*.ring -text
 
+# ...and one probe that IS a CRLF file, because that is its question (F-137):
+# Ring reads source in text mode, so on Windows a multi-line literal in a CRLF
+# file holds LF only. Checked out LF it would pass on the build before the fix.
+bench/exec/crlf_literal.ring -text
+
 # Image assets: same reasoning as the CLI binaries above, extended before
 # it was needed rather than after a corrupted checkout was found. JPEGs
 # and PNGs are binary-heavy enough that git's heuristic almost always
