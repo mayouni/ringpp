@@ -33,7 +33,7 @@ engine by bench/engine_copy.py -- so this copies and never compiles. The
 Softanza sources come from Mansour's tree, read-only; archive/ and future/
 are not loaded by anything and stay out, and the test folders only with
 --with-tests. Nothing is published: runtime/ is gitignored."""
-import hashlib, os, shutil, subprocess, sys, time
+import hashlib, os, re, shutil, subprocess, sys, time
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 STZ_DEFAULT = r'D:\GitHub\stzlib\libraries\stzlib'
@@ -109,6 +109,34 @@ def main():
         # the engine folder carries its *.ring loaders; its build files stay out
         return not (rel == 'engine' and not f.endswith(('.ring', '.rh')))
     n, size = copytree(STZ, os.path.join(pkg, 'libraries', 'stzlib'), skip, keep)
+    # ...but a file a loader of the library NAMES is the library's, wherever it sits: max/stzMax.ring loads
+    # test/stzTestoor.ring (Softanza's test framework), and without it every program that loads the max layer
+    # was refused at load, E9 then C27 (C-25) -- in the v2.0.5 packages too, found 2026-10-30
+    if not tests:
+        lib = os.path.join(pkg, 'libraries', 'stzlib')
+        todo = [os.path.join(dp, f) for dp, _, fs in os.walk(lib) for f in fs if f.endswith(('.ring', '.rh'))]
+        pulled = 0
+        while todo:
+            src = todo.pop()
+            try:
+                text = open(src, encoding='utf-8', errors='replace').read()
+            except OSError:
+                continue
+            for lit in re.findall(r'(?im)^[ 	]*load[ 	]+"([^"]+)"', text):
+                rel = os.path.relpath(os.path.normpath(os.path.join(os.path.dirname(src), lit)), lib)
+                if rel.startswith('..') or not any((rel.replace(os.sep, '/') + '/').startswith(d + '/') for d in TEST_DIRS):
+                    continue
+                dst, org = os.path.join(lib, rel), os.path.join(STZ, rel)
+                if os.path.exists(dst) or not os.path.isfile(org):
+                    continue
+                os.makedirs(os.path.dirname(dst), exist_ok=True)
+                shutil.copyfile(org, dst)
+                pulled += 1
+                n += 1
+                size += os.path.getsize(dst)
+                todo.append(dst)
+        if pulled:
+            print('  %d file(s) of a test folder kept: a loader of the library names them' % pulled)
     # 3. the engine, built for Ring++, where the loaders open it
     edst = os.path.join(pkg, 'libraries', 'stzlib', 'engine', 'zig-out', 'lib' if linux else 'bin')
     os.makedirs(edst, exist_ok=True)

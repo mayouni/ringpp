@@ -2432,6 +2432,7 @@ pub const VM = struct {
     const BADPARAM = "Bad parameter type!";
     const BADRANGE = "Bad parameters value, error in range!";
     const R35 = "Error (R35) : Can't create/open the file";
+    const E7 = "\nError (E7) : Internal error in using sscanf() function!\n"; // RING_SSCANFERROR, its newlines included
     const R4 = "Error (R4) : Stack Overflow";
     const R19 = "Error (R19) : Calling function with less number of parameters";
     const R20 = "Error (R20) : Calling function with extra number of parameters";
@@ -2458,7 +2459,7 @@ pub const VM = struct {
     /// graph is 13.
     const clone_max_depth: u32 = 5000;
 
-    const ArithOp = enum { sub, mul, div, band, bor, bxor, shl, shr };
+    const ArithOp = enum { sub, mul, div, mod, band, bor, bxor, shl, shr };
 
     /// A double as the i64 Ring's bitwise operators see: truncated, and
     /// pinned at the ends rather than undefined past them.
@@ -2549,6 +2550,12 @@ pub const VM = struct {
             .div => {
                 if (yf == 0) return R1;
                 self.setRegB(dstreg, narrow(xf / yf), false);
+            },
+            // F-144: Ring's `%` is C's fmod on two doubles (vmexpr.c:236), the
+            // dividend's sign, so `7 % 2.5` is 2 and `2.07 % 0.39` is 0.12
+            .mod => {
+                if (yf == 0) return R1;
+                self.setRegB(dstreg, narrow(@rem(xf, yf)), false);
             },
             // a numeric string is a number here too: `"6" & 3` is 2 on 1.27
             .band, .bor, .bxor, .shl, .shr => self.setRegB(dstreg, Value.int(bitOp(op, truncI64(xf), truncI64(yf))), false),
@@ -3699,6 +3706,35 @@ pub const VM = struct {
         return e.ptr;
     }
 
+    /// Ring's `dec()` is C's `sscanf(s, "%llx")` (genlib_e.c:326), F-141: white space skipped, an optional sign and `0x`,
+    /// hex digits up to the first other character, a minus wrapping the unsigned value, saturation past 64 bits, and
+    /// null -- Ring's E7 -- when no digit is read. The value is a double, as RING_API_RETNUMBER makes it. Out of the run
+    /// loop on purpose: the arm that calls it stays the size it was.
+    noinline fn decValue(s: []const u8) ?Value {
+        var i: usize = 0;
+        while (i < s.len and (s[i] == ' ' or (s[i] >= 9 and s[i] <= 13))) : (i += 1) {}
+        var neg = false;
+        if (i < s.len and (s[i] == '+' or s[i] == '-')) {
+            neg = s[i] == '-';
+            i += 1;
+        }
+        if (i + 1 < s.len and s[i] == '0' and (s[i + 1] == 'x' or s[i + 1] == 'X')) i += 2;
+        var r: u64 = 0;
+        var any = false;
+        var over = false;
+        while (i < s.len) : (i += 1) {
+            const d = std.fmt.charToDigit(s[i], 16) catch break;
+            any = true;
+            const m = @mulWithOverflow(r, 16);
+            const a = @addWithOverflow(m[0], @as(u64, d));
+            if (m[1] != 0 or a[1] != 0) over = true else r = a[0];
+        }
+        if (!any) return null;
+        if (over) return Value.num(@floatFromInt(std.math.maxInt(u64)));
+        if (neg) r = 0 -% r;
+        return if (r <= INT_EXACT) Value.int(@intCast(r)) else Value.num(@floatFromInt(r));
+    }
+
     inline fn narrow(d: f64) Value {
         if (d == @trunc(d) and @abs(d) < 9.007199254740992e15) {
             return Value.int(@intFromFloat(d));
@@ -4077,13 +4113,20 @@ pub const VM = struct {
                 const in = code[pc];
                 if ((regs[base + in.b].tag == .obj or regs[base + in.c].tag == .obj) and
                     self.opWant(regs[base + in.b], regs[base + in.c], "%", "r%")) continue :dispatch .opcall;
-                const x = asInt(regs[base + in.b]);
-                const y = asInt(regs[base + in.c]);
-                if (y == 0) {
-                    self.pending = R1;
+                const xv = regs[base + in.b];
+                const yv = regs[base + in.c];
+                if (xv.tag == .int and yv.tag == .int) {
+                    if (yv.p.i == 0) {
+                        self.pending = R1;
+                        continue :dispatch .raise;
+                    }
+                    self.setRegB(base + in.a, Value.int(@rem(xv.p.i, yv.p.i)), false);
+                } else if (self.arithSlow(base + in.a, .mod, xv, yv)) |e| {
+                    // F-144: a real operand was truncated to an integer, so
+                    // `7 % 2.5` answered 1 and `2.07 % 0.39` raised R1
+                    self.pending = e;
                     continue :dispatch .raise;
                 }
-                self.setRegB(base + in.a, Value.int(@rem(x, y)), false);
                 pc += 1;
                 continue :dispatch code[pc].op;
             },
@@ -4224,8 +4267,14 @@ pub const VM = struct {
                         continue :dispatch .opcall;
                     }
                     if (!isNum(x)) {
-                        self.pending = BADPARAM;
-                        continue :dispatch .raise;
+                        // F-144: Ring's own errors -- a numeric string is its
+                        // number, a list R21, other text R41 -- as `%` has them
+                        if (self.arithSlow(base + in.a, .mod, x, Value.int(in.d))) |e| {
+                            self.pending = e;
+                            continue :dispatch .raise;
+                        }
+                        pc += 1;
+                        continue :dispatch code[pc].op;
                     }
                     self.setRegU(base + in.a, narrow(@rem(asF64(x), @as(f64, @floatFromInt(in.d)))), op == .modi_u);
                     pc += 1;
@@ -5766,8 +5815,10 @@ pub const VM = struct {
                             self.pending = BADPARAM;
                             continue :dispatch .raise;
                         }
-                        const n = std.fmt.parseInt(i64, v.p.s.ptr[0..v.p.s.len], 16) catch 0;
-                        out = Value.int(n);
+                        out = decValue(v.p.s.ptr[0..v.p.s.len]) orelse {
+                            self.pending = E7;
+                            continue :dispatch .raise;
+                        };
                     },
                     .removefile => {
                         // Ring's `remove` takes ONE argument and is C's remove():

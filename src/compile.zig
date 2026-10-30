@@ -221,6 +221,55 @@ fn builtinNamed(name: []const u8) bool {
     return false;
 }
 
+/// F-145: `n` stands in the BODY of a brace (`obj { ... }`), not in its receiver.
+fn inBraceBody(n: ts.Node) bool {
+    var prev = n;
+    var p = n.parent();
+    while (!p.isNull()) : ({
+        prev = p;
+        p = p.parent();
+    }) {
+        if (std.mem.eql(u8, p.kind(), "brace_expression")) {
+            if (p.namedChildCount() > 0 and p.namedChild(0).startByte() == prev.startByte() and
+                p.namedChild(0).endByte() == prev.endByte()) continue; // the receiver: look further out
+            return true;
+        }
+    }
+    return false;
+}
+
+/// F-143: what stands just before a statement's `=` -- the right end of a
+/// binary chain -- is a literal, a list or a closing parenthesis, after which
+/// Ring's assignment flag reads the `=` as a comparison.
+fn comparesOnRing(n: ts.Node) bool {
+    var e = n;
+    while (std.mem.eql(u8, e.kind(), "binary_expression") and e.namedChildCount() > 0)
+        e = e.namedChild(e.namedChildCount() - 1);
+    const k = e.kind();
+    return std.mem.eql(u8, k, "string") or std.mem.eql(u8, k, "number") or
+        std.mem.eql(u8, k, "list_literal") or std.mem.eql(u8, k, "parenthesized_expression");
+}
+
+/// F-143: anything in `n` that Ring could read as an assignment in a
+/// statement -- an `=`, an and/or (whose right side sets the flag again), a
+/// `not` (C-32) -- so that a statement holding one is left to the refusal.
+fn mayAssignInside(n: ts.Node) bool {
+    if (std.mem.eql(u8, n.kind(), "assignment_expression")) return true;
+    var i: u32 = 0;
+    while (i < n.childCount()) : (i += 1) {
+        const ch = n.child(i);
+        if (!ch.isNamed()) {
+            const t = ch.kind();
+            if (std.mem.eql(u8, t, "=") or std.ascii.eqlIgnoreCase(t, "and") or std.ascii.eqlIgnoreCase(t, "or") or
+                std.mem.eql(u8, t, "&&") or std.mem.eql(u8, t, "||") or
+                std.ascii.eqlIgnoreCase(t, "not") or std.mem.eql(u8, t, "!")) return true;
+            continue;
+        }
+        if (mayAssignInside(ch)) return true;
+    }
+    return false;
+}
+
 /// What a value is, as far as this front end can tell.
 ///
 /// Two axes matter to codegen. `int` needs no refcount traffic at all;
@@ -2795,6 +2844,7 @@ pub const Compiler = struct {
         if (std.mem.eql(u8, op, "-=")) return .sub;
         if (std.mem.eql(u8, op, "*=")) return .mul;
         if (std.mem.eql(u8, op, "/=")) return .div;
+        if (std.mem.eql(u8, op, "%=")) return .mod; // F-144: refused before; Ring has it
         return null;
     }
 
@@ -3881,6 +3931,41 @@ pub const Compiler = struct {
                 // already in the window (moved down one for a user
                 // function's layout; a native takes a register range).
                 const fallback: ?*Func = if (mi_static == null) self.findFunc(callee) else null;
+                // ...AND A BUILTIN'S NAME MISSES TO THE BUILTIN: `KQ() { ?
+                // len(Days()) }` printed R3 `len` (the miss looked for a
+                // native) and `upper(x)` raised R14 (callm, no fallback),
+                // where Ring calls the builtin -- found running the site's
+                // stzCalendar example. The miss runs it on the arguments
+                // already in the window, so they are evaluated ONCE, as on
+                // Ring, and the hit path is the one dispatch it was. Of the
+                // builtins compiled inline, len and add are covered (add as
+                // its inline form appends to a list held in a temporary); del,
+                // insert, substr, classname and the rest are not: named.
+                if (mi_static == null and fallback == null and self.eval == null) {
+                    var tab: ?vm.Builtin = null;
+                    for (builtin_table) |bi| {
+                        if (std.ascii.eqlIgnoreCase(callee, bi.name) and bi.argc == argc) tab = bi.id;
+                    }
+                    const is_len = std.ascii.eqlIgnoreCase(callee, "len") and argc == 1;
+                    const is_add = std.ascii.eqlIgnoreCase(callee, "add") and argc == 2;
+                    if (tab != null or is_len or is_add) {
+                        _ = try self.emit(.callmf, win, @intCast(argc), 0, ni);
+                        const hit = try self.emit(.jmp, 0, 0, 0, 0);
+                        if (tab) |id| {
+                            _ = try self.emit(.bcall, dst, win + 1, @intCast(argc), @intFromEnum(id));
+                        } else if (is_len) {
+                            _ = try self.emit(.dlen, dst, win + 1, 0, CFN);
+                        } else {
+                            if (self.needsCopy(args.namedChild(1))) _ = try self.emit(.copyv, win + 2, 0, 0, 0);
+                            _ = try self.emit(.vpush, win + 1, win + 2, 1, CFN);
+                        }
+                        const done = try self.emit(.jmp, 0, 0, 0, 0);
+                        self.land(hit);
+                        _ = try self.emit(.move, dst, win, 1, 0);
+                        self.land(done);
+                        return;
+                    }
+                }
                 if (mi_static == null and (fallback != null or !builtinNamed(callee))) {
                     _ = try self.emit(.callmf, win, @intCast(argc), 0, ni);
                     const hit = try self.emit(.jmp, 0, 0, 0, 0);
@@ -5080,6 +5165,20 @@ pub const Compiler = struct {
 
     /// The slot of `nm` on class `cid` or any ancestor -- slots are
     /// inherited, so the index is the same wherever it was declared.
+    /// C-6 REVISED (2026-10-30): inside a brace on an object nothing proves, a
+    /// bare name no class of the unit declares cannot be the object's attribute
+    /// (bar one added at run time), so it is Ring's next rule: a variable -- the
+    /// top level's global, a function's local. It was the object's attribute by
+    /// name, and R12: `StzKnowledgeGraphQ("clinic") { aR = ImportKnow(...) }`
+    /// in four chapters of the Softanza book. `@x` is always an attribute.
+    fn anyClassDeclares(self: *Compiler, nm: []const u8) bool {
+        if (nm.len == 0 or nm[0] == '@' or self.eval != null) return true;
+        for (0..self.classes.items.len) |i| {
+            if (self.attrSlotOf(@intCast(i), nm) != null) return true;
+        }
+        return false;
+    }
+
     fn braceAttrSlot(self: *Compiler, cid: u16, nm: []const u8) ?u32 {
         if (self.eval != null) return null; // see declaredAttr
         var probe: ?u16 = cid;
@@ -5098,6 +5197,7 @@ pub const Compiler = struct {
     /// always an attribute (Rule A), by name when not declared.
     fn braceAttrRead(self: *Compiler, nm: []const u8, dst: u8) Error!bool {
         const b = self.braces.items[self.braces.items.len - 1];
+        if (b.cid == null and !self.anyClassDeclares(nm)) return false; // C-6 revised: a variable
         if (b.cid) |cid| {
             if (self.braceAttrSlot(cid, nm)) |slot| {
                 if (!self.hasAccessor(cid, nm, true)) {
@@ -5113,6 +5213,7 @@ pub const Compiler = struct {
     /// The same, written -- plain `=` or a compound form. Same answer.
     fn braceAttrWrite(self: *Compiler, nm: []const u8, op: []const u8, rhs: ts.Node, n: ts.Node) Error!bool {
         const b = self.braces.items[self.braces.items.len - 1];
+        if (b.cid == null and !self.anyClassDeclares(nm)) return false; // C-6 revised: a variable
         var slot: ?u32 = null;
         // the proved slot is used only for a read or write no accessor can
         // intercept; either side having one sends both through the name
@@ -6187,6 +6288,26 @@ pub const Compiler = struct {
             self.land(obj_end);
             return;
         }
+        // `"good" + "ly" = "goodly"`, `1 = 2`, `(F()) = 3` (F-143): a
+        // statement whose `=` follows a LITERAL, a list or a closing
+        // parenthesis is a COMPARISON on Ring -- its assignment flag asks
+        // only what stands just before the `=` -- evaluated and dropped, and
+        // the program goes on. It was refused, and a refusal stops the program
+        // there. Only when nothing on either side could assign (no `=`, and,
+        // or, not): after a NAME Ring assigns (`1 + x = 6` sets x) and after
+        // a CALL it raises R34 (`"a" + G() = "b"`); those two stay refused,
+        // loudly, and are named.
+        if (std.mem.eql(u8, op, "=") and comparesOnRing(lhs) and !mayAssignInside(lhs) and !mayAssignInside(rhs)) {
+            const save = self.temp;
+            defer self.temp = save;
+            const t = try self.tmp();
+            try self.expr(lhs, t);
+            const t2 = try self.tmp();
+            try self.expr(rhs, t2);
+            self.atNode(n);
+            _ = try self.emit(.cmpv, t, t, t2, 0);
+            return;
+        }
         return self.nope(n);
     }
 
@@ -6659,6 +6780,21 @@ pub const Compiler = struct {
             if (std.mem.eql(u8, ek, "binary_expression") or
                 (std.mem.eql(u8, ek, "unary_expression") and
                     (std.mem.eql(u8, opText(e), "not") or std.mem.eql(u8, opText(e), "!"))))
+            {
+                const t = try self.tmp();
+                return self.expr(e, t);
+            }
+            // A LIST, A LITERAL, A PARENTHESIS, A SUBSCRIPT, A MEMBER OR A
+            // UNARY on a line of its own is evaluated and dropped too (F-143):
+            // `[:natural = "uppercase", :semantic = "..."]` in a narration ran
+            // on Ring and stopped Ring++ there. Inside a list or parentheses
+            // Ring's `=` compares (`[x = 3]` leaves x alone, both builds); a
+            // leading unary does not (`-x = 7` sets x), so one holding an `=`
+            // stays refused.
+            if (std.mem.eql(u8, ek, "list_literal") or std.mem.eql(u8, ek, "string") or
+                std.mem.eql(u8, ek, "number") or std.mem.eql(u8, ek, "parenthesized_expression") or
+                std.mem.eql(u8, ek, "subscript_expression") or std.mem.eql(u8, ek, "member_expression") or
+                (std.mem.eql(u8, ek, "unary_expression") and !mayAssignInside(e)))
             {
                 const t = try self.tmp();
                 return self.expr(e, t);
@@ -11882,6 +12018,13 @@ fn exprClass(c: *Compiler, f: *Func, n: ts.Node) Class {
     }
     if (std.mem.eql(u8, k, "call_expression")) {
         const callee = n.namedChild(0).text();
+        // F-145: INSIDE A BRACE a bare call is the OBJECT's method first (F-124,
+        // F-142), so a global function or builtin of the same name says nothing
+        // about it: `o { ? len(Check()) }` emitted a STRING length because a
+        // global Check() answers a string, while the method answered a list --
+        // and a name typed `.int` would leave the method's answer uncounted.
+        if (inBraceBody(n) and n.namedChild(0).kind().len > 0 and
+            std.mem.eql(u8, n.namedChild(0).kind(), "identifier")) return .ref;
         if (std.ascii.eqlIgnoreCase(callee, "list") or std.ascii.eqlIgnoreCase(callee, "newlist")) return .list;
         if (std.ascii.eqlIgnoreCase(callee, "char") or
             std.ascii.eqlIgnoreCase(callee, "lower") or

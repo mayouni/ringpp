@@ -4214,3 +4214,91 @@ are `return X and Y = Z` lines whose `return` the grammar cut (`stzCalendar.ring
 `return <expr>`, where Ring's flag is down too, so they compare on both. **Not fixed, proposed: fix silently** with the next change to this reading --
 `misreadEq` would look at each operand's head, not the spine's bottom alone. Not measured: a `place =` after an arithmetic operator (`a + b = c`).
 
+## F-141. `dec()` read only a bare hex string, and answered 0 for every other
+
+Ring's `dec()` is C's `sscanf(s, "%llx")` (`vendor/ring-vm/src/genlib_e.c:326`): leading white space is skipped, a sign and a `0x` or `0X`
+are taken, the hex digits are read up to the first character that is not one, a minus wraps the unsigned value, a value past 64 bits
+saturates, and a string with no hex digit raises **E7**, `Internal error in using sscanf() function!`, catchable. The answer is a double, so
+anything past 2^53 prints as one. Ring++ parsed the whole string strictly and answered 0 on any failure. Twenty-two rows measured, the
+oracle and the official 1.27 agreeing on every one (`bench/exec/dec_hex.ring`): `dec("0x41")` is 65 on Ring and was 0 here, `"12zz"` 18 and
+0, `"  ff"` 255 and 0, `"-1"` 18446744073709551616.00 and -1, `""` and `"zz"` E7 and 0 -- eleven of the twenty-two wrong, silently.
+
+Found re-running the Softanza site's method examples on Ring++ (2026-10-29): `StzCharQ(dec("0x10481")).Content()` printed nothing where
+Ring prints the Osmanya letter. **Fixed, not decided** (a silent wrong answer): `decValue` in `src/main.zig`, out of the run loop on purpose,
+the arm that calls it the size it was. The probe fails on the build before (`[0x41] 0`). Gate PASSED, 167 probes in both modes; the
+kernels before and after, fifteen interleaved rounds, equal on every one at the benchmark's 1 ms resolution. **The pattern it hurts**:
+none measured; a program that read `dec()` of a malformed string as 0 now gets Ring's number or Ring's E7.
+
+## F-142. Inside a brace on an object a call returned, a builtin called bare raised
+
+Inside `obj { ... }`, a bare call is the object's method if it has one and otherwise the function of that name -- a builtin included,
+and Ring resolves the name before it evaluates the arguments, so they run once. Measured on the oracle and the official 1.27, thirteen
+rows (`bench/exec/brace_builtin.ring`): `KQ() { ? len(Days()) }` prints 3, `upper(Name())` prints K, `add(aL, 9)` appends, a class whose
+own `len` and `upper` methods win prints theirs, and an argument with a side effect runs once. Ring++ proved nothing about an object a
+CALL returns, so it dispatched by name (`callmf`) -- and on a miss looked for a NATIVE of that name, or for a table builtin raised R14
+with no fallback at all: `len` was R3, `upper` R14. Found re-running the Softanza site's examples on Ring++ (2026-10-30): stzCalendar's
+"working days" example, `StzCalendarQ([2024, 10]) { ... ? len(WorkingDays()) }`, printed R3 `len` where Ring prints 23.
+
+**Fixed, not decided** (a wrong answer, loud): a miss on a name the builtin table carries with that many arguments, or on `len` or a
+two-argument `add`, runs the builtin on the arguments already in the call's window -- evaluated once, as on Ring -- and the hit path is
+the one dispatch it was. The probe fails on the build before at row 2. Gate PASSED, 168 probes in both modes; census unchanged.
+**What it costs**: a method named like a table builtin called bare in such a brace, 2,000,000 calls, 76 -> 78 ms (minima of eleven
+interleaved rounds, spreads 76-89 and 78-144); a plain method name 78 -> 77. **Not covered, named**: the other builtins compiled inline
+(`del`, `insert`, `substr`, `classname`, `raise`, `isglobal`) still miss to a native lookup, R3; and the type table still types such a
+call by the builtin (`upper` a string) though the object's method may answer anything -- older than this fix, and only an object with a
+method of a builtin's name and another return type reaches it.
+
+**The first version cost more and was thrown away**: it asked `ismethod` before every bare call in such a brace, plain method names
+included -- Softanza's commonest shape -- and read 81 -> 135 ms for 2,000,000 calls. It also compiled the builtin a second time for the
+miss path, and a builtin's inline form that reads its second argument unconditionally crashed the compiler on `Add(i)` with one.
+
+## F-143. A statement Ring evaluates and drops was refused, and the refusal stopped the program
+
+Ring evaluates an expression on a line of its own and drops its value -- a list, a literal, a parenthesis, a subscript, a member, a
+unary minus -- and a statement whose `=` follows a literal, a list or a closing parenthesis is a COMPARISON, both sides evaluated, the
+answer dropped: Ring's parser decides an `=` by what stands just before it (`lAssignmentFlag`). Measured on the oracle and the official
+1.27, which agree on every row: `"good" + "ly" = "goodly"`, `1 = 2`, `(F()) = 3`, `[1, 2] = 3`, `"a" + "b" = H()` run their calls and go
+on; `[x = 3]` and `(x = 4)` leave x alone. Ring++ refused all of them, and a refusal stops the program at that line. Softanza's
+narrations write their expected values exactly so (`"good" + "ly" = "goodly"` in the adverb narration, a bare `[:natural = ...]` list in
+stzNatural's), and both stopped at their first block on Ring++ while Ring ran them to the end -- found re-running the Softanza site's
+narrations on Ring++ (2026-10-30).
+
+**Fixed, not decided** (a refusal where Ring has an answer, F-63's verdict): those statements compile to what Ring does with them.
+`bench/exec/eq_statement.ring` and `bare_statement.ring`, ten lines each, identical on both Ring builds and on the fix; the build before
+stops at the second line of each. Gate PASSED, 170 probes in both modes, census unchanged. **Cost**: none at run time -- the statements
+were refused before; no instruction of any other statement changed.
+
+**Not reproduced, named, and still refused loudly**: after a NAME or a subscript Ring ASSIGNS (`1 + x = 6` sets x to 6, `1 + aL[2] = 9`
+sets aL[2], `-x = 7` sets x, `2 * 3 = 6 and x = 9` sets x); after a CALL it runs the call and raises R34 (`"a" + G() = "b"`); after a
+member (`"s" + o.v = 3`) official Ring ends with exit 1 and nothing printed. And a line that begins with `[` is read by the grammar as a
+subscript of the previous line's last name (`... + x` then `["a", G()] + 3` is a parse error here, two statements on Ring).
+
+## F-144. `%` truncated a real divisor, and `%=` was refused
+
+Ring's `%` is C's `fmod` on two doubles (`vendor/ring-vm/src/vmexpr.c:236`): a real divisor is not truncated, the answer takes the
+dividend's sign, a numeric string is its number, a list is R21, other text R41, a zero divisor R1. Measured on the oracle and the official
+1.27, which agree on every row (`bench/exec/mod_real.ring`, 22 lines): `7 % 2.5` is 2, `2.07 % 0.39` is 0.12, `0.5 % 0.2` is 0.1, `5 % 0.4`
+is 0.2. Ring++'s `%` on two registers read both operands as integers: `7 % 2.5` answered 1, silently, and `2.07 % 0.39` raised R1 (0.39
+truncated to 0); `x %= v` was refused, and `[1] % 2` said "Bad parameter type!" where Ring says R21. Found re-running the Softanza site's
+reference examples on Ring++ (2026-10-30): `stzPairOfNumbers([2.07, 0.39])`'s LeastCommonMuliple and GreatestCommonDividor, which reach
+Ring's own gcd loop over `%`, raised R1 where Ring answers.
+
+**Fixed, not decided** (a wrong answer given silently): two integers keep the fast path; anything else goes through the slow path `-`,
+`*` and `/` already share (`arithSlow`), where `%` is `@rem` on doubles -- C's fmod -- and the immediate form sends its non-numbers there
+too; `compoundOp` takes `%=`. The probe fails on the build before at its first line. Gate PASSED, 171 probes in both modes; census
+unchanged. **Cost**: five million integer `a % b` on two registers, 42 against 42 ms, minima of eleven interleaved rounds; the five
+kernels equal at the benchmark's 1 ms resolution, fifteen rounds.
+
+## F-145. The type table typed a bare call inside a brace by the global function of that name
+
+Inside `obj { ... }` a bare call is the object's method first (F-124, F-142). The type table did not know it: it typed `Check()` by a
+global `func Check` of the unit, so with that function answering a string and the method a list, `o { ? len(Check()) }` compiled to a
+STRING length and raised "Bad parameter type!" where Ring prints 3. The other direction is a memory-safety hazard: a global function typed
+`.int` puts the method's list in a register nobody counts. Older than F-142 (v2.0.5 fails the same way). Found running the Softanza book
+on Ring++ (2026-10-30): chapter 30's `oTypo { ? len(Check(oG)) }`, where Softanza has a global Check() beside stzGraphRule's method.
+
+**Fixed, not decided**: a bare call in a brace BODY (not its receiver) is typed `ref` (`inBraceBody`). `bench/exec/brace_call_class.ring`,
+eight rows -- a proved and an unproved receiver, a function answering a string and one answering an integer against methods answering
+lists, two thousand calls in a loop -- identical on the oracle and the official 1.27; the build before stops at its first row. Gate PASSED,
+172 probes in both modes (ReleaseSafe included); census unchanged. **Cost**: only bare calls inside brace bodies lose a type
+specialisation; no kernel has one.

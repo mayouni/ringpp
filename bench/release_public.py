@@ -77,12 +77,14 @@ def main():
     got = json.loads(subprocess.run(['gh', 'release', 'view', tag, '--repo', REPO, '--json', 'assets,url'],
                                     capture_output=True, text=True).stdout)
     sizes = {a['name']: a['size'] for a in got['assets']}
+    bad = 0
     for f in files:
         n = os.path.basename(f)
         ok = sizes.get(n) == os.path.getsize(f)
+        bad += not ok
         print('    %s %s (%s bytes)' % (n, 'uploaded' if ok else 'SIZE DIFFERS', format(sizes.get(n, 0), ',')))
-    print('\nDONE: ' + got['url'])
-    return 0
+    print('\n%s: %s' % ('DONE' if not bad else 'FAILED -- %d archive(s) differ from the tested ones' % bad, got['url']))
+    return 1 if bad else 0
 
 
 if __name__ == '__main__':

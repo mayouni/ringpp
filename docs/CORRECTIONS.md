@@ -350,6 +350,21 @@ Ring writes a function's bare `o = ...` to the GLOBAL o (C-2 / Rule A,
 decided), and an attribute a method writes is `@h` here (a bare `h = p`
 in a method is a local; `rnxc migrate` rewrites those sites).
 
+**REVISED 2026-10-30, taken by the session on Mansour's delegation: the dropped shape is Ring's
+again where the compiler CAN know.** "Softanza: not seen" was wrong -- the Softanza book writes it in four
+chapters (`StzKnowledgeGraphQ("clinic") { aR = ImportKnow(...)  ? aR[:merged] }`, and `oPlan`, `cFile`, `aNo`
+the same way), each R12 on Ring++ where Ring runs on. What the compiler can know is whether ANY class of the
+unit declares an attribute of that name; if none does, the object cannot have it except by `addattribute`, and
+the name is Ring's next rule: a variable -- the top level's global, a function's local (`anyClassDeclares`,
+in braceAttrRead and braceAttrWrite). A name some class declares is still asked of the object by name.
+`bench/exec/brace_new_name.ring`, seven rows, identical on the oracle and the official 1.27; v2.0.5 and 991dbd7
+stop at the first. Gate PASSED, 173 probes in both modes, census unchanged (12.9 s).
+**What it costs now:** an attribute ADDED AT RUN TIME (`addattribute`) under a name no class declares, written
+or read BARE inside a brace on an unproved receiver: Ring uses the attribute, Ring++ the variable -- silently.
+Softanza's one run-time attribute source is the reactive object (stzReactiveObject.ring:38), whose properties
+are written through SetAttribute and `@(:name = v)`, never bare (read 2026-10-30). The first such site turns
+this into a run-time test (`isattribute`) on both paths.
+
 ---
 
 ## C-7 · A list or an object is COPIED at every transfer; a parameter is by reference
