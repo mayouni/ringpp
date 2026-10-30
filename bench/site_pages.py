@@ -16,7 +16,7 @@ OLD = 'https://github.com/mayouni/ringpp-old'
 REL = GH + '/releases/latest'
 CSSV = '2.0.1'
 
-MENU = [('why.html', 'Why we left Ring'), ('issues.html', 'Issues solved'), ('move.html', 'Moving from Ring'),
+MENU = [('why.html', 'Why we left Ring'), ('issues.html', 'Issues solved'),
         ('how.html', 'How it works'), ('start.html', 'Start here')]
 
 GITHUB_SVG = ('<svg viewBox="0 0 16 16" width="22" height="22" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 '
@@ -77,15 +77,15 @@ FOOT = '''
 INDEX = '''
 <header class="hero wrap">
   <img class="logo" src="ringpp-logo.jpg" alt="Ring++">
-  <h1>The runtime that <em>replaces</em> Ring.</h1>
-  <p class="sub">Ring++ runs programs written in the Ring language, without Ring. It is one program of 5&nbsp;MB, for Windows
-  and Linux, that compiles Ring code and runs it &mdash; faster than Ring, and refusing what it cannot run correctly instead of
-  giving a wrong answer. It is built for the code that already exists: <a href="https://github.com/mayouni/stzlib"
-  target="_blank" rel="noopener">Softanza</a>, its 300,000 lines, and the applications built on them. Softanza is written
-  for Ring++ now, and ships with it.</p>
+  <h1>The bridge to <em>Haro</em>.</h1>
+  <p class="sub">Ring++ keeps the code that already exists running &mdash; <a href="https://github.com/mayouni/stzlib"
+  target="_blank" rel="noopener">Softanza</a>, its 300,000 lines written in the Ring language, and the applications built on
+  them &mdash; on a runtime of its own, while that code moves to Haro, the language that comes next. It is also the test bed
+  where each phase of that migration is measured before it is taken. It is one program of 5&nbsp;MB, for Windows and Linux,
+  that compiles the code and runs it, refusing what it cannot run correctly instead of giving a wrong answer. Softanza ships
+  with it.</p>
   <div class="actions">
     <a class="btn primary" href="start.html">Start here: one folder, one program</a>
-    <a class="btn ghost" href="move.html">Moving from Ring</a>
     <a class="btn ghost" href="why.html">Why Ring++ left Ring</a>
   </div>
 </header>
@@ -101,8 +101,7 @@ INDEX = '''
   this repository only as the reference every answer is compared with. The rewrite changes nothing for a program still on
   Ring 1.27: 30 of Softanza's tests print the same output on Ring before and after it.</p>
   <p><a href="why.html">Why, technically and in how Ring is governed</a>, is a page of its own. <a href="issues.html">The
-  issues of Ring that Ring++ solves</a> are another, each shown by a program run on both, and <a href="move.html">what
-  moving a Ring program takes</a> a third. The library era is
+  issues of Ring that Ring++ solves</a> are another, each shown by a program run on both. The library era is
   <a href="''' + OLD + '''" target="_blank" rel="noopener">archived, read-only</a>.</p>
 </section>
 
@@ -341,101 +340,6 @@ rnxc dump --json file.ring   the lossless parse tree</pre>
 </section>
 '''
 
-MOVE = '''
-<header class="page wrap narrow">
-  <h1>Moving <em>from Ring</em></h1>
-  <p class="lead">A Ring program runs on Ring++ as it is, or it is refused with a reason. This page lists what a program may
-  need to change. It is short: Softanza is about 300,000 lines, and the whole of its move was one rule.</p>
-</header>
-
-<section class="wrap narrow">
-  <h2>1. The command</h2>
-  <pre class="code"><span class="c"># Ring</span>
-ring program.ring
-
-<span class="c"># Ring++, with the same arguments after it</span>
-rnxc program.ring</pre>
-  <p>Ring's standard library is in the package and loads as it does on Ring: <code>load "stdlibcore.ring"</code>.
-  <code>load "stdlib.ring"</code> also loads Ring's extensions written in C, which Ring++ does not run (section 4), so the
-  program is refused at that line; write <code>stdlibcore.ring</code>.</p>
-</section>
-
-<section class="wrap narrow">
-  <h2>2. The one rule: a global used in a function is <code>$name</code></h2>
-  <p>On Ring, a function that assigns a name which also exists at the top of the program writes that global, without a word.
-  Ring++ keeps the global and the local apart by their spelling: <code>$name</code> is a global, <code>@name</code> an
-  attribute, a bare name a local. A bare top-level name used inside a function is refused, at the line, with its reason:</p>
-  <pre class="code">nCount = <span class="n">0</span>
-<span class="k">?</span> Bump()
-
-<span class="k">func</span> Bump
-    nCount++
-    <span class="k">return</span> nCount</pre>
-  <pre class="code"><span class="c"># Ring 1.27 prints</span>
-1
-
-<span class="c"># Ring++ prints</span>
-Line 5 Ring++ refused this statement (identifier `nCount`, line 5 of a.ring) and did not compile it -- running past it would give a wrong answer
-In function bump() in file a.ring</pre>
-  <p>Written <code>$nCount</code> in all three places, it prints <code>1</code> on both: <code>$nCount</code> is an ordinary
-  name to Ring, so the program stays a Ring program. <code>rnxc migrate program.ring</code> lists every such use inside a
-  function &mdash; the file, the byte where the name starts, the name &mdash; for the program and every file it loads; the
-  name's own lines at the top of the program take the <code>$</code> with them. Softanza's main branch took
-  1,105 of them in 60 files, and 30 of its tests print the same on Ring 1.27 before and after.</p>
-</section>
-
-<section class="wrap narrow">
-  <h2>3. What Ring++ answers differently, on purpose</h2>
-  <p>A few of Ring's behaviours are defects no correct program relies on, and Ring++ answers them the other way. Each is a
-  decision on record, with what it costs, in <a href="''' + GH + '''/blob/main/docs/CORRECTIONS.md">CORRECTIONS.md</a>.
-  Those a program is most likely to meet:</p>
-  <ul class="plain">
-    <li><b>Reading a missing key of a hash list does not add it.</b> On Ring, <code>aHash[:x]</code> inserts
-    <code>:x</code> when it is not there.</li>
-    <li><b>A numeric <code>for</code> reads its bound once.</b> On Ring a body that grows the list its <code>len()</code>
-    bound measures walks the new items too; on Ring++ it stops at the length the loop began with. A loop whose limit moves
-    is a <code>while</code> on both.</li>
-    <li><b>Assigning to a parameter rebinds the parameter.</b> On Ring, <code>p = [9]</code> inside a function rewrites the
-    list the caller passed. On Ring++ every write <em>through</em> the parameter &mdash; <code>p[1] = 9</code>,
-    <code>add(p, 9)</code> &mdash; reaches the caller, as on Ring, and an assignment <em>to</em> it does not.</li>
-    <li><b>An exact tie rounds to even</b> when a number is printed with fewer decimals: IEEE's rule, where Ring's official
-    build rounds away from zero.</li>
-  </ul>
-</section>
-
-<section class="wrap narrow">
-  <h2>4. What Ring++ does not run, and says so</h2>
-  <p>Each of these stops the program where it stands, with an error naming the call or a refusal naming the line. None of
-  them runs on with a different answer.</p>
-  <ul class="plain">
-    <li><b>Ring's extensions written in C</b> &mdash; RingQt, RingLibCurl, RingOpenSSL and the rest. They call into Ring's own
-    VM, so no other VM can host them; <code>loadlib()</code> on one is an error (R38, or R46). Softanza's engine is where
-    Ring++ programs get strings and Unicode, regular expressions, HTTP, files, graphs, graphics and sound.</li>
-    <li><b>Packages</b> (<code>package</code>, <code>import</code>), the commands that change Ring's syntax
-    (<code>ChangeRingKeyword</code>, <code>ChangeRingOperator</code>, <code>LoadSyntax</code>), Ring's implicit files
-    (<code>ringsyntax.ring</code>, <code>startup.ring</code>, <code>ring.ring</code>), and assigning <code>NULL</code>,
-    <code>TRUE</code> or <code>FALSE</code>.</li>
-    <li><b>Raw pointers</b> (<code>varptr</code>, <code>memcpy</code>, <code>getptr</code> and their family), and the VM
-    inside the VM (<code>ring_state_*</code>, <code>ringvm_*</code>).</li>
-    <li><b>A function or a class defined inside <code>eval()</code></b>. An <code>eval</code> that computes, assigns or calls
-    runs as on Ring, in its caller's scope.</li>
-  </ul>
-</section>
-
-<section class="wrap narrow">
-  <h2>5. Before it runs</h2>
-  <pre class="code"><span class="c"># every statement of the program and of what it loads: what compiles, what is refused, and why</span>
-rnxc census program.ring
-
-<span class="c"># the sites of section 2</span>
-rnxc migrate program.ring
-
-<span class="c"># what Ring would only find when the line runs: an undefined function, an unknown class</span>
-rnxc check program.ring</pre>
-  <p>And when a question is about what Ring itself does, Ring 1.27 is in the repository, built from its own source: it is the
-  reference every answer of Ring++ is measured against, and it is never shipped.</p>
-</section>
-'''
 
 START = '''
 <header class="page wrap narrow">
@@ -470,8 +374,6 @@ upper:     RING++ RUNS SOFTANZA
 words:     3</pre>
   <p><code>load "stzlib.ring"</code> works from any folder. The first run compiles Softanza's 699 files (about twenty
   seconds); every later run starts from the compiled image, in a tenth of a second.</p>
-  <p>Coming from Ring? <code>rnxc program.ring</code> is the whole of the change of command; <a href="move.html">what a
-  program may need</a> is one page.</p>
 </section>
 
 <section class="wrap narrow">
@@ -492,12 +394,11 @@ prog.ring
 '''
 
 PAGES = [
-    ('index.html', 'The runtime that replaces Ring', 'Ring++ is a register VM and a compiler for Ring, in one binary: it '
-     'replaces Ring for the Ring code that exists, Softanza first, with no Ring underneath, and it is the bridge to Haro.', INDEX),
+    ('index.html', 'The bridge to Haro', "Ring++ is a register VM and a compiler in one binary: it keeps Softanza's "
+     'existing code, written in the Ring language, running on a runtime of its own while that code moves to Haro, and it is '
+     'the test bed of that migration.', INDEX),
     ('why.html', 'Why Ring++ left Ring', 'The technical and the governance reasons Ring++ became its own runtime, and Ring was '
      'retired from every project built on it -- with the record behind each statement.', WHY),
-    ('move.html', 'Moving from Ring', 'What a Ring program may need to run on Ring++: one command, one rule for globals, the '
-     'few answers that differ on purpose, and what is refused, loudly.', MOVE),
     ('how.html', 'How it works','The parser, the compiler, the register VM, the oracle built from Ring\'s own source, and what '
      'is measured before every release.', HOW),
     ('start.html', 'Start here', 'One folder, one binary: get the Ring++ package, run a Ring program, check it before it runs.',

@@ -4,12 +4,12 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Ring++</title>
-<meta name="description" content="Ring++ is a register VM and a compiler for Ring, in one binary: it replaces Ring for the Ring code that exists, Softanza first, with no Ring underneath, and it is the bridge to Haro.">
+<meta name="description" content="Ring++ is a register VM and a compiler in one binary: it keeps Softanza's existing code, written in the Ring language, running on a runtime of its own while that code moves to Haro, and it is the test bed of that migration.">
 <meta name="author" content="Mansour Ayouni">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://mayouni.github.io/ringpp/">
 <meta property="og:title" content="Ring++">
-<meta property="og:description" content="Ring++ is a register VM and a compiler for Ring, in one binary: it replaces Ring for the Ring code that exists, Softanza first, with no Ring underneath, and it is the bridge to Haro.">
+<meta property="og:description" content="Ring++ is a register VM and a compiler in one binary: it keeps Softanza's existing code, written in the Ring language, running on a runtime of its own while that code moves to Haro, and it is the test bed of that migration.">
 <meta property="og:image" content="https://mayouni.github.io/ringpp/ringpp-logo.jpg">
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="style.css?v=2.0.1">
@@ -19,7 +19,7 @@
 <nav>
   <div class="wrap">
     <a class="brand" href="index.html"><img src="favicon.svg" alt="">Ring<span>++</span></a>
-    <a href="why.html">Why we left Ring</a><a href="issues.html">Issues solved</a><a href="move.html">Moving from Ring</a><a href="how.html">How it works</a><a href="start.html">Start here</a>
+    <a href="why.html">Why we left Ring</a><a href="issues.html">Issues solved</a><a href="how.html">How it works</a><a href="start.html">Start here</a>
     <a class="repo" href="https://github.com/mayouni/ringpp" target="_blank" rel="noopener" aria-label="Ring++ on GitHub"><svg viewBox="0 0 16 16" width="22" height="22" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg></a>
     <a class="cta" href="https://github.com/mayouni/ringpp/releases/latest" target="_blank" rel="noopener">Get it <span class="newtab" aria-hidden="true">&#8599;</span></a>
   </div>
@@ -27,15 +27,15 @@
 
 <header class="hero wrap">
   <img class="logo" src="ringpp-logo.jpg" alt="Ring++">
-  <h1>The runtime that <em>replaces</em> Ring.</h1>
-  <p class="sub">Ring++ runs programs written in the Ring language, without Ring. It is one program of 5&nbsp;MB, for Windows
-  and Linux, that compiles Ring code and runs it &mdash; faster than Ring, and refusing what it cannot run correctly instead of
-  giving a wrong answer. It is built for the code that already exists: <a href="https://github.com/mayouni/stzlib"
-  target="_blank" rel="noopener">Softanza</a>, its 300,000 lines, and the applications built on them. Softanza is written
-  for Ring++ now, and ships with it.</p>
+  <h1>The bridge to <em>Haro</em>.</h1>
+  <p class="sub">Ring++ keeps the code that already exists running &mdash; <a href="https://github.com/mayouni/stzlib"
+  target="_blank" rel="noopener">Softanza</a>, its 300,000 lines written in the Ring language, and the applications built on
+  them &mdash; on a runtime of its own, while that code moves to Haro, the language that comes next. It is also the test bed
+  where each phase of that migration is measured before it is taken. It is one program of 5&nbsp;MB, for Windows and Linux,
+  that compiles the code and runs it, refusing what it cannot run correctly instead of giving a wrong answer. Softanza ships
+  with it.</p>
   <div class="actions">
     <a class="btn primary" href="start.html">Start here: one folder, one program</a>
-    <a class="btn ghost" href="move.html">Moving from Ring</a>
     <a class="btn ghost" href="why.html">Why Ring++ left Ring</a>
   </div>
 </header>
@@ -51,8 +51,7 @@
   this repository only as the reference every answer is compared with. The rewrite changes nothing for a program still on
   Ring 1.27: 30 of Softanza's tests print the same output on Ring before and after it.</p>
   <p><a href="why.html">Why, technically and in how Ring is governed</a>, is a page of its own. <a href="issues.html">The
-  issues of Ring that Ring++ solves</a> are another, each shown by a program run on both, and <a href="move.html">what
-  moving a Ring program takes</a> a third. The library era is
+  issues of Ring that Ring++ solves</a> are another, each shown by a program run on both. The library era is
   <a href="https://github.com/mayouni/ringpp-old" target="_blank" rel="noopener">archived, read-only</a>.</p>
 </section>
 

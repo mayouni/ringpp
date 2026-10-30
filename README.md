@@ -2,11 +2,11 @@
 
 # Ring++
 
-**The runtime that replaces Ring.** Ring++ is a register VM and a compiler from Ring source to its bytecode, in one
-5 MB Zig binary. It runs the Ring code that exists -- the 300,000 lines of [Softanza](https://github.com/mayouni/stzlib) and
-the applications built on them -- with no Ring underneath, on Windows and Linux. Since 29 October 2026 Softanza's main branch
-is written for Ring++ and ships with it, and Ring 1.27 stays here only as the reference every answer is measured against. It is
-the bridge to **Haro**, the language that comes next.
+**The bridge to Haro.** Ring++ is a register VM and a compiler from Ring source to its bytecode, in one 5 MB Zig binary.
+It keeps the code that already exists running -- the 300,000 lines of [Softanza](https://github.com/mayouni/stzlib), written in
+the Ring language, and the applications built on them -- with no Ring underneath, on Windows and Linux, while that code moves to
+**Haro**, the language that comes next. It is also the test bed where each phase of that migration is measured. Softanza's main
+branch is written for Ring++ and ships with it, and Ring 1.27 stays here only as the reference every answer is measured against.
 
 | | measured 2026-10-17 |
 |---|---|
@@ -18,8 +18,7 @@ the bridge to **Haro**, the language that comes next.
 
 **[Why Ring++ left Ring](https://mayouni.github.io/ringpp/why.html)** -- the technical and the governance reasons, with the
 record behind each. **[Ring's issues, solved](https://mayouni.github.io/ringpp/issues.html)** -- every issue run on Ring 1.27
-and on Ring++, side by side. **[Moving from Ring](https://mayouni.github.io/ringpp/move.html)** -- what a Ring program may
-need: one command, one rule for globals, and what is refused. **[Start here](https://mayouni.github.io/ringpp/start.html)** --
+and on Ring++, side by side. **[Start here](https://mayouni.github.io/ringpp/start.html)** --
 the package and the first program.
 
 ## Build it
