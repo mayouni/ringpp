@@ -2,11 +2,14 @@
 
 # Ring++
 
-**The bridge to Haro.** Ring++ is a register VM and a compiler from Ring source to its bytecode, in one 5 MB Zig binary.
-It keeps the code that already exists running -- the 300,000 lines of [Softanza](https://github.com/mayouni/stzlib), written in
-the Ring language, and the applications built on them -- with no Ring underneath, on Windows and Linux, while that code moves to
-**Haro**, the language that comes next. It is also the test bed where each phase of that migration is measured. Softanza's main
-branch is written for Ring++ and ships with it, and Ring 1.27 stays here only as the reference every answer is measured against.
+**Softanza's move from Ring.** Ring++ is a register VM and a compiler from Ring source to its bytecode, in one 5 MB Zig
+binary. It is how [Softanza](https://github.com/mayouni/stzlib) -- its 300,000 lines and the applications built on them -- left
+Ring while keeping its code, on Windows and Linux, and it answers the three weaknesses that made Ring hard to carry into
+production: **performance** (4x to 2,030x faster on the same programs), **static safety** (the compiler refuses what it cannot
+run correctly, and `rnxc check` reports errors before a program runs) and **ease of build** (one binary: no Ring, no C compiler,
+Softanza and its engine in the same package). Softanza's main branch is written for Ring++ and ships with it; Ring 1.27 stays
+here only as the reference every answer is measured against. Ring++ leads to **Haro**, the foundational language of the
+Softanza project: a new language on this VM, which Softanza's code moves to next.
 
 | | measured 2026-10-17 |
 |---|---|

@@ -77,13 +77,12 @@ FOOT = '''
 INDEX = '''
 <header class="hero wrap">
   <img class="logo" src="ringpp-logo.jpg" alt="Ring++">
-  <h1>The bridge to <em>Haro</em>.</h1>
-  <p class="sub">Ring++ keeps the code that already exists running &mdash; <a href="https://github.com/mayouni/stzlib"
-  target="_blank" rel="noopener">Softanza</a>, its 300,000 lines written in the Ring language, and the applications built on
-  them &mdash; on a runtime of its own, while that code moves to Haro, the language that comes next. It is also the test bed
-  where each phase of that migration is measured before it is taken. It is one program of 5&nbsp;MB, for Windows and Linux,
-  that compiles the code and runs it, refusing what it cannot run correctly instead of giving a wrong answer. Softanza ships
-  with it.</p>
+  <h1>Softanza's move from Ring: <em>faster</em>, checked, one binary.</h1>
+  <p class="sub">Ring++ is a register VM and a compiler for the Ring language, in one program of 5&nbsp;MB for Windows and
+  Linux. It is how <a href="https://github.com/mayouni/stzlib" target="_blank" rel="noopener">Softanza</a> &mdash; its 300,000
+  lines and the applications built on them &mdash; left Ring while keeping its code, and it answers the three weaknesses that
+  made Ring hard to carry into production: its performance, the absence of static checks, and the difficulty of building and
+  shipping an application. It leads to Haro, the foundational language of the Softanza project.</p>
   <div class="actions">
     <a class="btn primary" href="start.html">Start here: one folder, one program</a>
     <a class="btn ghost" href="why.html">Why Ring++ left Ring</a>
@@ -106,27 +105,31 @@ INDEX = '''
 </section>
 
 <section class="wrap">
-  <h2>What it is</h2>
+  <h2>Three weaknesses of Ring, solved</h2>
   <div class="grid">
     <div class="card">
-      <h3>It runs Ring as it is</h3>
+      <h3>Performance</h3>
+      <p>Lists that are arrays, strings passed without copying, methods found once instead of at every call: the places where
+      Ring's design costs it most, replaced. On the same programs, <a href="issues.html#speed">4 to 2,000 times faster</a>
+      than Ring 1.27.</p>
+    </div>
+    <div class="card">
+      <h3>Static safety</h3>
+      <p>The compiler is also the checker. A global written by mistake from inside a function, which Ring accepts without a
+      word, is refused when the program is compiled; <code>rnxc check</code> reports a call to a function that does not exist
+      before the program runs; and a line Ring++ cannot run correctly is refused with its reason, instead of failing in
+      production on the day it is reached.</p>
+    </div>
+    <div class="card">
+      <h3>Ease of build</h3>
+      <p>One program, built with Zig alone: no Ring installation, no C compiler, no extension to compile or version to match.
+      Softanza and its engine ship in the same package, for Windows and Linux. Nothing it depends on can be withdrawn by anyone
+      else.</p>
+    </div>
+    <div class="card">
+      <h3>Ring's answers, kept</h3>
       <p>Every answer is compared with Ring 1.27 itself, built from its own source. Where Ring++ answers differently, it is a
       decision on record, never an accident.</p>
-    </div>
-    <div class="card">
-      <h3>It is fast by design</h3>
-      <p>Lists that are arrays, strings passed without copying, methods found once instead of at every call: the places where
-      Ring's design costs it most, replaced.</p>
-    </div>
-    <div class="card">
-      <h3>It refuses what it cannot run correctly</h3>
-      <p>The compiler is also the checker. A line it cannot run correctly is refused with its reason, instead of failing in
-      production on the day that line is reached.</p>
-    </div>
-    <div class="card">
-      <h3>It stands on its own ground</h3>
-      <p>One program, no C compiler, nothing downloaded at run time. Nothing it depends on can be withdrawn by anyone else,
-      which is why it exists.</p>
     </div>
   </div>
 </section>
@@ -148,11 +151,12 @@ INDEX = '''
 <section class="wrap narrow">
   <h2>The road</h2>
   <ol class="steps">
-    <li><b>Ring++, now.</b> The replacement for Ring, and the bridge: existing Ring code keeps running, Softanza first, on a
-    runtime whose every decision sits in one open repository.</li>
-    <li><b>Haro, next.</b> A new language on this VM. It keeps what makes Ring worth writing in &mdash; its simple syntax, its
-    many paradigms, the declarative brace block first among them &mdash; and leaves the rest behind. It will be announced on
-    its own.</li>
+    <li><b>Ring++, now.</b> Softanza's runtime: the code written in Ring keeps running &mdash; faster, checked, from one
+    binary &mdash; on a runtime whose every decision sits in one open repository.</li>
+    <li><b>Haro, next.</b> The foundational language of the Softanza project, and the language its code moves to from
+    Ring++. A new language on this VM, it keeps what made Ring worth writing in &mdash; its simple syntax, its many paradigms,
+    the declarative brace block first among them &mdash; and is designed with the three answers Ring++ had to add from the
+    outside as part of the language itself. It will be announced on its own.</li>
   </ol>
 </section>
 '''
@@ -394,9 +398,9 @@ prog.ring
 '''
 
 PAGES = [
-    ('index.html', 'The bridge to Haro', "Ring++ is a register VM and a compiler in one binary: it keeps Softanza's "
-     'existing code, written in the Ring language, running on a runtime of its own while that code moves to Haro, and it is '
-     'the test bed of that migration.', INDEX),
+    ('index.html', "Softanza's move from Ring", 'Ring++ is a register VM and a compiler for the Ring language, in one binary: '
+     "how Softanza left Ring while keeping its code, answering Ring's weaknesses in performance, static safety and ease of "
+     'build, on the way to Haro.', INDEX),
     ('why.html', 'Why Ring++ left Ring', 'The technical and the governance reasons Ring++ became its own runtime, and Ring was '
      'retired from every project built on it -- with the record behind each statement.', WHY),
     ('how.html', 'How it works','The parser, the compiler, the register VM, the oracle built from Ring\'s own source, and what '
