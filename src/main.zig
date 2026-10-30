@@ -17,6 +17,7 @@
 const std = @import("std");
 const web = @import("web.zig");
 pub const native = @import("native.zig");
+const builtins = @import("builtins.zig");
 const config = @import("config");
 
 /// Reference counting + real frees. See build.zig for the three variants.
@@ -1285,6 +1286,8 @@ pub const Builtin = enum(u16) {
     isattribute, // isattribute(o, name)
     functions, // functions()     -> the user functions, lower-cased
     classes, // classes()         -> the classes, lower-cased
+    ringvm_classeslist, // ringvm_classeslist() -> Ring's class map, one row per class
+    cfunctions, // cfunctions(), ringvm_cfunctionslist() -> the C functions' names
     globals, // globals()         -> the global names
     prevfilename, // prevfilename() -> the caller's file
     packages, // packages()       -> the package names
@@ -7093,6 +7096,63 @@ pub const VM = struct {
                         for (class_konst) |ki| {
                             if (ki < konst.len) self.vecPushB(v, konst[ki], true);
                         }
+                        out = Value.vec(v);
+                    },
+                    .ringvm_classeslist => {
+                        // Ring's class map (vminfo_e.c:100), measured on 1.27: a row per
+                        // class, [name, position, parent, methods, 0, package], the
+                        // names lower-cased, the parent "" for none, each method
+                        // [name, position, file, private]. The position is Ring's
+                        // bytecode address; here the class's number and the method's
+                        // entry. Privacy is not in this VM's tables: 0.
+                        const n = class_konst.len;
+                        const ms = self.alloc.alloc(*Vec, n) catch @panic("oom");
+                        defer self.alloc.free(ms);
+                        for (0..n) |k| ms[k] = self.newVec(4);
+                        for (fn_owner, 0..) |owner, fid| {
+                            if (owner >= n or fid >= self.fn_names.len) continue;
+                            var nb: [256]u8 = undefined;
+                            const nm = reflectName(self.fn_names[fid], &nb) orelse continue;
+                            const at: u32 = if (fid < self.fn_entry.len) self.fn_entry[fid] else 0;
+                            const fi = if (at < self.files.len) self.files[at] else 0;
+                            const m = self.newVec(4);
+                            self.vecPushB(m, Value.str(self.newStr(nm)), true);
+                            self.vecPushB(m, Value.int(at), true);
+                            self.vecPushB(m, Value.str(self.newStr(self.fileName(fi))), true);
+                            self.vecPushB(m, Value.int(0), true);
+                            self.vecPushB(ms[owner], Value.vec(m), true);
+                        }
+                        const v = self.newVec(@intCast(@max(1, n)));
+                        for (0..n) |k| {
+                            const row = self.newVec(6);
+                            const ki = class_konst[k];
+                            self.vecPushB(row, if (ki < konst.len) konst[ki] else Value.str(self.newStr("")), true);
+                            self.vecPushB(row, Value.int(@intCast(k + 1)), true);
+                            const pk: usize = if (k < class_parent.len) class_parent[k] else 0xFFFF;
+                            if (pk < n and class_konst[pk] < konst.len) {
+                                self.vecPushB(row, konst[class_konst[pk]], true);
+                            } else {
+                                self.vecPushB(row, Value.str(self.newStr("")), true);
+                            }
+                            self.vecPushB(row, Value.vec(ms[k]), true);
+                            self.vecPushB(row, Value.int(0), true);
+                            // Ring's sixth column is the class's package pointer, which
+                            // this VM never has: a null pointer as C's %p prints it --
+                            // sixteen zeros on Windows, "(nil)" on glibc (measured on both)
+                            self.vecPushB(row, Value.str(self.newStr(if (is_win) "0000000000000000" else "(nil)")), true);
+                            self.vecPushB(v, Value.vec(row), true);
+                        }
+                        out = Value.vec(v);
+                    },
+                    .cfunctions => {
+                        // Ring's cfunctions() and ringvm_cfunctionslist(): the name of
+                        // every C function the VM registered -- the core set (the
+                        // names Ring 1.27 registers, src/builtins.zig) and then every
+                        // native a library registered (the engine, zip). A core name
+                        // this VM lacks is still listed, as Ring lists it.
+                        const v = self.newVec(@intCast(builtins.names.len + native.entries.items.len));
+                        for (builtins.names) |nm| self.vecPushB(v, Value.str(self.newStr(nm)), true);
+                        for (native.entries.items) |e| self.vecPushB(v, Value.str(self.newStr(e.name)), true);
                         out = Value.vec(v);
                     },
                     .globals => {

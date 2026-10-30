@@ -4302,3 +4302,19 @@ eight rows -- a proved and an unproved receiver, a function answering a string a
 lists, two thousand calls in a loop -- identical on the oracle and the official 1.27; the build before stops at its first row. Gate PASSED,
 172 probes in both modes (ReleaseSafe included); census unchanged. **Cost**: only bare calls inside brace bodies lose a type
 specialisation; no kernel has one.
+
+## F-146. `ringvm_classesList()`, `ringvm_cfunctionsList()` and `cfunctions()` were missing
+
+Ring's VM reflection (`vendor/ring-vm/src/vminfo_e.c:100` and `:126`), measured on the oracle and the official 1.27: `ringvm_classesList()`
+answers a row per class, `[name, position, parent, methods, 0, package]`, names lower-cased, the parent `""` for none, each method `[name,
+position, file, private]`, the package a pointer that reads as sixteen zeros when there is none; `ringvm_cfunctionsList()` and `cfunctions()`
+answer the name of every C function the VM registered -- 258 on a bare program, and every function an extension registers after it. Ring++
+answered R3 to all three. Found by the Softanza book, whose chapter on the engine counts classes per layer, reads each class's parent and
+counts the engine's registered functions through them (2026-10-30).
+
+**Built, not decided**: the class rows from the VM's own tables (`class_konst`, `class_parent`, `fn_owner`, `fn_entry`); the position is the
+class's number and the method's entry where Ring gives bytecode addresses, and privacy, which this VM does not keep, reads 0. The function
+list is the core names Ring 1.27 registers (`src/builtins.zig`) followed by every native a library registered -- the engine's, zip's -- so a
+core name this VM lacks is listed as Ring lists it. `bench/exec/ringvm_reflect.ring`, eleven lines over three classes in a chain, identical on
+the oracle and the official 1.27; the build before stops at its first line. Gate PASSED, 174 probes in both modes; census unchanged. **Not in
+v2.0.6.**
