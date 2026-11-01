@@ -268,6 +268,29 @@ def onto():
     return ok
 
 
+def resident():
+    """The resident VM (`rnxc resident`): one program fed files, each admitted or refused whole -- the probes against their transcript and the
+    oracle, and RingServ's library as written and migrated (bench/resident.py)."""
+    code, out, secs = run([sys.executable, 'bench/resident.py'], ROOT)
+    last = [l for l in out.strip().split('\n') if l.strip()]
+    record('resident VM', code == 0, (last[-1] if last else '(no output)').strip()[:110], secs)
+    return code == 0
+
+
+def haroserv():
+    """HaroServer's host loop on the resident VM and rnxc's server natives (rpp_http_*): booted, deployed to, redeployed,
+    refused, failed, loaded and stopped over HTTP (haro/serv/court.py, a small load). A tree published without haro/ has
+    no host to run."""
+    if not os.path.isfile(os.path.join(ROOT, 'haro', 'serv', 'court.py')):
+        record('HaroServer', None, 'its host, haro/serv, is not in this tree', 0)
+        return True
+    env = dict(os.environ, HAROSERV_LOAD='300', HAROSERV_PER_REQUEST='50')
+    code, out, secs = run([sys.executable, 'haro/serv/court.py'], ROOT, env=env)
+    last = [l for l in out.strip().split('\n') if l.strip()]
+    record('HaroServer', code == 0, (last[-1] if last else '(no output)').strip()[:110], secs)
+    return code == 0
+
+
 def imagecache():
     """The compiled image (bench/image.py): a warm run must answer exactly
     as a cold one, must actually HAVE used the image, and must abandon it
@@ -486,6 +509,8 @@ def main():
     ok &= quiet()
     ok &= execprobes()
     ok &= onto()
+    ok &= resident()
+    ok &= haroserv()
     ok &= imagecache()
     ok &= checker()
     ok &= bridge()

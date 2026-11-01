@@ -143,7 +143,7 @@ def main():
     m = esize = 0
     for f in os.listdir(eng):
         if f.endswith('.so' if linux else '.dll'):
-            shutil.copyfile(os.path.join(eng, f), os.path.join(edst, f))
+            shutil.copy2(os.path.join(eng, f), os.path.join(edst, f))   # its build time kept: a proof line reads it
             m += 1
             esize += os.path.getsize(os.path.join(eng, f))
     # 4. the models, when the Softanza tree is a clean checkout (they are git-ignored), checked against its SHA256SUMS

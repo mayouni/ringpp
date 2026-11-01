@@ -1,0 +1,33 @@
+admitted ln_host.ring: 15 function(s), 52 statement(s), # ms -- program: 16 function(s), # instruction(s), 3 global(s)
+host: start
+before: Error (R11) : Error in class name, class not found: gadget
+before, in a function: Error (R11) : Error in class name, class not found: gadget
+gadget: its top level runs
+admit gadget: 1
+gadget: gadget(1,g)
+top level: gadget(1,g)
+no init: gadget(1,g)
+say w
+widget: w:w
+widget, no parentheses: -
+widget(): Error (R19) : Calling function with less number of parameters
+early: self:widget
+brace: gadget(6,b)
+case: gadget gadget
+a function's name: Error (R11) : Error in class name, class not found: makegadget
+admit sub: 1
+sub: sub(1,s), twice 2, bumped 2
+classes: 3
+brace, a name the class lacks: Error (R12) : Error in property name, property not found: nnope
+replace gadget: 1
+after: gadget(100,G), bumped 110
+sub after: sub(100,s)
+admit late: 1
+later, before: Error (R11) : Error in class name, class not found: later
+release: 1
+admit class: 1
+admit late again: 1
+later: 3
+a name met again: 1
+host: end
+resident: 8 admitted, 0 refused, 1 released, 0 top level(s) stopped on an error; 32 function(s), # instruction(s), 3 global(s)

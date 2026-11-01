@@ -38,8 +38,11 @@ const image = @import("image.zig");
 /// 3: each library file's NAME as Ring reports it beside its path -- the
 /// folder it was loaded from, the platform separator, the load as written
 /// (F-111); the path alone cannot say where the folder ends.
-pub const VERSION: u32 = 3;
+/// 4: each function's `replaced_by` -- the resident VM's rung 3, a function
+/// whose body a later admission replaced (always none in a library prefix).
+pub const VERSION: u32 = 4;
 const MAGIC: [8]u8 = "RNXPFX\x00\x00".*;
+const NONE: u32 = 0xFFFFFFFF;
 
 const Header = extern struct {
     magic: [8]u8,
@@ -67,6 +70,8 @@ const PFunc = extern struct {
     body_from: u32,
     nparams: u32,
     nhints: u32,
+    /// the index of the function that replaced it, or NONE
+    replaced_by: u32,
     owner: u16,
     name_idx: u16,
     frame: u8,
@@ -74,6 +79,10 @@ const PFunc = extern struct {
     ret_elem: u8,
     /// 1 poisoned, 2 poisoned_own, 4 is_main, 8 called, 16 emitted, 32 owned
     flags: u8,
+    /// written as zeroes: `replaced_by` (rung 3) left four bytes of padding,
+    /// and padding is whatever the stack held -- two saves of one program
+    /// differed in them, which RNXC_RESIDENT_CHECK found (rung 5)
+    _pad: u32 = 0,
 };
 
 const PClass = extern struct {
@@ -104,7 +113,43 @@ pub fn save(
 ) !void {
     var w = image.W{ .a = alloc };
     defer w.b.deinit(alloc);
+    try encodeInto(&w, exe, stamps, file_names, c);
 
+    if (std.fs.path.dirname(path)) |d| std.fs.cwd().makePath(d) catch {};
+    var tmp_buf: [512]u8 = undefined;
+    const tmp = std.fmt.bufPrint(&tmp_buf, "{s}.{d}.tmp", .{ path, std.Thread.getCurrentId() }) catch
+        return error.NameTooLong;
+    {
+        const f = try std.fs.cwd().createFile(tmp, .{ .truncate = true });
+        defer f.close();
+        try f.writeAll(w.b.items);
+    }
+    std.fs.cwd().rename(tmp, path) catch {
+        std.fs.cwd().deleteFile(tmp) catch {};
+    };
+    image.say("prefix written: {d} file(s), {d} function(s), {d} bytes", .{ stamps.len, c.funcs.items.len, w.b.items.len });
+}
+
+/// The compiler's state as BYTES, never written to disk: what the resident
+/// VM keeps between admissions (`rnxc resident`). Each admission restores a
+/// fresh compiler from these and compiles one file on top, so a refused file
+/// costs nothing but its own arena -- the bytes it started from are still
+/// the program.
+pub fn encode(alloc: std.mem.Allocator, exe: image.ExeStamp, stamps: []const image.Stamp, file_names: []const []const u8, c: *co.Compiler) ![]u8 {
+    var w = image.W{ .a = alloc };
+    errdefer w.b.deinit(alloc);
+    try encodeInto(&w, exe, stamps, file_names, c);
+    return w.b.toOwnedSlice(alloc);
+}
+
+fn encodeInto(
+    w: *image.W,
+    exe: image.ExeStamp,
+    stamps: []const image.Stamp,
+    file_names: []const []const u8,
+    c: *co.Compiler,
+) !void {
+    const alloc = w.a;
     const h = Header{
         .magic = MAGIC,
         .version = VERSION,
@@ -135,7 +180,7 @@ pub fn save(
     try w.strings(c.names.items);
     try w.strings(c.globals.items);
     try w.slice(u16, c.natives.items);
-    try image.writeKonst(&w, c.konst.items);
+    try image.writeKonst(w, c.konst.items);
     {
         // Which of those konstIndex actually has in its map. See
         // Compiler.konstIndexed: restoring a map the compiler never had is
@@ -174,6 +219,7 @@ pub fn save(
                 .body_from = f.body_from,
                 .nparams = @intCast(f.params.len),
                 .nhints = @intCast(f.hints.len),
+                .replaced_by = f.replaced_by orelse NONE,
                 .owner = f.owner orelse 0,
                 .name_idx = f.name_idx,
                 .frame = f.frame,
@@ -277,20 +323,6 @@ pub fn save(
         try w.strings(keys.items);
         try w.slice(i32, vals.items);
     }
-
-    if (std.fs.path.dirname(path)) |d| std.fs.cwd().makePath(d) catch {};
-    var tmp_buf: [512]u8 = undefined;
-    const tmp = std.fmt.bufPrint(&tmp_buf, "{s}.{d}.tmp", .{ path, std.Thread.getCurrentId() }) catch
-        return error.NameTooLong;
-    {
-        const f = try std.fs.cwd().createFile(tmp, .{ .truncate = true });
-        defer f.close();
-        try f.writeAll(w.b.items);
-    }
-    std.fs.cwd().rename(tmp, path) catch {
-        std.fs.cwd().deleteFile(tmp) catch {};
-    };
-    image.say("prefix written: {d} file(s), {d} function(s), {d} bytes", .{ stamps.len, c.funcs.items.len, w.b.items.len });
 }
 
 // ------------------------------------------------------------- reading
@@ -325,7 +357,102 @@ fn loadInner(
     };
     defer f.close();
     var r = image.R{ .f = f };
+    return loadFrom(&r, alloc, exe, true, c, out, file_names);
+}
 
+/// THE RESIDENT VM, RUNG 5: the functions and classes an admission added --
+/// and the classes it replaced (rung 4) -- put into the shape `decode` gives
+/// them, so a program kept alive (co.takeProgram) holds exactly what one
+/// restored from bytes would, field for field: what `encode` writes, and
+/// every other field at its default. Their nodes and statements point into
+/// trees freed at the end of the admission; nothing reads them again.
+/// Kept beside `decode` on purpose: the two are one rule.
+pub fn freeze(c: *co.Compiler, from_fn: usize, from_cls: usize, reused: []const co.ClassRepl) void {
+    const blank = std.mem.zeroes(@TypeOf(c.funcs.items[0].node.raw));
+    for (c.funcs.items[from_fn..]) |*f| {
+        var locals = f.locals;
+        var top: u16 = 0;
+        for (locals.items) |*l| {
+            l.* = .{ .name = l.name, .reg = l.reg, .class = if (l.class.boxed()) .ref else .int, .declared = true, .elem = .ref };
+            top = @max(top, @as(u16, l.reg) + 1);
+        }
+        f.* = .{
+            .name = f.name,
+            .node = .{ .raw = blank, .src = "" },
+            .params = f.params,
+            .entry = f.entry,
+            .id = f.id,
+            .frame = f.frame,
+            .mask = f.mask,
+            .ret = f.ret,
+            .hints = f.hints,
+            .ret_elem = f.ret_elem,
+            .called = f.called,
+            .tramp = f.tramp,
+            .body_from = f.body_from,
+            .owner = f.owner,
+            .name_idx = f.name_idx,
+            .poisoned = f.poisoned,
+            .poisoned_own = f.poisoned_own,
+            .emitted = f.emitted,
+            .is_main = f.is_main,
+            .replaced_by = f.replaced_by,
+            .locals = locals,
+            .reg_top = top,
+        };
+        locals = .{};
+    }
+    for (c.classes.items, 0..) |*ci, k| {
+        const touched = k >= from_cls or for (reused) |r| {
+            if (r.cid == k) break true;
+        } else false;
+        if (!touched) continue;
+        for (ci.attrs.items) |*a| a.* = .{ .name = a.name, .slot = a.slot };
+        ci.* = .{
+            .name = ci.name,
+            .node = .{ .raw = blank, .src = "" },
+            .parent_name = ci.parent_name,
+            .parent = ci.parent,
+            .attrs_fn = ci.attrs_fn,
+            .attrs_done = ci.attrs_done,
+            .id = ci.id,
+            .inherited = ci.inherited,
+            .attrs = ci.attrs,
+            .methods = ci.methods,
+        };
+    }
+}
+
+/// Restore from bytes `encode` produced, in this process: the resident VM's
+/// state between admissions. The sources are not read again -- they were
+/// compiled by this run, and the bytes are what it holds -- and this build
+/// wrote them, so the executable's stamp is its own.
+pub fn decode(
+    alloc: std.mem.Allocator,
+    bytes: []const u8,
+    exe: image.ExeStamp,
+    c: *co.Compiler,
+    out: *std.ArrayListUnmanaged(image.Stamp),
+    file_names: *std.ArrayListUnmanaged([]const u8),
+) bool {
+    var r = image.R{ .mem = bytes };
+    return loadFrom(&r, alloc, exe, false, c, out, file_names) catch |e| {
+        image.say("resident state unusable: {s}", .{@errorName(e)});
+        return false;
+    };
+}
+
+fn loadFrom(
+    r: *image.R,
+    alloc: std.mem.Allocator,
+    exe: image.ExeStamp,
+    /// read each source again and check its hash (a prefix FILE); the
+    /// resident VM's bytes were written by this process and are not checked
+    verify: bool,
+    c: *co.Compiler,
+    out: *std.ArrayListUnmanaged(image.Stamp),
+    file_names: *std.ArrayListUnmanaged([]const u8),
+) !bool {
     var hb: [@sizeOf(Header)]u8 = undefined;
     try r.readInto(&hb);
     const h = std.mem.bytesToValue(Header, &hb);
@@ -347,6 +474,10 @@ fn loadInner(
         const hash = try r.u64v();
         const p = try r.bytes(alloc);
         try file_names.append(alloc, try r.bytes(alloc));
+        if (!verify) {
+            try out.append(alloc, .{ .path = p, .len = len, .hash = hash });
+            continue;
+        }
         const src = image.readReusing(alloc, p, &srcbuf) orelse {
             image.say("prefix: {s} is gone", .{p});
             return false;
@@ -383,7 +514,7 @@ fn loadInner(
     c.natives.items = try r.slice(u16, alloc);
     c.natives.capacity = c.natives.items.len;
     {
-        const k = try image.readKonst(&r, alloc);
+        const k = try image.readKonst(r, alloc);
         c.konst.items = k;
         c.konst.capacity = k.len;
     }
@@ -432,6 +563,7 @@ fn loadInner(
                 .poisoned_own = (x.flags & 2) != 0,
                 .emitted = (x.flags & 16) != 0,
                 .is_main = (x.flags & 4) != 0,
+                .replaced_by = if (x.replaced_by == NONE) null else x.replaced_by,
             });
             pi += x.nparams;
             hi += x.nhints;

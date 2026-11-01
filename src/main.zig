@@ -1036,6 +1036,13 @@ fn dirExists(p: []const u8) bool {
 
 /// Attribute count per class, for `new`.
 pub var class_slots: []u32 = &.{};
+/// THE RESIDENT VM, RUNG 7: per class, by slot, what an attribute the class
+/// GAINED while its objects existed starts as in those objects (nil below
+/// the first gained slot; empty for a class that never grew). An object
+/// made before the class grew holds fewer slots, and takes these at the
+/// first access past its own (VM.fitObj) -- a list copied, as an
+/// assignment copies. Set only by `rnxc resident`'s installer.
+pub var class_gained: [][]Value = &.{};
 /// Per global slot, the name as written (`$c`), so a read of one nothing
 /// has assigned can raise Ring's R24 NAMING it. Built by the compiler
 /// from its slot table, copied at the freeze, carried by the image.
@@ -1084,6 +1091,17 @@ pub var konst_cap: usize = 0;
 /// frame the string runs in, or EVAL_NESTED for an eval inside eval'd code.
 pub const EvalHook = *const fn (vm_: *VM, src: []const u8, caller_fid: u32, base: u32, fsp: u32, hsp: u32) Value;
 pub const EVAL_NESTED: u32 = 0xFFFFFFFF;
+
+/// What `admitfile(cPath)` and `admitcode(cName, cSource)` hand the resident
+/// VM (rnxc.zig, `rnxc resident`): the file, or a name and its source. Null
+/// when admitted -- its top level has run, and an error nothing inside it
+/// caught is `eval_escaped`, raised at the call as eval's is -- or the reason
+/// it was refused. A VM with no hook is not resident and says so. `replace`
+/// is `replacefile`/`replacecode` (rung 3): the admission may REDEFINE a
+/// function the program holds, and the running program calls the new body.
+/// `mode`: 0 admit, 1 replace (rung 3), 2 release (rung 6: `src` is null and `name` names the program's last admission).
+/// `pc` is the instruction that called -- a release refuses while a frame of the code it would drop is running.
+pub const AdmitHook = *const fn (vm_: *VM, name: []const u8, src: ?[]const u8, mode: u8, base: u32, fsp: u32, hsp: u32, pc: u32) ?[]const u8;
 
 /// The builtin vocabulary, by id.
 ///
@@ -1145,7 +1163,7 @@ pub const Builtin = enum(u16) {
     // the checker gets the rule that names ambiguous call sites.
     substr2, // substr(s, n)          -> the suffix from position n, "" past the end
     substr3, // substr(s, n, len) OR substr(s, find, replace) -- BY TYPE
-    substr4, // substr(s, find, repl) -- the explicit 3-arg replace
+    substr4, // substr(s, find, repl, lIgnoreCase) -- the four-argument form (VM.substrMore)
     // files. `read` on a missing file is R35 in Ring, so it traps here
     // rather than returning "" -- a silent empty file is the worse of
     // the two failures.
@@ -1305,6 +1323,16 @@ pub const Builtin = enum(u16) {
     newlist1,
     newlist2d,
     reference,
+    // THE RESIDENT VM, rung 2: a running program admits more source into
+    // itself -- a file, or a name and its source (AdmitHook). Not Ring's.
+    admitfile,
+    admitcode,
+    replacefile,
+    replacecode,
+    // rung 6: the program's LAST admission released -- its code, names and
+    // tables dropped, the program as it was before it
+    releasefile,
+    releasecode,
 };
 
 /// The name Ring gives a builtin's C frame in an error report -- `In
@@ -1782,6 +1810,17 @@ pub const Op = enum(u8) {
     // the release check F-118 put on every unboxed store. Chosen per instruction by the compiler (emitOne), never
     // written by hand; the slow paths store through the checked path in both.
     add_u, sub_u, mul_u, addi_u, muli_u, modi_u, idivi_u,
+    /// THE RESIDENT VM's LATE `new` (rung 8). A `new K` compiled before any
+    /// admission defined K -- in a resident program only; anywhere else it
+    /// is the compiler's R11 trap (absentClass):
+    ///   newn   r[a] = a new object of the class the program holds under the
+    ///          name d (VM.name_cls), every slot nil; R11 naming it otherwise
+    ///   callp  window a, the object in r[a]: its class's attribute prologue
+    ///          (class_attrs_fn), called as `.call` calls one -- read when the
+    ///          line runs, so a class replaced since gives its new prologue;
+    ///          nothing when the class has none
+    newn,
+    callp,
 };
 
 /// What `jmpl` recorded, per frame depth: the line a report gives for a pc
@@ -1933,6 +1972,12 @@ pub const Frame = struct { ret_pc: u32, base: u32, mask: u64, size: u8, full: bo
 /// means "no mask for this one".
 pub const NO_MASK: u8 = 0xFF;
 
+/// VM.name_fn's "no function of that name".
+pub const NO_FN: u32 = 0xFFFFFFFF;
+
+/// VM.name_cls's "no class of that name".
+pub const NO_CLS: u32 = 0xFFFFFFFF;
+
 /// One armed `try`. `errreg` is where the caught value is bound, which
 /// is a register in the handler's own frame -- NOT a process global.
 /// That is the whole of §2.17's fourth point: a callee can no longer
@@ -2035,6 +2080,33 @@ pub const VM = struct {
     /// Ring resolves it at the call. A library is never unloaded, so a hit
     /// stays true.
     ncache: []?native.RppFn = &.{},
+    /// THE RESIDENT VM (`rnxc resident`): by NAME INDEX, the function an
+    /// admission defined under that name, or NO_FN. A call compiled before
+    /// the function existed is a native call to a name nothing defined
+    /// (`nchk`, `ncall`); once a later admission defines it, the call reaches
+    /// it -- the user function first, as a whole-unit compile would bind it.
+    /// Empty outside the resident VM, so a plain run pays one compare.
+    name_fn: []const u32 = &.{},
+    /// ...and by NAME INDEX, the class an admission defined under that name,
+    /// or NO_CLS: the late `new` (rung 8, `newn`) -- a `new K` compiled
+    /// before K existed finds it here once a later admission defines it.
+    /// Empty outside the resident VM.
+    name_cls: []const u32 = &.{},
+    /// Parameters per function id, for that late call's R19/R20 (Ring counts
+    /// at run time); 0xFF where unchecked.
+    fn_nparams: []const u8 = &.{},
+    /// Resident: an error nothing catches in an admission's top level is
+    /// REPORTED and the run returns, where a program would exit -- the
+    /// resident program outlives one file's failure. `esc_*` are where it
+    /// stopped, so the driver can forget the registers its frames held.
+    resident: bool = false,
+    esc_fsp: u32 = 0,
+    esc_base: u32 = 0,
+    /// `admitfile()`/`admitcode()` (rnxc.zig), and how many admissions'
+    /// top levels are running inside the program now: an error escaping one
+    /// is raised at its call, so only the outermost run reports.
+    admit_hook: ?AdmitHook = null,
+    admit_nest: u32 = 0,
     /// Reused buffer for builtins that build a string before newStr copies
     /// it -- replaceAll and friends. Cleared per call, never freed.
     scratch: std.ArrayListUnmanaged(u8) = .{},
@@ -2433,6 +2505,7 @@ pub const VM = struct {
     const NULLPTR = "Error in parameter, NULL pointer!";
     const R29 = "Error (R29) : Using bad data type in for loop";
     const BADPARAM = "Bad parameter type!";
+    const BADVALUE = "Bad parameter value!";
     const BADRANGE = "Bad parameters value, error in range!";
     const R35 = "Error (R35) : Can't create/open the file";
     const E7 = "\nError (E7) : Internal error in using sscanf() function!\n"; // RING_SSCANFERROR, its newlines included
@@ -2754,6 +2827,69 @@ pub const VM = struct {
         return self.scratch.items;
     }
 
+    /// `replaceAll` matching case-INSENSITIVELY, as Ring's substr does with a
+    /// fourth argument of 1: C's tolower on each byte (ring_general_find3,
+    /// the "C" locale, so ASCII only); the text between matches is copied as
+    /// it stands.
+    fn replaceAllCI(self: *VM, hay: []const u8, needle: []const u8, with: []const u8) []const u8 {
+        if (needle.len == 0) return hay;
+        self.scratch.clearRetainingCapacity();
+        var i: usize = 0;
+        while (i < hay.len) {
+            if (i + needle.len <= hay.len and std.ascii.eqlIgnoreCase(hay[i .. i + needle.len], needle)) {
+                self.scratch.appendSlice(self.alloc, with) catch @panic("oom");
+                i += needle.len;
+            } else {
+                self.scratch.append(self.alloc, hay[i]) catch @panic("oom");
+                i += 1;
+            }
+        }
+        return self.scratch.items;
+    }
+
+    /// RING'S substr WITH THREE OR FOUR ARGUMENTS (genlib_e.c:884), the first
+    /// a string already. Two numbers are a substring and two strings a
+    /// replace; any other pair is "Bad parameter type!". A fourth argument
+    /// that is the number 0 makes it the three-argument call; otherwise it
+    /// needs a string, a string and a number -- 1 replaces ignoring case, any
+    /// other number answers "" -- or it is "Bad parameter type!". A replace
+    /// with an empty needle is "Bad parameter value!". Measured on the oracle
+    /// and official 1.27 (bench/exec/str_args.ring). Null: `pending` is set
+    /// and the caller raises. Out of the run loop on purpose: an edit inside
+    /// it reshuffles the layout of every kernel (F-118).
+    fn substrMore(self: *VM, sv: []const u8, a1: Value, a2: Value, a3: ?Value) ?Value {
+        var ci = false;
+        if (a3) |f| {
+            if (isNum(f) and asF64(f) == 0.0) return self.substrMore(sv, a1, a2, null);
+            if (a1.tag != .str or a2.tag != .str or !isNum(f)) {
+                self.pending = BADPARAM;
+                return null;
+            }
+            if (asF64(f) != 1.0) return Value.str(self.newStr(""));
+            ci = true;
+        }
+        if (a1.tag == .str and a2.tag == .str) {
+            const needle = strOf(a1);
+            if (needle.len == 0) {
+                self.pending = BADVALUE;
+                return null;
+            }
+            const res = if (ci) self.replaceAllCI(sv, needle, strOf(a2)) else self.replaceAll(sv, needle, strOf(a2));
+            return Value.str(self.newStr(res));
+        }
+        if (isNum(a1) and isNum(a2)) {
+            const i = asInt(a1);
+            const ln = asInt(a2);
+            if (i < 1 or i > sv.len or ln <= 0) return Value.str(self.newStr(""));
+            const from: usize = @intCast(i - 1);
+            var to: usize = from + @as(usize, @intCast(ln));
+            if (to > sv.len) to = sv.len;
+            return Value.str(self.newStr(sv[from..to]));
+        }
+        self.pending = BADPARAM;
+        return null;
+    }
+
     /// A path as the OS wants it. Ring strings are not NUL-terminated,
     /// and std.fs takes a slice, so this is just a bounds-checked copy
     /// into scratch -- but it keeps the file builtins from aliasing a
@@ -2890,6 +3026,27 @@ pub const VM = struct {
         return s0.ptr[0..s0.len];
     }
 
+    /// `newn`: the class the program holds under name `nd` as a new object,
+    /// or null with Ring's R11 pending -- the name lower-cased, as Ring's
+    /// scanner leaves it. Out of the run loop: it is a resident program's.
+    noinline fn lateObj(self: *VM, nd: usize) ?Value {
+        const cid = if (nd < self.name_cls.len) self.name_cls[nd] else NO_CLS;
+        if (cid == NO_CLS or cid >= class_slots.len) {
+            const nm = if (nd < self.names.len) self.names[nd] else "";
+            var low: [128]u8 = undefined;
+            const n = @min(nm.len, low.len);
+            for (nm[0..n], 0..) |ch, i| low[i] = std.ascii.toLower(ch);
+            self.pending = std.fmt.bufPrint(&self.pending_buf, "Error (R11) : Error in class name, class not found: {s}", .{low[0..n]}) catch "Error (R11) : Error in class name, class not found";
+            return null;
+        }
+        const nsl = class_slots[cid];
+        const o = self.alloc.create(Obj) catch @panic("oom");
+        const sl = self.alloc.alloc(Value, if (nsl == 0) 1 else nsl) catch @panic("oom");
+        @memset(sl, Value.nil());
+        o.* = .{ .slots = sl.ptr, .nslots = nsl, .class = @intCast(cid), .rc = 0 };
+        return Value.object(o);
+    }
+
     fn r24Named(self: *VM, nm: []const u8) void {
         var lower: [128]u8 = undefined;
         const ln = @min(nm.len, lower.len);
@@ -2976,7 +3133,7 @@ pub const VM = struct {
             .vdel => "del",
             .vins => "insert",
             .clsname => "classname",
-            .substr2d => "substr",
+            .substr2d, .sfind => "substr",
             .vpush => if (in.d == 1) "add" else null,
             .dlen => if (in.d == 1) "len" else null,
             else => null,
@@ -2988,10 +3145,39 @@ pub const VM = struct {
     /// f() in file F`, and `In raise() in file F` at the top level
     /// (measured 2026-09-11 on the oracle).
     fn dieRingFrom(self: *VM, msg: []const u8, pc0: u32, fsp: u32, raised: bool) noreturn {
+        self.reportRing(msg, pc0, fsp, raised);
+        // Under either diagnostic, say that the report is finished and the
+        // exit is ours to make. A program that printed its whole error and
+        // then hung looked exactly like one still running, and this is the
+        // line that told the two apart: it was the LAST thing on stderr,
+        // so the spin was inside process exit and not in any Ring code.
+        if (g_watchdog_s > 0 or g_trace_native) {
+            std.debug.print("  -- report complete, calling exit(1)\n", .{});
+        }
+        std.process.exit(1);
+    }
+
+    /// An error nothing caught leaves the run: at the top of a program it is
+    /// Ring's report and the exit, inside an eval it returns to the eval
+    /// site, and in the RESIDENT VM's top-level run (no eval in progress) it
+    /// is the report and a return, so the resident program carries on.
+    fn escape(self: *VM, msg: []const u8, pc: u32, fsp: u32, base: u32, raised: bool) Value {
+        // where it stopped, so whoever ran it can forget the registers its
+        // frames held (the resident driver, an admission's call)
+        self.esc_fsp = fsp;
+        self.esc_base = base;
+        if (self.resident and self.eval_nsites == 0 and self.admit_nest == 0) self.reportRing(msg, pc, fsp, raised);
+        return self.evalEscape(msg);
+    }
+
+    /// Ring's report of an error nothing caught: the line, the function or
+    /// file, and the chain of calls. Printed, never exiting -- see
+    /// dieRingFrom for the program's case and `escape` for the resident's.
+    fn reportRing(self: *VM, msg: []const u8, pc0: u32, fsp: u32, raised: bool) void {
         if (self.rows.len == 0 or self.fn_of.len == 0) {
             outPrint("Error: {s}\n", .{msg});
             outFlush();
-            std.process.exit(1);
+            return;
         }
         // Through outPrint, like every `?` before it: one buffer, so
         // the report follows the program's output instead of overtaking
@@ -3010,7 +3196,7 @@ pub const VM = struct {
         if (f == self.main_fn or f >= self.fn_names.len) {
             outPrint("in file {s} ", .{self.fileName(fi)});
             outFlush();
-            std.process.exit(1);
+            return;
         }
         self.printFn(f, fi);
         // the chain: each frame's return address, minus one, is the call
@@ -3029,15 +3215,6 @@ pub const VM = struct {
             self.printFn(f, cfi);
         }
         outFlush();
-        // Under either diagnostic, say that the report is finished and the
-        // exit is ours to make. A program that printed its whole error and
-        // then hung looked exactly like one still running, and this is the
-        // line that told the two apart: it was the LAST thing on stderr,
-        // so the spin was inside process exit and not in any Ring code.
-        if (g_watchdog_s > 0 or g_trace_native) {
-            std.debug.print("  -- report complete, calling exit(1)\n", .{});
-        }
-        std.process.exit(1);
     }
 
     fn fileName(self: *VM, fi: u16) []const u8 {
@@ -3215,6 +3392,31 @@ pub const VM = struct {
         _ = self;
         _ = reg;
         return vv.p.v;
+    }
+
+    /// THE RESIDENT VM, RUNG 7: an object made before its class GAINED
+    /// attributes (a replacement that added them) grows to the class's
+    /// layout, each gained slot taking the class's starting value for it
+    /// (class_gained), copied. Called where an access finds a slot past the
+    /// object's own, and where every attribute is listed -- never on a hot
+    /// path: an object of the current layout never reaches it. The slots
+    /// array moves; the object does not, so every holder still holds it.
+    noinline fn fitObj(self: *VM, o: *Obj) void {
+        if (o.class >= class_gained.len or o.class >= class_slots.len) return;
+        const defs = class_gained[o.class];
+        const n = class_slots[o.class];
+        if (defs.len == 0 or o.nslots >= n) return;
+        const sl = self.alloc.alloc(Value, n) catch @panic("oom");
+        @memcpy(sl[0..o.nslots], o.slots[0..o.nslots]);
+        for (o.nslots..n) |s| {
+            const d = if (s < defs.len) defs[s] else Value.nil();
+            const e = self.cloneDeepD(d, 0);
+            retain(e);
+            sl[s] = e;
+        }
+        self.alloc.free(o.slots[0..if (o.nslots == 0) 1 else o.nslots]);
+        o.slots = sl.ptr;
+        o.nslots = n;
     }
 
     fn freeObj(self: *VM, o: *Obj) void {
@@ -3470,6 +3672,7 @@ pub const VM = struct {
     /// Attribute Contains A List]` and an object one as `Object...`. Ring++
     /// printed `<object>`; six rows of the wide suite print one.
     fn sayAttrs(self: *VM, o: *Obj) void {
+        self.fitObj(o);
         var low: [128]u8 = undefined;
         var i: u32 = 0;
         while (i < o.nslots) : (i += 1) {
@@ -3793,6 +3996,30 @@ pub const VM = struct {
     pub fn funcByNamePub(self: *VM, name: []const u8) ?u32 {
         return self.funcByName(name);
     }
+
+    /// `admitfile(cPath)`, `admitcode(cName, cSource)`, and rung 3's
+    /// `replacefile`/`replacecode`, which may REDEFINE a function the program
+    /// holds -- every call from then on runs the new body, and the frames
+    /// running the old one finish it. Through the AdmitHook (rnxc resident):
+    /// null when admitted, else the error to raise. Not inside eval: an
+    /// admission cuts the eval code past the program. Out of the run loop, so
+    /// the loop carries one call for the six of them.
+    noinline fn admitCall(self: *VM, which: Builtin, a0: Value, a1: Value, base: u32, fsp: u32, hsp: u32, pc: u32) ?[]const u8 {
+        const coded = which == .admitcode or which == .replacecode;
+        if (a0.tag != .str or (coded and a1.tag != .str)) return BADPARAM;
+        const hook = self.admit_hook orelse
+            return "Error : admitfile(), admitcode(), replacefile(), replacecode(), releasefile() and releasecode() need a resident program (rnxc resident)";
+        if (self.eval_nsites != 0)
+            return "Error : admitfile(), admitcode(), replacefile(), replacecode(), releasefile() and releasecode() are not admitted inside eval()";
+        self.admit_nest += 1;
+        defer self.admit_nest -= 1;
+        const mode: u8 = switch (which) {
+            .replacefile, .replacecode => 1,
+            .releasefile, .releasecode => 2,
+            else => 0,
+        };
+        return hook(self, strOf(a0), if (coded) strOf(a1) else null, mode, base, fsp, hsp, pc);
+    }
     pub fn holdValue(v: Value) void {
         retain(v);
     }
@@ -3912,7 +4139,9 @@ pub const VM = struct {
     /// string running in its caller's frame (the caller's, with
     /// `hsp_floor` at its handler depth).
     pub fn runFrom(self: *VM, entry: u32, base0: u32, fsp0: u32, hsp0: u32) Value {
-        const code = self.code;
+        // a `var` for ONE writer: an admission (`admitfile`) appends code the
+        // caller goes on to call, and may have moved the buffer to make room
+        var code = self.code;
         const regs = self.regs;
         var pc: u32 = entry;
         var base: u32 = base0;
@@ -3960,7 +4189,7 @@ pub const VM = struct {
                     if (self.opWant(x, y, "+", "r+")) continue :dispatch .opcall;
                     if (self.addSlow(base + in.a, base + in.b, x, y, in.d)) |e| {
                         const err = Value.str(self.newStr(e));
-                        if (hsp == self.hsp_floor) { if (self.hsp_floor != 0) return self.evalEscape(e); self.dieRing(e, pc, fsp); }
+                        if (hsp == self.hsp_floor) { if (self.hsp_floor != 0) return self.escape(e, pc, fsp, base, false); self.dieRing(e, pc, fsp); }
                         hsp -= 1;
                         const h = self.handlers[hsp];
                         self.forgetUnwound(h, fsp, base);
@@ -3985,7 +4214,7 @@ pub const VM = struct {
                     continue :dispatch .opcall;
                 } else if (self.arithSlow(base + in.a, .div, x, y)) |e| {
                     const err = Value.str(self.newStr(e));
-                    if (hsp == self.hsp_floor) { if (self.hsp_floor != 0) return self.evalEscape(e); self.dieRing(e, pc, fsp); }
+                    if (hsp == self.hsp_floor) { if (self.hsp_floor != 0) return self.escape(e, pc, fsp, base, false); self.dieRing(e, pc, fsp); }
                     hsp -= 1;
                     const h = self.handlers[hsp];
                     self.forgetUnwound(h, fsp, base);
@@ -4022,7 +4251,7 @@ pub const VM = struct {
                     continue :dispatch .opcall;
                 } else if (self.arithSlow(base + in.a, .sub, x, y)) |e| {
                     const err = Value.str(self.newStr(e));
-                    if (hsp == self.hsp_floor) { if (self.hsp_floor != 0) return self.evalEscape(e); self.dieRing(e, pc, fsp); }
+                    if (hsp == self.hsp_floor) { if (self.hsp_floor != 0) return self.escape(e, pc, fsp, base, false); self.dieRing(e, pc, fsp); }
                     hsp -= 1;
                     const h = self.handlers[hsp];
                     self.forgetUnwound(h, fsp, base);
@@ -4066,7 +4295,7 @@ pub const VM = struct {
                     continue :dispatch .opcall;
                 } else if (self.arithSlow(base + in.a, aop, x, y)) |e| {
                     const err = Value.str(self.newStr(e));
-                    if (hsp == self.hsp_floor) { if (self.hsp_floor != 0) return self.evalEscape(e); self.dieRing(e, pc, fsp); }
+                    if (hsp == self.hsp_floor) { if (self.hsp_floor != 0) return self.escape(e, pc, fsp, base, false); self.dieRing(e, pc, fsp); }
                     hsp -= 1;
                     const h = self.handlers[hsp];
                     self.forgetUnwound(h, fsp, base);
@@ -4098,7 +4327,7 @@ pub const VM = struct {
                     continue :dispatch .opcall;
                 } else if (self.arithSlow(base + in.a, .mul, x, y)) |e| {
                     const err = Value.str(self.newStr(e));
-                    if (hsp == self.hsp_floor) { if (self.hsp_floor != 0) return self.evalEscape(e); self.dieRing(e, pc, fsp); }
+                    if (hsp == self.hsp_floor) { if (self.hsp_floor != 0) return self.escape(e, pc, fsp, base, false); self.dieRing(e, pc, fsp); }
                     hsp -= 1;
                     const h = self.handlers[hsp];
                     self.forgetUnwound(h, fsp, base);
@@ -4191,7 +4420,7 @@ pub const VM = struct {
                         if (self.addSlow(base + in.a, base + in.b, x, Value.int(in.d), @intFromBool(in.c != 0))) |e| {
                             const err = Value.str(self.newStr(e));
                             if (hsp == self.hsp_floor) {
-                                if (self.hsp_floor != 0) return self.evalEscape(e);
+                                if (self.hsp_floor != 0) return self.escape(e, pc, fsp, base, false);
                                 outPrint("Error: {s}\n", .{e});
                                 outFlush();
                                 std.process.exit(1);
@@ -4941,6 +5170,13 @@ pub const VM = struct {
             },
             .sfind => {
                 const in = code[pc];
+                // substr(s, "x") with a proven string needle; the haystack
+                // can still be anything, and Ring's answer for a non-string
+                // is "Bad parameter type!", catchable (strOf panicked)
+                if (regs[base + in.b].tag != .str or regs[base + in.c].tag != .str) {
+                    self.pending = BADPARAM;
+                    continue :dispatch .raise;
+                }
                 const hay = strOf(regs[base + in.b]);
                 const needle = strOf(regs[base + in.c]);
                 const at = std.mem.indexOf(u8, hay, needle);
@@ -5047,7 +5283,7 @@ pub const VM = struct {
             // and shows them to people.
             .raise => {
                 const err = Value.str(self.newStr(self.pending));
-                if (hsp == self.hsp_floor) { if (self.hsp_floor != 0) return self.evalEscape(self.pending); self.dieRing(self.pending, pc, fsp); }
+                if (hsp == self.hsp_floor) { if (self.hsp_floor != 0) return self.escape(self.pending, pc, fsp, base, false); self.dieRing(self.pending, pc, fsp); }
                 // SPENT once it is raised. It was never cleared while every
                 // reader set it and jumped here in the same breath; the
                 // first reader to set it and then LOOK -- copyv, checking
@@ -5071,7 +5307,7 @@ pub const VM = struct {
                 const in = code[pc];
                 const err = regs[base + in.a];
                 if (hsp == self.hsp_floor) {
-                    if (self.hsp_floor != 0) return self.evalEscape(if (err.tag == .str) strOf(err) else "raised");
+                    if (self.hsp_floor != 0) return self.escape(if (err.tag == .str) strOf(err) else "raised", pc, fsp, base, in.b == 1);
                     // Nothing is handling it -- Ring's behaviour when
                     // nothing catches, plus the origin, which Ring prints
                     // for an uncaught error and withholds from a handler.
@@ -5102,29 +5338,32 @@ pub const VM = struct {
             },
             .substr2d => {
                 const in = code[pc];
-                const sv = strOf(regs[base + in.b]);
                 const av = regs[base + in.c];
-                if (av.tag == .str) {
+                if (regs[base + in.b].tag == .str and av.tag == .str) {
+                    const sv = strOf(regs[base + in.b]);
                     // FIND: the 1-based position, 0 when absent.
                     const at = std.mem.indexOf(u8, sv, strOf(av));
                     self.setRegB(base + in.a, Value.int(if (at) |p| @as(i64, @intCast(p + 1)) else 0), false);
                     pc += 1;
                     continue :dispatch code[pc].op;
                 }
-                if (av.tag == .int or av.tag == .num) {
+                if (regs[base + in.b].tag == .str and (av.tag == .int or av.tag == .num)) {
                     // SUFFIX from a 1-based position. Past the end is "",
                     // not an error -- verified on 1.27.
+                    const sv = strOf(regs[base + in.b]);
                     const i = asInt(av);
                     const res = if (i < 1 or i > sv.len) "" else sv[@intCast(i - 1)..];
                     self.setRegB(base + in.a, Value.str(self.newStr(res)), true);
                     pc += 1;
                     continue :dispatch code[pc].op;
                 }
-                // Neither. Ring raises here (a list gives "Bad parameter
-                // type!"), so this raises, sharing trap's unwind.
+                // Neither -- or a haystack that is not a string, which
+                // panicked in strOf. Ring raises here (a list or a number
+                // gives "Bad parameter type!"), so this raises, sharing
+                // trap's unwind.
                 const err = konst[@intCast(in.d)];
                 if (hsp == self.hsp_floor) {
-                    if (self.hsp_floor != 0) return self.evalEscape(if (err.tag == .str) strOf(err) else "raised");
+                    if (self.hsp_floor != 0) return self.escape(if (err.tag == .str) strOf(err) else "raised", pc, fsp, base, false);
                     self.dieRingFrom(if (err.tag == .str) strOf(err) else "raised", pc, fsp, false);
                 }
                 hsp -= 1;
@@ -5155,7 +5394,7 @@ pub const VM = struct {
                 // `trap`, because it IS the same event.
                 const err = konst[@intCast(in.d)];
                 if (hsp == self.hsp_floor) {
-                    if (self.hsp_floor != 0) return self.evalEscape(if (err.tag == .str) strOf(err) else "raised");
+                    if (self.hsp_floor != 0) return self.escape(if (err.tag == .str) strOf(err) else "raised", pc, fsp, base, false);
                     self.dieRingFrom(if (err.tag == .str) strOf(err) else "raised", pc, fsp, false);
                 }
                 hsp -= 1;
@@ -5244,6 +5483,10 @@ pub const VM = struct {
             },
             .nchk => {
                 const nd: usize = @intCast(code[pc].d);
+                if (nd < self.name_fn.len and self.name_fn[nd] != NO_FN) {
+                    pc += 1;
+                    continue :dispatch code[pc].op;
+                }
                 if (self.nativeOf(nd) == null) {
                     self.r3Named(self.names[nd]);
                     continue :dispatch .raise;
@@ -5254,6 +5497,40 @@ pub const VM = struct {
             .ncall => {
                 if (g_watchdog_at != 0) self.wdTick(pc, fsp);
                 const in = code[pc];
+                // RESIDENT: a function admitted after this call was compiled
+                // (VM.name_fn). The arguments already sit in a window above
+                // everything live, as a direct call's do; the answer lands in
+                // `a` through the frame (lkind 1), where `ncall` puts its own.
+                if (@as(usize, @intCast(in.d)) < self.name_fn.len) {
+                    const uf = self.name_fn[@intCast(in.d)];
+                    if (uf != NO_FN) {
+                        const np: u8 = if (uf < self.fn_nparams.len) self.fn_nparams[uf] else 0xFF;
+                        if (np != 0xFF and np != in.c) {
+                            self.pending = if (in.c < np)
+                                "Error (R19) : Calling function with less number of parameters"
+                            else
+                                "Error (R20) : Calling function with extra number of parameters";
+                            continue :dispatch .raise;
+                        }
+                        if (fsp >= max_frames_ring) {
+                            self.pending = R4;
+                            continue :dispatch .raise;
+                        }
+                        if (base + in.b + 64 > regs.len) @panic("register overflow");
+                        self.frames[fsp] = .{
+                            .ret_pc = pc + 1,
+                            .base = base,
+                            .size = self.fn_frame[uf],
+                            .mask = if (uf < fn_masks.len) fn_masks[uf] else 0,
+                            .full = uf >= fn_masks.len,
+                            .lkind = 1,
+                        };
+                        fsp += 1;
+                        base += in.b;
+                        pc = self.fn_entry[uf];
+                        continue :dispatch code[pc].op;
+                    }
+                }
                 const nm = self.names[@intCast(in.d)];
                 // `nchk` has normally found it already; a call reached
                 // without one (a brace's method-miss fallback) raises the
@@ -5583,13 +5860,13 @@ pub const VM = struct {
                         else => @as(i64, 0),
                     }),
                     .ascii => {
-                        // `ascii(s[i])` already holds a byte (dget on a
-                        // string yields the code), while `ascii(char(65))`
-                        // holds a one-character string. Both are ordinary
-                        // in Ring code, so both are accepted.
+                        // A STRING only, as on Ring: ascii(5) is "Bad
+                        // parameter type!". It took an integer too while
+                        // `s[i]` was a byte (F-54); C-3 made `s[i]` a
+                        // one-character string, and the fused `ascii(s[i])`
+                        // on a proven string is its own opcode (`sgetb`).
                         const v = regs[A];
                         out = switch (v.tag) {
-                            .int => v,
                             .str => Value.int(if (v.p.s.len == 0) 0 else v.p.s.ptr[0]),
                             else => {
                                 self.pending = BADPARAM;
@@ -5700,6 +5977,7 @@ pub const VM = struct {
                             const o = item.p.o;
                             var av: Value = undefined;
                             if (if (ani) |n| attrLookup(o.class, n) else null) |s| {
+                                if (s >= o.nslots) self.fitObj(o);
                                 if (s >= o.nslots) {
                                     self.pending = "Error (R12) : Error in property name, property not found";
                                     continue :dispatch .raise;
@@ -5858,6 +6136,7 @@ pub const VM = struct {
                         const lo = if (cls + 1 < attr_from.len) attr_from[cls] else 0;
                         const hi = if (cls + 1 < attr_from.len) attr_from[cls + 1] else 0;
                         const nv = self.newVec(if (hi > lo) hi - lo else 8);
+                        self.fitObj(v.p.o);
                         var slot: u32 = 0;
                         while (slot < v.p.o.nslots) : (slot += 1) {
                             var i = lo;
@@ -5899,6 +6178,10 @@ pub const VM = struct {
                     .sqrt => out = narrow(@sqrt(asF64(regs[A]))),
                     .strcmp => {
                         const x = strOf(regs[A]);
+                        if (regs[A + 1].tag != .str) {
+                            self.pending = BADPARAM;
+                            continue :dispatch .raise;
+                        }
                         const y = strOf(regs[A + 1]);
                         out = Value.int(switch (std.mem.order(u8, x, y)) {
                             .lt => -1,
@@ -5918,25 +6201,11 @@ pub const VM = struct {
                         }
                     },
                     .substr3 => {
-                        // The role is decided by the SECOND argument's type,
-                        // at run time, exactly as Ring does it. This is the
-                        // punning §5.1 measures, reproduced rather than
-                        // guessed at.
-                        const sv = strOf(regs[A]);
-                        if (regs[A + 1].tag == .str) {
-                            out = Value.str(self.newStr(self.replaceAll(sv, strOf(regs[A + 1]), strOf(regs[A + 2]))));
-                        } else {
-                            const i = asInt(regs[A + 1]);
-                            const ln = asInt(regs[A + 2]);
-                            if (i < 1 or i > sv.len or ln <= 0) {
-                                out = Value.str(self.newStr(""));
-                            } else {
-                                const from: usize = @intCast(i - 1);
-                                var to: usize = from + @as(usize, @intCast(ln));
-                                if (to > sv.len) to = sv.len;
-                                out = Value.str(self.newStr(sv[from..to]));
-                            }
-                        }
+                        // The role is decided by the ARGUMENTS' types, at run
+                        // time, exactly as Ring does it (substrMore): the
+                        // punning §5.1 measures, reproduced rather than guessed
+                        // at. A mixed pair panicked here (asInt, strOf).
+                        out = self.substrMore(strOf(regs[A]), regs[A + 1], regs[A + 2], null) orelse continue :dispatch .raise;
                     },
                     .fexists => {
                         const path = self.zpath(strOf(regs[A]));
@@ -6223,8 +6492,7 @@ pub const VM = struct {
                         out = Value.vec(self.splitLines(strOf(regs[A])));
                     },
                     .substr4 => {
-                        const sv = strOf(regs[A]);
-                        out = Value.str(self.newStr(self.replaceAll(sv, strOf(regs[A + 1]), strOf(regs[A + 2]))));
+                        out = self.substrMore(strOf(regs[A]), regs[A + 1], regs[A + 2], regs[A + 3]) orelse continue :dispatch .raise;
                     },
                     // ---- the system builtins, 2026-09-23 (bench/exec/sys_builtins.ring)
                     .dir => {
@@ -6948,6 +7216,7 @@ pub const VM = struct {
                                     self.pending = "Error (R12) : Error in property name, property not found";
                                     continue :dispatch .raise;
                                 };
+                                if (s >= ov.p.o.nslots) self.fitObj(ov.p.o);
                                 if (s >= ov.p.o.nslots) {
                                     self.pending = "Error (R12) : Error in property name, property not found";
                                     continue :dispatch .raise;
@@ -7042,6 +7311,25 @@ pub const VM = struct {
                         self.release(v);
                         pc += 1;
                         continue :dispatch code[pc].op;
+                    },
+                    .admitfile, .admitcode, .replacefile, .replacecode, .releasefile, .releasecode => {
+                        // THE RESIDENT VM, rungs 2, 3 and 6: the running
+                        // program admits more source into itself, replaces a
+                        // function it holds, or releases its last admission
+                        // (admitCall, out of this loop).
+                        // An error its top level did not catch is raised
+                        // here, as eval's is.
+                        const why = self.admitCall(which, regs[A], regs[A + 1], base, fsp, hsp, pc);
+                        code = self.code;
+                        if (why) |w| {
+                            self.pending = w;
+                            continue :dispatch .raise;
+                        }
+                        if (self.eval_escaped) {
+                            self.eval_escaped = false;
+                            continue :dispatch .raise;
+                        }
+                        out = Value.int(1);
                     },
                     .catchlast => {
                         if (self.catch_last.tag == .nil) {
@@ -7429,6 +7717,38 @@ pub const VM = struct {
                 pc += 1;
                 continue :dispatch code[pc].op;
             },
+            .newn => {
+                const in = code[pc];
+                const ov = self.lateObj(@intCast(in.d)) orelse continue :dispatch .raise;
+                self.setRegB(base + in.a, ov, true);
+                pc += 1;
+                continue :dispatch code[pc].op;
+            },
+            .callp => {
+                const in = code[pc];
+                const rv = regs[base + in.a];
+                const uf: u32 = if (rv.tag == .obj and rv.p.o.class < class_attrs_fn.len) class_attrs_fn[rv.p.o.class] else NO_FN;
+                if (uf == NO_FN) {
+                    pc += 1;
+                    continue :dispatch code[pc].op;
+                }
+                if (fsp >= max_frames_ring) {
+                    self.pending = R4;
+                    continue :dispatch .raise;
+                }
+                if (base + in.a + 64 > regs.len) @panic("register overflow");
+                self.frames[fsp] = .{
+                    .ret_pc = pc + 1,
+                    .base = base,
+                    .size = self.fn_frame[uf],
+                    .mask = if (uf < fn_masks.len) fn_masks[uf] else 0,
+                    .full = uf >= fn_masks.len,
+                };
+                fsp += 1;
+                base += in.a;
+                pc = self.fn_entry[uf];
+                continue :dispatch code[pc].op;
+            },
             .gattr => {
                 const in = code[pc];
                 const rv = regs[base + in.b];
@@ -7438,6 +7758,7 @@ pub const VM = struct {
                 }
                 const o = rv.p.o;
                 const sl: u32 = @intCast(in.d);
+                if (sl >= o.nslots) self.fitObj(o); // rung 7: a class that grew
                 if (sl >= o.nslots) {
                     // A slot the COMPILER resolved against a class the
                     // object turned out not to have: ours, not the
@@ -7511,6 +7832,7 @@ pub const VM = struct {
                 }
                 const o = rv.p.o;
                 const sl: u32 = @intCast(in.d);
+                if (sl >= o.nslots) self.fitObj(o);
                 if (sl >= o.nslots) @panic("sattr: slot out of range");
                 const nv = regs[base + in.b];
                 retain(nv);
@@ -7570,6 +7892,7 @@ pub const VM = struct {
                     self.pending = std.fmt.bufPrint(&self.pending_buf, "Error (R12) : Error in property name, property not found: {s}", .{lower[0..n]}) catch "Error (R12) : Error in property name, property not found";
                     continue :dispatch .raise;
                 };
+                if (sl >= o.nslots) self.fitObj(o);
                 if (sl >= o.nslots) @panic("gattrn: slot out of range");
                 if (aop == .gattrn) {
                     self.setRegB(base + in.a, o.slots[sl], true);
@@ -7872,6 +8195,7 @@ pub const VM = struct {
                 }
                 const o = rv.p.o;
                 const sl: u32 = @intCast(in.d);
+                if (sl >= o.nslots) self.fitObj(o);
                 if (sl >= o.nslots) @panic("gattrw: slot out of range");
                 // no clone of a shared list any more (C-7), as in ggetw
                 const e = o.slots[sl];

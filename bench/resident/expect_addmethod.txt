@@ -1,0 +1,6 @@
+admitted am_host.ring: 2 function(s), 12 statement(s), # ms -- program: 4 function(s), # instruction(s), 1 global(s)
+before: woof
+after a function: woof
+after a new class: woof
+after Pet replaced: woof, HELLO rex
+resident: 4 admitted, 0 refused, 0 top level(s) stopped on an error; 8 function(s), # instruction(s), 1 global(s)

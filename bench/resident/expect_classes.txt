@@ -1,0 +1,29 @@
+admitted cl_host.ring: 0 function(s), 29 statement(s), # ms -- program: 1 function(s), # instruction(s), 5 global(s)
+host: start
+shape: its top level runs
+admit shape: 1
+made: shape(3) 9, twice 18
+admit square: 1
+square: sq4 16, twice 32
+circle: super 17
+by eval: shape(5) 25
+classes: 5 circle
+new before: shape(6) 36
+replace shape: 1
+old object: shape(3) 90, twice 180, perimeter 12
+square inherits: sq4 160, perimeter 16; circle: super 161
+new object: SHAPE(1) 10, sq2 40
+classes: 5 circle
+grow old 1
+grow old 2
+grow old finished
+grow new
+layout: Error : not admitted: bad1: class Shape: it gains attributes, and the program's class Square inherits from it -- Square's own attributes come after Shape's, and its methods were compiled for their slots
+parent: Error : not admitted: bad2: class Shape: its objects hold 2 attribute(s) laid out under no parent; the replacement lays out 3 under Tag -- a replacement keeps the attributes, their order and the parent, and may add attributes after them
+arity: Error : not admitted: bad3: method Shape.Area takes 0 parameter(s) and its replacement 1: the running program's calls pass 0
+init: Error : not admitted: bad4: class Tag: the replacement adds an init where the class had none; a `new Tag()` compiled for the old class calls none
+code at new: Error : not admitted: bad5: class Empty: the replacement runs code at `new` (initial values, class-region statements) where the class ran none; a `new Empty` compiled for the old class would not
+admit is not replace: Error : not admitted: bad6: class Shape is already defined (Ring: C26); replacefile and replacecode replace a class the program holds
+still: shape(3) 90, tag, hi
+host: end
+resident: 5 admitted, 6 refused, 0 top level(s) stopped on an error; 27 function(s), # instruction(s), 5 global(s)

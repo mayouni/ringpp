@@ -33,7 +33,7 @@ def wsl_path(p):
 
 
 ORACLE = os.path.join(ROOT, 'runtime', 'linux-x64', 'ring')
-RNXC = os.path.join(ROOT, 'zig-out-linux', 'bin', 'rnxc')
+RNXC = os.environ.get('RNXC') or os.path.join(ROOT, 'zig-out-linux', 'bin', 'rnxc')
 
 
 # The DISTRIBUTION is named: this machine's default is docker-desktop, where

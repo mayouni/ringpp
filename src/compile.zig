@@ -17,7 +17,7 @@ const ts = @import("ts.zig");
 const vm = @import("main.zig");
 const lift = @import("lift.zig");
 
-pub const Error = error{ Unsupported, OutOfMemory, BadNumber, PrefixInapplicable };
+pub const Error = error{ Unsupported, OutOfMemory, BadNumber, PrefixInapplicable, Refused };
 
 const MAXREG = 200;
 
@@ -214,6 +214,15 @@ const builtin_table = [_]BuiltinEntry{
     .{ .name = "web_bye", .id = .web_bye, .argc = 1 },
     // eval(code): compiled at RUN TIME in the caller's frame (F-72, C-9)
     .{ .name = "eval", .id = .eval, .argc = 1 },
+    // the resident VM: a running program admits more source (rnxc resident)
+    .{ .name = "admitfile", .id = .admitfile, .argc = 1 },
+    .{ .name = "admitcode", .id = .admitcode, .argc = 2 },
+    // ...and replaces a function it holds (rung 3)
+    .{ .name = "replacefile", .id = .replacefile, .argc = 1 },
+    .{ .name = "replacecode", .id = .replacecode, .argc = 2 },
+    // ...and releases its last admission (rung 6)
+    .{ .name = "releasefile", .id = .releasefile, .argc = 1 },
+    .{ .name = "releasecode", .id = .releasecode, .argc = 1 },
 };
 
 /// Is this callee one of the builtins codegen compiles to a `bcall`?
@@ -430,6 +439,11 @@ pub const Func = struct {
     /// statement keyed here, the registers listed are cleared for their
     /// next owner.
     share: ?*ShareTable = null,
+    /// THE RESIDENT VM, rung 3: the function whose body replaced this one
+    /// (`replacefile`), as an index into `funcs`. This one keeps its entry,
+    /// frame and locals -- they describe the code the frames still running it
+    /// execute -- and every call to it goes to the replacement (Compiler.live).
+    replaced_by: ?u32 = null,
 };
 
 /// Statement (its own first and last byte, packed) -> the registers cleared
@@ -1358,6 +1372,32 @@ pub const ClassInfo = struct {
     parent_prologue: ?u32 = null,
 };
 
+/// Rung 4: a class the program holds, as it was before this admission
+/// replaced it (Compiler.class_repl).
+pub const ClassRepl = struct {
+    cid: u16,
+    /// its attributes as its objects hold them, flattened, in slot order
+    attrs: []const []const u8,
+    parent: ?u16,
+    attrs_fn: ?u32,
+    methods: []const u32,
+};
+
+/// Rung 7: a CONSTANT the compiler can hand the installer -- what an
+/// attribute a class gains starts as in the objects made before it. An
+/// integer, a constant of the table (a string or a number), or a list of
+/// them; the installer builds the value once and each object copies it.
+pub const ConstVal = union(enum) {
+    int: i64,
+    konst: i32,
+    list: []const ConstVal,
+};
+
+/// Rung 7: an attribute a replaced class GAINS (Compiler.class_gained) --
+/// its slot, after every attribute the class's objects already hold, and
+/// what it starts as in those objects.
+pub const Gained = struct { cid: u16, slot: u32, val: ConstVal };
+
 /// The function each instruction belongs to: functions are laid out
 /// contiguously, so it is the one with the greatest entry <= pc.
 /// A function never compiled keeps entry 0, which is also @@main's
@@ -1371,8 +1411,11 @@ pub const ClassInfo = struct {
 /// the chain stops at @@main's frame, which is below the trampoline -- and
 /// it showed the day Main() began to be called from the entry in a file
 /// that has no top level at all (2026-09-22).
-fn fnOfTable(alloc: std.mem.Allocator, funcs: []const Func, n: usize, body_end: usize) ![]const u32 {
-    const out = try alloc.alloc(u32, n);
+/// `fn_base`/`code_base` (the resident VM, rung 5): `funcs` is the program's
+/// functions from index fn_base on, and the table covers the code from
+/// code_base on -- an admission's own, which no earlier function reaches.
+pub fn fnOfTable(alloc: std.mem.Allocator, funcs: []const Func, n: usize, body_end: usize, fn_base: usize, code_base: usize) ![]u32 {
+    const out = try alloc.alloc(u32, n - code_base);
     @memset(out, std.math.maxInt(u32));
     // sort function ids by entry
     const ids = try alloc.alloc(u32, funcs.len);
@@ -1386,6 +1429,7 @@ fn fnOfTable(alloc: std.mem.Allocator, funcs: []const Func, n: usize, body_end: 
         const from = funcs[id].entry;
         if (from == std.math.maxInt(u32) or from >= body_end) continue;
         if (!funcs[id].emitted) continue;
+        std.debug.assert(from >= code_base);
         var to: usize = body_end;
         var j = k + 1;
         while (j < ids.len) : (j += 1) {
@@ -1395,9 +1439,71 @@ fn fnOfTable(alloc: std.mem.Allocator, funcs: []const Func, n: usize, body_end: 
                 break;
             }
         }
-        @memset(out[from..to], id);
+        @memset(out[from - code_base .. to - code_base], @intCast(fn_base + id));
     }
     return out;
+}
+
+/// Per function id: its entry and frame size, and THE LOCALS TABLES for
+/// eval (F-72) -- every local's name, register and boxed flag, parameters
+/// first as they sit in r0.., `local_from[id] .. local_from[id + 1]` the
+/// function's own. For the ids from `base` on (the resident VM's delta, rung
+/// 5: `local_from` then counts from that function's first local); 0 for the
+/// whole program.
+pub const FnTables = struct {
+    entry: []u32,
+    frame: []u8,
+    local_from: []u32,
+    local_names: [][]const u8,
+    local_regs: []u8,
+    local_boxed: []bool,
+};
+
+pub fn fnTables(funcs: []const Func, alloc: std.mem.Allocator, base: usize) !FnTables {
+    const fs = funcs[base..];
+    // a whole program's tables have one entry even with no function, as
+    // they always had; a delta with none has none
+    var n: usize = if (base == 0) 1 else 0;
+    for (fs) |f| {
+        std.debug.assert(f.id >= base);
+        n = @max(n, f.id + 1 - base);
+    }
+    const entry = try alloc.alloc(u32, n);
+    @memset(entry, 0);
+    const frame = try alloc.alloc(u8, n);
+    @memset(frame, 0);
+    for (fs) |f| {
+        entry[f.id - base] = f.entry;
+        frame[f.id - base] = f.frame;
+    }
+    const from = try alloc.alloc(u32, n + 1);
+    @memset(from, 0);
+    var total: usize = 0;
+    for (fs) |f| total += f.locals.items.len;
+    const names = try alloc.alloc([]const u8, total);
+    const regs = try alloc.alloc(u8, total);
+    const boxed = try alloc.alloc(bool, total);
+    // functions are appended in id order, but count per id first so a gap
+    // in ids (none expected) cannot misplace a table
+    const per = try alloc.alloc(u32, n);
+    @memset(per, 0);
+    for (fs) |f| per[f.id - base] = @intCast(f.locals.items.len);
+    var acc: u32 = 0;
+    for (0..n) |k| {
+        from[k] = acc;
+        acc += per[k];
+    }
+    from[n] = acc;
+    for (fs) |f| {
+        var at: usize = from[f.id - base];
+        for (f.locals.items) |l| {
+            names[at] = l.name;
+            regs[at] = l.reg;
+            boxed[at] = l.class.boxed();
+            at += 1;
+        }
+    }
+    return .{ .entry = entry, .frame = frame, .local_from = from, .local_names = names, .local_regs = regs, .local_boxed = boxed };
 }
 
 pub const Program = struct {
@@ -1446,6 +1552,20 @@ pub const Program = struct {
     /// the library's top level and then this file's. Null when there was no
     /// prefix, and the single @@main's own trampoline is the entry.
     entry_tramp: ?u32 = null,
+    /// THE RESIDENT VM's DELTA (rung 5): an admission's program is the one
+    /// the VM already runs plus what this compile added, so `fn_of` covers
+    /// the code from `code_base` on, and the per-function tables (fn_entry,
+    /// fn_frame, and the locals tables, whose `fn_local_from` then starts at
+    /// 0) the functions from `fn_base` on. Both 0 for every other compile.
+    /// `body_end` is where the compiled functions stop and the trampolines
+    /// begin (fnOfTable's).
+    fn_base: usize = 0,
+    code_base: usize = 0,
+    body_end: usize = 0,
+    /// Rung 5: the VM's class tables are to be GROWN by the installer, not
+    /// replaced -- and the new classes' names as constants, in class order.
+    grow_classes: bool = false,
+    class_konst_new: []const u32 = &.{},
 
     pub fn find(self: Program, name: []const u8) ?*const Func {
         for (self.funcs) |*f| {
@@ -1467,7 +1587,10 @@ pub const Program = struct {
 const Retired = struct { fi: u32, name: []const u8 };
 
 /// One `obj { ... }` block being compiled: its object register and class.
-const BraceCtx = struct { reg: u8, cid: ?u16 };
+/// `late`: the object of a `new K` compiled before K was admitted (rung 8),
+/// whose class cannot be read here -- a bare name no local or global holds is
+/// its attribute by NAME (R12 when it has none), never C-6's variable.
+const BraceCtx = struct { reg: u8, cid: ?u16, late: bool = false };
 
 /// EVAL MODE (F-72, C-9 revised): the compiler bound to a RUNNING frame.
 ///
@@ -1912,6 +2035,44 @@ pub const Compiler = struct {
     /// The prefix's own @@main -- the LIBRARY's top level. The file compiled
     /// on top gets its own, and the entry runs them in that order.
     prefix_main: ?u32 = null,
+    /// THE RESIDENT VM (`rnxc resident`, compileAdmit): the program is OPEN.
+    /// Code admitted later may call any function admitted now, with any
+    /// argument, so no parameter is typed from the call sites seen so far
+    /// (widenEntryParams widens them all); no top-level name is proved to
+    /// hold one class, since a later top level may assign it another
+    /// (globalClass); and the finish emits trampolines and looks for Main
+    /// among THIS admission's functions only. And no CALLER is typed from a
+    /// callee's return (exprClass, userCall): a function may be replaced
+    /// (rung 3) by a body that answers something else, and code compiled
+    /// against the old answer would hold the new one uncounted.
+    resident: bool = false,
+    /// Rung 3: this admission may REDEFINE functions the program holds
+    /// (`replacefile`, `replacecode`, `rnxc resident --replace`).
+    replacing: bool = false,
+    /// Rung 5: where compileFinish builds the VM's tables and the Program,
+    /// which the resident installer copies out -- the admission's own arena,
+    /// not the live program's, which would keep ~10 MB of them per admission.
+    tables_alloc: ?std.mem.Allocator = null,
+    /// Rung 3: the sites in code ALREADY RUNNING that compileFinish rewrote
+    /// to reach a replacement -- the installer copies them into the VM.
+    repatched: std.ArrayListUnmanaged(u32) = .{},
+    /// Rung 4: the classes this admission REPLACES, each with what its
+    /// objects were laid out for -- collectAll reuses the class's entry, so
+    /// the objects keep their class, and compileAdmit holds the replacement
+    /// to that layout.
+    class_repl: std.ArrayListUnmanaged(ClassRepl) = .{},
+    /// Rung 7: the attributes a replaced class gains, which the installer
+    /// gives the class's existing objects (vm.class_gained).
+    class_gained: std.ArrayListUnmanaged(Gained) = .{},
+    /// Rung 5: the earlier functions this admission marked `called` for the
+    /// first time -- the one flag an admission sets on a function it did not
+    /// add -- so a refused admission is undone without copying every
+    /// function's flags first (49,000 of them at Softanza's size).
+    called_log: std.ArrayListUnmanaged(u32) = .{},
+    /// Rung 5: the running code's `r24` sites by name index, kept by the
+    /// installer as code is admitted, so compileAdmit's new-global refusal
+    /// reads a list instead of every earlier instruction (null: scan).
+    r24_sites: ?*const std.AutoHashMapUnmanaged(u32, std.ArrayListUnmanaged(u32)) = null,
     /// What the poison spread found, handed from the front to the finish.
     spread_direct: usize = 0,
     spread_dyn: usize = 0,
@@ -2096,6 +2257,10 @@ pub const Compiler = struct {
 
     /// Which loaded file a node belongs to, by its source buffer. Cached
     /// on the last answer: statements arrive file by file.
+    pub fn fileOfPub(self: *Compiler, src: [*]const u8) ?u16 {
+        return self.fileOf(src);
+    }
+
     fn fileOf(self: *Compiler, src: [*]const u8) ?u16 {
         // eval'd code belongs to no file: its snippet lives in the scratch
         // arena, and load_srcs is the DRIVER'S table -- arena-owned, and
@@ -4408,6 +4573,29 @@ pub const Compiler = struct {
             _ = try self.emit(.bcall, dst, a0, 3, @intFromEnum(vm.Builtin.substr3));
             return;
         }
+        // The FOURTH signature, substr(s, find, repl, lIgnoreCase) -- a call
+        // to a function nothing defines until 2026-10-30 (R3 when it ran).
+        // Ring's rules for it are the VM's (VM.substrMore). And any other
+        // count is Ring's "Bad parameters count!" at run time, once the
+        // arguments have run, as a C function counts them.
+        if (std.ascii.eqlIgnoreCase(callee, "substr")) {
+            const save2 = self.temp;
+            defer self.temp = save2;
+            const abase = self.temp;
+            var k: u32 = 0;
+            while (k < argc) : (k += 1) {
+                const r = try self.tmp();
+                try self.expr(args.namedChild(k), r);
+            }
+            if (argc == 4) {
+                _ = try self.emit(.bcall, dst, abase, 4, @intFromEnum(vm.Builtin.substr4));
+                return;
+            }
+            const er = try self.tmp();
+            _ = try self.emit(.loadk, er, 0, 0, try self.konstIndex("\"Bad parameters count!\""));
+            _ = try self.emit(.trap, er, 0, 0, 0);
+            return;
+        }
 
         // ---- the general builtin table --------------------------------
         // Name -> id -> one `bcall`. Arity is checked here so a wrong call
@@ -4594,7 +4782,8 @@ pub const Compiler = struct {
             .fidx = self.funcIndex(f),
             .from = self.funcIndex(self.cur),
         });
-        _ = try self.emit(.move, dst, win, if (f.ret.boxed()) 1 else 0, 0);
+        // resident: the callee may be replaced by a body answering anything
+        _ = try self.emit(.move, dst, win, if (f.ret.boxed() or self.resident) 1 else 0, 0);
     }
 
     /// A global's slot if the top level declared one, else null.
@@ -4883,6 +5072,14 @@ pub const Compiler = struct {
     /// billion pointer comparisons before). A pointer from outside the
     /// buffer -- which the old scan would have reached `unreachable` on --
     /// takes the scan and its verdict.
+    /// Rung 3: the function a call to `funcs[i]` runs -- itself, or the last
+    /// body that replaced it (a replacement may be replaced again).
+    pub fn live(self: *const Compiler, i: u32) u32 {
+        var k = i;
+        while (self.funcs.items[k].replaced_by) |r| k = r;
+        return k;
+    }
+
     fn funcIndex(self: *Compiler, f: *Func) u32 {
         scans[4] += 1;
         const base = @intFromPtr(self.funcs.items.ptr);
@@ -5109,10 +5306,14 @@ pub const Compiler = struct {
     /// with the object in `objr`, which `floor` keeps out of every
     /// statement's temporaries -- the same pinning a numeric `for` uses.
     fn braceBlock(self: *Compiler, objr: u8, cid: ?u16, holder: ts.Node, from: u32) Error!void {
+        return self.braceBlockAs(objr, cid, false, holder, from);
+    }
+
+    fn braceBlockAs(self: *Compiler, objr: u8, cid: ?u16, late: bool, holder: ts.Node, from: u32) Error!void {
         const saved_floor = self.floor;
         defer self.floor = saved_floor;
         self.floor = @max(self.floor, objr + 1);
-        try self.braces.append(self.alloc, .{ .reg = objr, .cid = cid });
+        try self.braces.append(self.alloc, .{ .reg = objr, .cid = cid, .late = late });
         defer _ = self.braces.pop();
         try self.braceHook(objr, "bracestart");
         var i: u32 = from;
@@ -5200,7 +5401,7 @@ pub const Compiler = struct {
     /// always an attribute (Rule A), by name when not declared.
     fn braceAttrRead(self: *Compiler, nm: []const u8, dst: u8) Error!bool {
         const b = self.braces.items[self.braces.items.len - 1];
-        if (b.cid == null and !self.anyClassDeclares(nm)) return false; // C-6 revised: a variable
+        if (b.cid == null and !b.late and !self.anyClassDeclares(nm)) return false; // C-6 revised: a variable
         if (b.cid) |cid| {
             if (self.braceAttrSlot(cid, nm)) |slot| {
                 if (!self.hasAccessor(cid, nm, true)) {
@@ -5216,7 +5417,7 @@ pub const Compiler = struct {
     /// The same, written -- plain `=` or a compound form. Same answer.
     fn braceAttrWrite(self: *Compiler, nm: []const u8, op: []const u8, rhs: ts.Node, n: ts.Node) Error!bool {
         const b = self.braces.items[self.braces.items.len - 1];
-        if (b.cid == null and !self.anyClassDeclares(nm)) return false; // C-6 revised: a variable
+        if (b.cid == null and !b.late and !self.anyClassDeclares(nm)) return false; // C-6 revised: a variable
         var slot: ?u32 = null;
         // the proved slot is used only for a read or write no accessor can
         // intercept; either side having one sends both through the name
@@ -5290,6 +5491,94 @@ pub const Compiler = struct {
         _ = try self.emit(.trap, t, 0, 0, 0);
     }
 
+    /// THE RESIDENT VM's LATE `new` (rung 8): `new K` compiled before any
+    /// admission defined K. Ring finds a class by NAME when the line runs,
+    /// so a host compiled first reaches an app's class once the app is
+    /// admitted -- what rung 1's late link gave a function. `newn` finds the
+    /// class by name (VM.name_cls; R11 naming it until one exists, raised
+    /// before the arguments, as absentClass's trap is), `callp` runs its
+    /// attribute prologue, and `init` is called only when the class has one:
+    /// Ring evaluates the arguments of `new K(f())` only then (both 1.27
+    /// builds). Nothing about the class is known here, so in a brace block a
+    /// bare name no local or global holds is the object's attribute by name
+    /// (BraceCtx.late) -- R12 if the class turns out not to have it, where
+    /// C-6 would have made a silent variable. A plain program keeps absentClass: nothing
+    /// can define a class after it is compiled.
+    fn newLate(self: *Compiler, n: ts.Node, cn: ts.Node, dst: u8, early: ?NewEarly) Error!void {
+        const save = self.temp;
+        defer self.temp = save;
+        const ni = try self.nameIndex(cn.text());
+        const objr = try self.tmp();
+        self.atNode(cn);
+        _ = try self.emit(.newn, objr, 0, 0, ni);
+        {
+            const s2 = self.temp;
+            defer self.temp = s2;
+            const win = try self.tmp();
+            _ = try self.emit(.move, win, objr, 1, 0);
+            _ = self.reg(win + 8);
+            self.atNodeStart(n);
+            _ = try self.emit(.callp, win, 0, 0, 0);
+        }
+        if (early) |e| switch (e) {
+            .global => |slot| _ = try self.emit(.gset, objr, 0, 0, slot),
+            .local => |lc| {
+                _ = try self.emit(.move, lc.reg, objr, if (lc.boxed) 1 else 0, 0);
+                self.daWrite(lc.reg);
+            },
+        };
+        var args = ts.Node{ .raw = undefined, .src = n.src };
+        var have = false;
+        var wrote_parens = std.mem.eql(u8, n.kind(), "new_with_parens") or
+            std.mem.indexOfScalar(u8, n.text(), '(') != null;
+        var bfrom: ?u32 = null;
+        var i: u32 = 0;
+        while (i < n.namedChildCount()) : (i += 1) {
+            const ch = n.namedChild(i);
+            const kk = ch.kind();
+            if (std.mem.eql(u8, kk, "arguments")) {
+                args = ch;
+                have = true;
+            } else if (std.mem.eql(u8, kk, "call_expression")) {
+                wrote_parens = true;
+                var j: u32 = 0;
+                while (j < ch.namedChildCount()) : (j += 1) {
+                    if (std.mem.eql(u8, ch.namedChild(j).kind(), "arguments")) {
+                        args = ch.namedChild(j);
+                        have = true;
+                    }
+                }
+            } else if (!(std.mem.eql(u8, kk, "qualified_identifier") or std.mem.eql(u8, kk, "identifier"))) {
+                if (bfrom == null) bfrom = i;
+            }
+        }
+        if (have or wrote_parens) {
+            const argc: u32 = if (have) args.namedChildCount() else 0;
+            const s2 = self.temp;
+            defer self.temp = s2;
+            const t = try self.tmp();
+            const a0 = try self.tmp();
+            const a1 = try self.tmp();
+            _ = try self.emit(.move, a0, objr, 1, 0);
+            _ = try self.emit(.loadk, a1, 0, 0, try self.konstIndex("\"init\""));
+            _ = try self.emit(.bcall, t, a0, 2, @intFromEnum(vm.Builtin.ismethod));
+            const no_init = try self.emit(.jfalsy, t, 0, 0, 0);
+            self.temp = t;
+            const win = try self.tmp();
+            _ = try self.emit(.move, win, objr, 1, 0);
+            var a: u32 = 0;
+            while (a < argc) : (a += 1) {
+                const r = try self.tmp();
+                try self.expr(args.namedChild(a), r);
+            }
+            _ = self.reg(win + @as(u8, @intCast(argc)) + 8);
+            _ = try self.emit(.callm, win, @intCast(argc), 0, try self.nameIndex("init"));
+            self.land(no_init);
+        }
+        if (bfrom) |f| try self.braceBlockAs(objr, null, true, n, f);
+        _ = try self.emit(.move, dst, objr, 1, 0);
+    }
+
     fn newObj(self: *Compiler, n: ts.Node, dst: u8) Error!void {
         // taken on entry: a `new` nested in the arguments must not see it
         const early = self.new_early;
@@ -5299,8 +5588,11 @@ pub const Compiler = struct {
         if (std.mem.eql(u8, cn.kind(), "call_expression")) cn = cn.namedChild(0);
         // A class the unit does not define: Ring raises R11 ("class not
         // found") when the line RUNS -- catchable, and invisible until then.
-        // See absentClass.
-        const ci = self.findClass(cn.text()) orelse return self.absentClass(cn);
+        // See absentClass. A resident program may still be given it (newLate).
+        const ci = self.findClass(cn.text()) orelse {
+            if (self.resident) return self.newLate(n, cn, dst, early);
+            return self.absentClass(cn);
+        };
 
         const save = self.temp;
         defer self.temp = save;
@@ -5507,6 +5799,9 @@ pub const Compiler = struct {
     /// assignment to it in `@@main` -- inside blocks too -- is `new K`
     /// of the same K. One disagreeing or non-`new` assignment is null.
     fn globalClass(self: *Compiler, name: []const u8) ?u16 {
+        // resident: an earlier top level assigned it, and a later one may
+        // assign it something else (Compiler.resident)
+        if (self.resident) return null;
         var buf: [256]u8 = undefined;
         if (name.len > buf.len) return null;
         const key = std.ascii.lowerString(&buf, name);
@@ -8215,6 +8510,360 @@ pub fn compileOnto(c: *Compiler, roots: []const ts.Node, start: u32, alloc: std.
     return compileFinish(c, alloc);
 }
 
+/// THE RESIDENT VM, RUNG 5: THE PROGRAM KEPT ALIVE. Between admissions the
+/// program is the fields prefix.encode writes -- and the indexes over them --
+/// held by one long-lived compiler. Each admission compiles in a FRESH
+/// compiler with these moved in (takeProgram), so everything per-admission
+/// starts empty as it did when the program was restored from bytes, and
+/// moves them back out afterwards. Restoring and saving the whole program
+/// cost a small admission ~40 ms at Softanza's size, two thirds of it.
+pub fn takeProgram(dst: *Compiler, src: *Compiler) void {
+    dst.code = src.code;
+    dst.rows = src.rows;
+    dst.files = src.files;
+    dst.fixups = src.fixups;
+    dst.names = src.names;
+    dst.name_index = src.name_index;
+    dst.globals = src.globals;
+    dst.natives = src.natives;
+    dst.konst = src.konst;
+    dst.konst_index = src.konst_index;
+    dst.funcs = src.funcs;
+    dst.classes = src.classes;
+    dst.global_cls = src.global_cls;
+    dst.fn_index = src.fn_index;
+    dst.fn_indexed = src.fn_indexed;
+    dst.stmts_ok = src.stmts_ok;
+    dst.stmts_bad = src.stmts_bad;
+    dst.stmts_native = src.stmts_native;
+    dst.spread_direct = src.spread_direct;
+    dst.spread_dyn = src.spread_dyn;
+    dst.prefix_main = src.prefix_main;
+    dst.prefix_funcs = src.prefix_funcs;
+    dst.prefix_classes = src.prefix_classes;
+    dst.prefix_code = src.prefix_code;
+    dst.prefix_fixups = src.prefix_fixups;
+    dst.main_fn = null;
+}
+
+/// Where the program stood before an admission, so a REFUSED one can be
+/// undone (rollbackProgram). Everything an admission adds is appended past
+/// these lengths; the few things it changes in place are copied: every
+/// earlier class entry (a replacement reuses one, rung 4) and three flags
+/// of every earlier function. `RNXC_RESIDENT_CHECK=1` proves the undo
+/// complete by the bytes: the program saved before a refused admission and
+/// after it must be equal (rnxc.zig, residentAdmit).
+pub const Marks = struct {
+    code: usize,
+    fixups: usize,
+    names: usize,
+    globals: usize,
+    konst: usize,
+    funcs: usize,
+    classes: usize,
+    classes_copy: []ClassInfo,
+    /// the native names the program calls: the compile's second pass clears
+    /// the list WHOLE and refills it with this admission's own, so a refused
+    /// one is undone by putting the copy back (RNXC_RESIDENT_CHECK found it)
+    natives_copy: []u16,
+    counters: [5]usize,
+    prefix_main: ?u32,
+};
+
+pub fn markProgram(c: *Compiler, alloc: std.mem.Allocator) !Marks {
+    c.called_log.clearRetainingCapacity();
+    return .{
+        .code = c.code.items.len,
+        .fixups = c.fixups.items.len,
+        .names = c.names.items.len,
+        .globals = c.globals.items.len,
+        .konst = c.konst.items.len,
+        .funcs = c.funcs.items.len,
+        .classes = c.classes.items.len,
+        .classes_copy = try alloc.dupe(ClassInfo, c.classes.items),
+        .natives_copy = try alloc.dupe(u16, c.natives.items),
+        .counters = .{ c.stmts_ok, c.stmts_bad, c.stmts_native, c.spread_direct, c.spread_dyn },
+        .prefix_main = c.prefix_main,
+    };
+}
+
+/// A refused admission, undone: the indexes first, while the entries they
+/// name are still there, then every list cut back to its mark and every
+/// copied entry put back. Appending never moves what was there before (an
+/// arena never reuses a buffer it handed out, short of the last one), so a
+/// copied ClassInfo's lists still describe their old contents.
+pub fn rollbackProgram(c: *Compiler, m: *const Marks) void {
+    var buf: [512]u8 = undefined;
+    for (c.names.items[m.names..]) |nm| {
+        if (nm.len > buf.len) continue;
+        _ = c.name_index.remove(std.ascii.lowerString(buf[0..nm.len], nm));
+    }
+    for (c.konst.items[m.konst..], m.konst..) |v, i| {
+        if (v.tag != .str) continue;
+        const k = v.p.s.ptr[0..v.p.s.len];
+        if (c.konst_index.get(k)) |ix| {
+            if (ix == @as(i32, @intCast(i))) _ = c.konst_index.remove(k);
+        }
+    }
+    var fi = m.funcs;
+    while (fi < c.fn_indexed) : (fi += 1) {
+        const nm = c.funcs.items[fi].name;
+        if (nm.len > buf.len) continue;
+        const k = std.ascii.lowerString(buf[0..nm.len], nm);
+        if (c.fn_index.get(k)) |ix| {
+            if (ix == fi) _ = c.fn_index.remove(k);
+        }
+    }
+    c.fn_indexed = @min(c.fn_indexed, m.funcs);
+    c.code.shrinkRetainingCapacity(m.code);
+    c.rows.shrinkRetainingCapacity(m.code);
+    c.files.shrinkRetainingCapacity(m.code);
+    c.fixups.shrinkRetainingCapacity(m.fixups);
+    c.names.shrinkRetainingCapacity(m.names);
+    c.globals.shrinkRetainingCapacity(m.globals);
+    c.natives.clearRetainingCapacity();
+    c.natives.appendSlice(c.alloc, m.natives_copy) catch @panic("oom");
+    c.konst.shrinkRetainingCapacity(m.konst);
+    c.funcs.shrinkRetainingCapacity(m.funcs);
+    c.classes.shrinkRetainingCapacity(m.classes);
+    // (a release passes none: it touches no class, rnxc.zig ReleaseRec)
+    if (m.classes_copy.len == c.classes.items.len) @memcpy(c.classes.items, m.classes_copy);
+    // the one flag an admission sets on an earlier function; poison is never
+    // spread in a resident program (compileFrontAfterCollect)
+    for (c.called_log.items) |gi| c.funcs.items[gi].called = false;
+    c.stmts_ok = @intCast(m.counters[0]);
+    c.stmts_bad = @intCast(m.counters[1]);
+    c.stmts_native = m.counters[2];
+    c.spread_direct = m.counters[3];
+    c.spread_dyn = m.counters[4];
+    c.prefix_main = m.prefix_main;
+}
+
+/// Why the last admission was refused (compileAdmit), for rnxc to print.
+/// When it is refused statements, `c.refusals` lists them.
+pub var admit_why: []const u8 = "";
+/// The last admission's compile, in four (RNXC_ADMIT_PHASES): collecting the
+/// file's definitions, resolving every class's slots, the front (classify
+/// and emit), and the finish (patching, the VM's tables).
+pub var admit_ns: [4]u64 = .{0} ** 4;
+var admit_buf: [512]u8 = undefined;
+
+/// THE RESIDENT VM'S ADMISSION (`rnxc resident`). One file -- and whatever
+/// it loads that the program does not already hold -- compiled ON TOP of
+/// everything admitted before it, which the caller restored into `c` from
+/// the resident state (prefix.decode). It is the prefix's compileOnto with
+/// the program kept OPEN (Compiler.resident) and four refusals, each asked
+/// before compileFinish writes a single table the VM reads:
+///
+///   1. a function it defines is ALREADY DEFINED. Ring raises C22 for a
+///      function defined twice; replacing a function the program is running
+///      is asked for by name (Compiler.replacing, rung 3), never a side
+///      effect of an admission. A replacement keeps the parameter count, and
+///      a replacing admission that replaces nothing is refused.
+///   2. it defines a CLASS THE PROGRAM HOLDS (Ring: C26). A class new to
+///      the program is admitted, from a class admitted before it too (rung
+///      4); one it holds is replaced only by name, and only keeping what its
+///      objects were made for -- attributes, parent, code at `new`, init,
+///      parameter counts (see the class_repl checks).
+///   3. a statement DOES NOT COMPILE. The whole file is refused, not the
+///      statement: a program that holds half a file is a program nobody
+///      wrote.
+///   4. a global its top level creates is a name an ADMITTED FUNCTION reads
+///      as an unassigned local. On Ring that function would read the new
+///      global from now on; under Rule A a function never reads a top-level
+///      name bare, so the file that would change its meaning is refused --
+///      the same answer a whole-unit compile gives the function.
+///
+/// What it does NOT refuse: a function an admitted one already CALLS by
+/// name. That call was compiled as a native call to a name nothing defined
+/// (R3 when it runs); from this admission on it reaches the function (the
+/// VM's `name_fn`), which is Ring's run-time lookup and what lets a library
+/// split over several files be admitted one file at a time.
+///
+/// What a REPLACEMENT does (rung 3): the new body is a function of its own,
+/// and the one it replaces keeps its entry, frame and locals -- the frames
+/// still running the old body execute that code and are described by them.
+/// Every way of reaching the old one is pointed at the new: the static call
+/// sites (fixups, the running code's among them: `repatched`), its
+/// trampoline, and by name (Func.replaced_by, read through Compiler.live by
+/// the installer's name_fn and the VM's fn_live).
+///
+/// On Error.Refused the caller discards `c` with its arena: the running
+/// program never saw this file.
+pub fn compileAdmit(c: *Compiler, roots: []const ts.Node, start: u32, alloc: std.mem.Allocator) Error!Program {
+    last_fail = .{};
+    admit_why = "";
+    c.resident = true;
+    c.census = true;
+    c.lenient = true;
+    c.prefix_main = null;
+    c.main_fn = null;
+    const old_globals = c.globals.items.len;
+    const old_names = c.names.items.len;
+    admit_ns = .{0} ** 4;
+    var at = std.time.Timer.start() catch unreachable;
+    for (roots[start..]) |r| try collectAll(c, r, alloc);
+    admit_ns[0] = at.lap();
+    try resolveAllSlots(c, alloc);
+    admit_ns[1] = at.lap();
+    if (roots.len - start > 1) try spliceMain(c, roots, start, alloc);
+
+    // 1. already defined -- or, replacing (rung 3), what it replaces. A
+    // replacement keeps the parameter count: every call site compiled
+    // against the old function passes that many, and a static call is not
+    // counted at run time.
+    var pairs = std.ArrayListUnmanaged([2]u32){};
+    for (c.funcs.items[c.prefix_funcs..], c.prefix_funcs..) |*f, fi| {
+        if (f.owner != null or f.lambda_at != null) continue;
+        if (std.mem.startsWith(u8, f.name, "@@")) continue;
+        const g = c.findFunc(f.name) orelse continue;
+        const gi = c.funcIndex(g);
+        if (gi >= c.prefix_funcs) continue;
+        if (!c.replacing) {
+            admit_why = std.fmt.bufPrint(&admit_buf, "function {s} is already defined (Ring: C22); replacefile and replacecode replace a running function", .{f.name}) catch "a function is already defined";
+            return Error.Refused;
+        }
+        const was = &c.funcs.items[c.live(gi)];
+        if (was.params.len != f.params.len) {
+            admit_why = std.fmt.bufPrint(&admit_buf, "function {s} takes {d} parameter(s) and its replacement {d}: the running program's calls pass {d}", .{ f.name, was.params.len, f.params.len, was.params.len }) catch "a replacement changes a parameter count";
+            return Error.Refused;
+        }
+        // defined twice in the file: the first is taken, as a whole unit takes it
+        const dup = for (pairs.items) |p| {
+            if (p[0] == gi) break true;
+        } else false;
+        if (!dup) try pairs.append(alloc, .{ gi, @intCast(fi) });
+    }
+    // 2. a class the program holds, defined again (Ring: C26). Replacing
+    // reused its entry in collectAll, so a NEW entry of a held name is a
+    // plain redefinition; a class new to the program is admitted (rung 4).
+    for (c.classes.items[c.prefix_classes..]) |*ci| {
+        for (c.classes.items[0..c.prefix_classes]) |*pc| {
+            if (!std.ascii.eqlIgnoreCase(pc.name, ci.name)) continue;
+            admit_why = std.fmt.bufPrint(&admit_buf, "class {s} is already defined (Ring: C26); replacefile and replacecode replace a class the program holds", .{ci.name}) catch "a class is already defined";
+            return Error.Refused;
+        }
+    }
+    // ...and a class NEW to the program that a class admitted earlier named
+    // as its parent: that class was laid out without one, its methods
+    // compiled for those slots, and its objects would not take this one's
+    // attributes (rung 5: an earlier class is never laid out again)
+    for (c.classes.items[c.prefix_classes..]) |*nc| {
+        for (c.classes.items[0..c.prefix_classes]) |*oc| {
+            if (oc.parent != null or oc.parent_name.len == 0 or !std.ascii.eqlIgnoreCase(oc.parent_name, nc.name)) continue;
+            admit_why = std.fmt.bufPrint(&admit_buf, "class {s}: class {s}, admitted earlier, names it as its parent and was laid out without one", .{ nc.name, oc.name }) catch "a class an earlier one names as its parent";
+            return Error.Refused;
+        }
+    }
+    // ...and a class REPLACED (rung 4) keeps what its objects were made
+    // for: the same attributes in the same slots, the same parent, code at
+    // `new` exactly where there was (an old `new K` site calls the prologue
+    // or does not), an `init` where `new K()` compiled one in, and each
+    // method's parameter count (every call was written for it, and a
+    // `super.M()` is bound statically and counted at compile time). Its
+    // methods are then paired with the ones they replace -- which re-points
+    // a `super.M()`; every other method call dispatches by name, and a
+    // method of the replacement is later in the class's list, so it wins
+    // the dispatch -- and its prologue with the old one.
+    for (c.class_repl.items) |r| {
+        const oc = &c.classes.items[r.cid];
+        // the attributes its objects hold, in their slots, under the same
+        // parent -- and (rung 7) any it GAINS after them (gainAttrs)
+        var kept = oc.attrs.items.len >= r.attrs.len and oc.parent == r.parent;
+        if (kept) for (oc.attrs.items[0..r.attrs.len], r.attrs) |a, b| {
+            if (!std.ascii.eqlIgnoreCase(a.name, b)) kept = false;
+        };
+        if (!kept) {
+            admit_why = std.fmt.bufPrint(&admit_buf, "class {s}: its objects hold {d} attribute(s) laid out under {s}; the replacement lays out {d} under {s} -- a replacement keeps the attributes, their order and the parent, and may add attributes after them", .{ oc.name, r.attrs.len, if (r.parent) |p| c.classes.items[p].name else "no parent", oc.attrs.items.len, if (oc.parent) |p| c.classes.items[p].name else "no parent" }) catch "a replaced class changes its layout";
+            return Error.Refused;
+        }
+        if (oc.attrs.items.len > r.attrs.len) {
+            if (try gainAttrs(c, alloc, oc, r)) |why| {
+                admit_why = why;
+                return Error.Refused;
+            }
+        }
+        if ((oc.attrs_fn != null) != (r.attrs_fn != null)) {
+            admit_why = std.fmt.bufPrint(&admit_buf, "class {s}: the replacement {s} code at `new` (initial values, class-region statements) where the class {s}; a `new {s}` compiled for the old class would not", .{ oc.name, if (oc.attrs_fn != null) "runs" else "runs no", if (r.attrs_fn != null) "ran some" else "ran none", oc.name }) catch "a replaced class changes its code at new";
+            return Error.Refused;
+        }
+        if (!classHasInit(c, oc.parent, r.methods) and classHasInit(c, oc.parent, oc.methods.items)) {
+            admit_why = std.fmt.bufPrint(&admit_buf, "class {s}: the replacement adds an init where the class had none; a `new {s}()` compiled for the old class calls none", .{ oc.name, oc.name }) catch "a replaced class adds an init";
+            return Error.Refused;
+        }
+        for (oc.methods.items) |mi| {
+            if (mi < c.prefix_funcs) continue;
+            const m = &c.funcs.items[mi];
+            for (r.methods) |oi| {
+                const om = &c.funcs.items[c.live(oi)];
+                if (!std.ascii.eqlIgnoreCase(om.name, m.name)) continue;
+                if (declaredArity(om) != declaredArity(m)) {
+                    admit_why = std.fmt.bufPrint(&admit_buf, "method {s}.{s} takes {d} parameter(s) and its replacement {d}: the running program's calls pass {d}", .{ oc.name, m.name, declaredArity(om), declaredArity(m), declaredArity(om) }) catch "a replacement changes a parameter count";
+                    return Error.Refused;
+                }
+                const dup = for (pairs.items) |p| {
+                    if (p[0] == oi) break true;
+                } else false;
+                if (!dup) try pairs.append(alloc, .{ oi, mi });
+                break;
+            }
+        }
+        if (r.attrs_fn) |ofn| try pairs.append(alloc, .{ ofn, oc.attrs_fn.? });
+    }
+    // replacing, and nothing replaced: a misspelt name would ADD a function
+    // and leave the old one running -- the wrong answer, given quietly
+    if (c.replacing and pairs.items.len == 0 and c.class_repl.items.len == 0) {
+        admit_why = "it replaces nothing: no function or class it defines is in the program (admitfile and admitcode add new ones)";
+        return Error.Refused;
+    }
+
+    _ = at.lap();
+    try compileFrontAfterCollect(c, alloc);
+    admit_ns[2] = at.lap();
+
+    // 3. a statement that does not compile
+    if (c.stmts_bad > 0 or c.emit_failed > 0) {
+        admit_why = std.fmt.bufPrint(&admit_buf, "{d} statement(s) do not compile", .{c.stmts_bad + c.emit_failed}) catch "a statement does not compile";
+        return Error.Refused;
+    }
+    // 4. a new global that an admitted function reads as unassigned. The
+    // read is an `r24` naming it, emitted where a function reads a name
+    // nothing assigns; a name the program had never mentioned has no such
+    // read, so only names older than this admission are looked for.
+    for (c.globals.items[old_globals..]) |gname| {
+        var buf: [256]u8 = undefined;
+        if (gname.len > buf.len) continue;
+        const ni = c.name_index.get(std.ascii.lowerString(&buf, gname)) orelse continue;
+        if (ni >= old_names) continue;
+        // the running code's `r24` sites for this name: the installer's
+        // index when it keeps one (rung 5), else every earlier instruction
+        const listed: ?[]const u32 = if (c.r24_sites) |ix| (if (ix.get(ni)) |l| l.items else &.{}) else null;
+        var k: usize = 0;
+        const n_sites = if (listed) |l| l.len else c.prefix_code;
+        while (k < n_sites) : (k += 1) {
+            const pc = if (listed) |l| l[k] else k;
+            const in = c.code.items[pc];
+            if (in.op != .r24 or in.d != @as(i32, @intCast(ni))) continue;
+            // the admitted function holding it: the last entry at or below
+            var owner: ?*Func = null;
+            for (c.funcs.items[0..c.prefix_funcs]) |*f| {
+                if (!f.emitted or f.entry > pc) continue;
+                if (owner == null or f.entry > owner.?.entry) owner = f;
+            }
+            const o = owner orelse continue;
+            if (o.is_main) continue; // a top level that already ran
+            admit_why = std.fmt.bufPrint(&admit_buf, "global {s}: the admitted function {s} reads {s} as an unassigned local, and a global of that name would change what it reads (Rule A)", .{ gname, o.name, gname }) catch "a new global changes an admitted function";
+            return Error.Refused;
+        }
+    }
+    // admitted: from here every call to a replaced function -- the sites
+    // already running included (compileFinish) -- goes to the new body
+    for (pairs.items) |p| c.funcs.items[c.live(p[0])].replaced_by = p[1];
+    const prog = try compileFinish(c, alloc);
+    admit_ns[3] = at.lap();
+    return prog;
+}
+
 /// THE TWO WAYS A FILE CAN MEAN SOMETHING DIFFERENT ON TOP OF A PREFIX than
 /// it would in a whole-unit compile. Both are about NAMES, and both are
 /// checked after this file's definitions are collected and before a single
@@ -8365,8 +9014,10 @@ fn compileFrontAfterCollect(c: *Compiler, alloc: std.mem.Allocator) Error!void {
     // would have committed them on the way up anyway.
     {
         var nstmt: usize = 0;
-        for (c.funcs.items) |f| nstmt += f.stmts.items.len;
-        const guess = nstmt * 12 + 1024;
+        // resident (rung 5): an admission's own functions, on top of the code
+        // the program already holds -- not a walk over every function
+        for (c.funcs.items[if (c.resident) c.prefix_funcs else 0..]) |f| nstmt += f.stmts.items.len;
+        const guess = (if (c.resident) c.code.items.len else 0) + nstmt * 12 + 1024;
         c.code.ensureTotalCapacity(alloc, guess) catch {};
         c.rows.ensureTotalCapacity(alloc, guess) catch {};
         c.files.ensureTotalCapacity(alloc, guess) catch {};
@@ -8467,34 +9118,222 @@ fn compileFrontAfterCollect(c: *Compiler, alloc: std.mem.Allocator) Error!void {
     // everything, because a file compiled on top can be poisoned by what the
     // library could not compile.
     c.spread_direct += direct;
-    c.spread_dyn = spreadPoison(c);
+    // Resident (rung 5): a program admits a file whole or not at all, so it
+    // holds no poisoned function and an admission that lost a statement is
+    // refused -- the walk over every function and call site the spread makes
+    // would find nothing, or poison what the refusal throws away.
+    c.spread_dyn = if (c.resident) 0 else spreadPoison(c);
+}
+
+/// A static call site made to reach `funcs[fi]`: its frame, its mask and its
+/// entry. `c` is 8 bits and carries the mask index. A function id past the
+/// 64-slot table has no mask to name, so it stores NO_MASK -- and the VM
+/// sweeps that frame WHOLE on return. It used to store 0, which names
+/// function 0's mask and, for a program of more than 64 functions, meant
+/// every return swept nothing at all.
+fn patchCall(c: *Compiler, site: u32, fi: u32) void {
+    const f = &c.funcs.items[fi];
+    c.code.items[site].b = f.frame;
+    c.code.items[site].c = if (f.id < vm.fn_masks.len) @intCast(f.id) else vm.NO_MASK;
+    c.code.items[site].d = @intCast(f.entry);
+}
+
+/// The object model's tables, built whole for every class -- a program's
+/// compile, a resident program's first classes, and RNXC_RESIDENT_CHECK's
+/// proof that the grown tables are these. `nnm` is the dispatch rows' width.
+pub const ClassTables = struct {
+    dispatch: []u32,
+    method_tab: []vm.MethodEnt,
+    class_slots: []u32,
+    attr_from: []u32,
+    attr_ent: []vm.AttrEnt,
+    class_konst: []u32,
+    class_parent: []u16,
+};
+
+pub fn buildClassTables(c: *Compiler, talloc: std.mem.Allocator, nnm: usize) Error!ClassTables {
+    const ncls = c.classes.items.len;
+    const tab = try talloc.alloc(u32, ncls * nnm);
+    @memset(tab, 0);
+    var mt = std.ArrayListUnmanaged(vm.MethodEnt){};
+    for (c.classes.items) |ci| {
+        for (ci.methods.items) |mi| {
+            try mt.append(talloc, methodEnt(&c.funcs.items[mi]));
+            tab[@as(usize, ci.id) * nnm + c.funcs.items[mi].name_idx] = @intCast(mt.items.len);
+        }
+    }
+    // A child inherits every method its parent defines and does not
+    // override -- resolved here, once, rather than walked at every call.
+    for (c.classes.items) |ci| {
+        var p = ci.parent;
+        while (p) |pid| {
+            const par = c.classes.items[pid];
+            var nm: usize = 0;
+            while (nm < nnm) : (nm += 1) {
+                const dstv = @as(usize, ci.id) * nnm + nm;
+                if (tab[dstv] == 0) tab[dstv] = tab[@as(usize, par.id) * nnm + nm];
+            }
+            p = par.parent;
+        }
+    }
+    const cs = try talloc.alloc(u32, ncls);
+    for (c.classes.items, 0..) |ci, ix| cs[ix] = @intCast(ci.attrs.items.len);
+
+    // Attribute name -> slot per class, for the run-time path. Own
+    // attributes first, then each ancestor's that the class did not
+    // redeclare -- the same walk the dispatch table makes for methods.
+    var ents = std.ArrayListUnmanaged(vm.AttrEnt){};
+    const from = try talloc.alloc(u32, ncls + 1);
+    for (0..ncls) |ix| {
+        from[ix] = @intCast(ents.items.len);
+        try classAttrEnts(c, talloc, @intCast(ix), &ents, from[ix]);
+    }
+    from[ncls] = @intCast(ents.items.len);
+
+    // Each class's lowercased name, as a constant, so `clsname` is a
+    // table read at run time. Built here rather than lazily because
+    // `konst` is handed to the VM straight after and must be final.
+    const ck = try talloc.alloc(u32, ncls);
+    for (c.classes.items, 0..) |ci, ix| ck[ix] = @intCast(try c.classNameKonst(ci.name));
+
+    // Reflection's two facts the dispatch table cannot say: a class's
+    // PARENT, and the class that DEFINES each function (buildFnOwner).
+    // `methods(o)` lists a class's own methods in definition order before
+    // its parent's, as Ring does, and needs both (2026-09-23).
+    const cp = try talloc.alloc(u16, ncls);
+    for (c.classes.items, 0..) |ci, ix| cp[ix] = if (ci.parent) |pp| @intCast(pp) else 0xFFFF;
+    return .{ .dispatch = tab, .method_tab = try mt.toOwnedSlice(talloc), .class_slots = cs, .attr_from = from, .attr_ent = try ents.toOwnedSlice(talloc), .class_konst = ck, .class_parent = cp };
+}
+
+/// A method's dispatch entry: where it starts, its frame, its mask and the
+/// parameter count a call is checked against.
+pub fn methodEnt(f: *const Func) vm.MethodEnt {
+    const mmid: u8 = if (f.id < vm.fn_masks.len) @intCast(f.id) else vm.NO_MASK;
+    const ar = declaredArity(f);
+    const np: u8 = if (ar < vm.unchecked_arity) @intCast(ar) else vm.unchecked_arity;
+    return .{ .entry = f.entry, .frame = f.frame, .id = mmid, .nparams = np };
+}
+
+/// One class's attribute entries: its own, then each ancestor's that it did
+/// not redeclare. `from` is where its entries begin in `ents`.
+pub fn classAttrEnts(c: *Compiler, alloc: std.mem.Allocator, cid: u32, ents: *std.ArrayListUnmanaged(vm.AttrEnt), from: u32) Error!void {
+    const ci = c.classes.items[cid];
+    for (ci.attrs.items) |a| {
+        try ents.append(alloc, .{ .name = try c.nameIndex(a.name), .slot = a.slot });
+    }
+    var p = ci.parent;
+    while (p) |pid| {
+        for (c.classes.items[pid].attrs.items) |a| {
+            const ni = try c.nameIndex(a.name);
+            var have = false;
+            var q = from;
+            while (q < ents.items.len) : (q += 1) {
+                if (ents.items[q].name == ni) have = true;
+            }
+            if (!have) try ents.append(alloc, .{ .name = ni, .slot = a.slot });
+        }
+        p = c.classes.items[pid].parent;
+    }
+}
+
+/// The class that defines each function, 0xFFFF for a plain one.
+/// THE LATE `new`'s TABLE (VM.name_cls, rung 8): by name index, the class
+/// the program holds under that name -- Ring folds the case of a class name
+/// -- or vm.NO_CLS for every other. Each class's name is looked up in the
+/// name index, which reaches both a new class and a new name that names an
+/// old one, so the installer runs it whole when an admission added either
+/// (a few hundred lookups at Softanza's size); RNXC_RESIDENT_CHECK runs it
+/// on a fresh table.
+pub fn lateClasses(c: *Compiler, out: []u32) void {
+    var buf: [256]u8 = undefined;
+    for (c.classes.items) |ci| {
+        if (ci.name.len == 0 or ci.name.len > buf.len) continue;
+        const ni = c.name_index.get(std.ascii.lowerString(&buf, ci.name)) orelse continue;
+        if (ni < out.len) out[ni] = ci.id;
+    }
+}
+
+pub fn buildFnOwner(c: *Compiler, alloc: std.mem.Allocator) Error![]u16 {
+    const fo = try alloc.alloc(u16, c.funcs.items.len);
+    for (c.funcs.items, 0..) |f, ix| fo[ix] = if (f.owner) |o| o else 0xFFFF;
+    return fo;
+}
+
+/// RING'S AUTOMATIC GETTERS AND SETTERS (F-73): `o.x` calls getx() and
+/// `o.x = v` calls setx(v) when the object's class has them. Per attribute
+/// NAME, the name index of `get<name>` and `set<name>`, or NONE -- so the VM
+/// asks one table and one dispatch cell, and a name no class ever pairs
+/// with an accessor costs a single load.
+pub fn buildAccessors(c: *Compiler, alloc: std.mem.Allocator) Error![2][]u32 {
+    const nn = c.names.items.len;
+    const ag = try alloc.alloc(u32, nn);
+    const as = try alloc.alloc(u32, nn);
+    @memset(ag, vm.ACC_NONE);
+    @memset(as, vm.ACC_NONE);
+    for (c.names.items, 0..) |nm, i| accessorOf(c, nm, @intCast(i), ag, as);
+    return .{ ag, as };
+}
+
+/// One name's part in the accessor tables: when it is `get<k>` or `set<k>`
+/// and k is a name, k's entry names it. Names are unique in any case, so no
+/// entry is written twice.
+pub fn accessorOf(c: *Compiler, nm: []const u8, i: u32, ag: []u32, as: []u32) void {
+    var buf: [256]u8 = undefined;
+    if (nm.len <= 3 or nm.len > buf.len) return;
+    const is_get = std.ascii.eqlIgnoreCase(nm[0..3], "get");
+    if (!is_get and !std.ascii.eqlIgnoreCase(nm[0..3], "set")) return;
+    const key = std.ascii.lowerString(&buf, nm[3..]);
+    const ai = c.name_index.get(key) orelse return;
+    if (ai >= ag.len) return;
+    if (is_get) ag[ai] = i else as[ai] = i;
 }
 
 fn compileFinish(c: *Compiler, alloc: std.mem.Allocator) Error!Program {
+    // the VM's tables and the Program the installer copies: the resident VM
+    // builds them in the admission's own arena (rung 5), the program's lists
+    // stay in c.alloc
+    const talloc = c.tables_alloc orelse alloc;
     const direct = c.spread_direct;
     const dyn = c.spread_dyn;
     var entry_tramp: ?u32 = null;
     const ranking: Ranking = if (c.rank)
-        try rankPoison(c, alloc, 30)
+        try rankPoison(c, talloc, 30)
     else
         .{};
 
     // ---- patch every call site ----------------------------------------
-    for (c.fixups.items) |fx| {
-        const f = &c.funcs.items[fx.fidx];
-        c.code.items[fx.site].b = f.frame;
-        // `c` is 8 bits and carries the mask index. A function id past the
-        // 64-slot table has no mask to name, so it stores NO_MASK -- and the
-        // VM sweeps that frame WHOLE on return. It used to store 0, which
-        // names function 0's mask and, for a program of more than 64
-        // functions, meant every return swept nothing at all.
-        c.code.items[fx.site].c = if (f.id < vm.fn_masks.len) @intCast(f.id) else vm.NO_MASK;
-        c.code.items[fx.site].d = @intCast(f.entry);
+    // Resident: the earlier admissions' sites were patched when they were
+    // admitted, and their code is already in the running VM.
+    const from_fx: usize = if (c.resident) c.prefix_fixups else 0;
+    const from_fn: usize = if (c.resident) c.prefix_funcs else 0;
+    // Rung 3: a site already running whose callee this admission REPLACED
+    // is patched too, and named for the installer; so is that callee's own
+    // trampoline. A static call carries its callee's entry, frame and mask,
+    // and those are the replacement's from now on -- the frames already in
+    // the old body recorded the old ones when they were entered.
+    // Only an admission that replaces can have re-pointed an old site, so
+    // only it walks every earlier call site and function (rung 5).
+    c.repatched.clearRetainingCapacity();
+    if (c.replacing) {
+        for (c.fixups.items[0..from_fx]) |fx| {
+            const li = c.live(fx.fidx);
+            if (li < from_fn) continue;
+            patchCall(c, fx.site, li);
+            try c.repatched.append(c.alloc, fx.site);
+        }
+        for (c.funcs.items[0..from_fn], 0..) |*g, gi| {
+            if (!g.emitted or g.replaced_by == null) continue;
+            const li = c.live(@intCast(gi));
+            if (li < from_fn) continue;
+            patchCall(c, g.tramp, li);
+            try c.repatched.append(c.alloc, g.tramp);
+        }
     }
+    for (c.fixups.items[from_fx..]) |fx| patchCall(c, fx.site, c.live(fx.fidx));
 
     // ---- trampolines: one per function, so a host can call in ---------
     const body_end = c.here();
-    for (c.funcs.items) |*f| {
+    for (c.funcs.items[from_fn..]) |*f| {
         f.tramp = c.here();
         const mid: u8 = if (f.id < vm.fn_masks.len) @intCast(f.id) else vm.NO_MASK;
         _ = try c.emit(.call, 0, f.frame, mid, @intCast(f.entry));
@@ -8529,13 +9368,23 @@ fn compileFinish(c: *Compiler, alloc: std.mem.Allocator) Error!Program {
     //
     // A Main that DECLARES parameters is still called without any, and
     // raises R19 at that same site.
+    // Resident: a Main admitted earlier ran when it was admitted, and a
+    // later admission cannot define another (compileAdmit refuses it).
     const user_main: ?u32 = blk: {
-        for (c.funcs.items, 0..) |*f, i| {
+        for (c.funcs.items[from_fn..], from_fn..) |*f, i| {
             if (f.owner != null) continue; // a METHOD named Main is not it
             if (f.is_main) continue; // the synthetic @@main
             if (f.lambda_at != null) continue; // a lowered lambda
             if (!f.emitted) continue; // never compiled: nothing to call
-            if (std.ascii.eqlIgnoreCase(f.name, "main")) break :blk @intCast(i);
+            if (std.ascii.eqlIgnoreCase(f.name, "main")) {
+                // a replacement (rung 3) of a Main that ran is not a new one
+                if (c.resident) {
+                    if (c.findFunc(f.name)) |g| {
+                        if (c.funcIndex(g) < from_fn) continue;
+                    }
+                }
+                break :blk @intCast(i);
+            }
         }
         break :blk null;
     };
@@ -8578,7 +9427,8 @@ fn compileFinish(c: *Compiler, alloc: std.mem.Allocator) Error!Program {
     // frames are swept whole on return; before, a missing mask meant
     // sweeping NOTHING, and every call in every real program leaked its
     // registers (found 2026-09-12).
-    for (c.funcs.items) |f| {
+    // (resident: an earlier admission's functions set theirs when admitted)
+    for (c.funcs.items[from_fn..]) |f| {
         if (f.id < vm.fn_masks.len) vm.fn_masks[f.id] = f.mask;
     }
 
@@ -8586,166 +9436,69 @@ fn compileFinish(c: *Compiler, alloc: std.mem.Allocator) Error!Program {
     // Dispatch is a dense (class x name) table so a method call is one
     // indexed load. A linear scan would make every call O(methods), which is
     // the cost this whole project exists to remove.
-    if (c.classes.items.len > 0) {
-        const ncls = c.classes.items.len;
-        // Every attribute name is a name too, so `o.attr` resolved at run
-        // time (gattrn) can find it; interned BEFORE the dispatch table is
-        // sized, so the two tables agree on what a name index is.
-        for (c.classes.items) |ci| {
+    //
+    // RESIDENT (rung 5): once the VM holds class tables they are GROWN, never
+    // built again -- rnxc's installer appends a new class's row and patches a
+    // replaced class's row and its descendants', from what this admission
+    // added. Built whole they cost a class admission ~45 ms at Softanza's
+    // size and copying them out ~34 ms more (a dispatch row per class, as
+    // wide as the names), and a run-time addmethod was lost with them. Here
+    // only what the installer cannot make: the new classes' attribute names
+    // interned, and their names as constants.
+    const grow = c.resident and vm.dispatch.len > 0;
+    var class_konst_new = std.ArrayListUnmanaged(u32){};
+    if (grow) {
+        for (c.classes.items[c.prefix_classes..]) |ci| {
             for (ci.attrs.items) |a| _ = try c.nameIndex(a.name);
+            try class_konst_new.append(talloc, @intCast(try c.classNameKonst(ci.name)));
         }
-        const nnm = c.names.items.len;
-        vm.n_names = @intCast(nnm);
-        const tab = try alloc.alloc(u32, ncls * nnm);
-        @memset(tab, 0);
-        var mt = std.ArrayListUnmanaged(vm.MethodEnt){};
-        for (c.classes.items) |ci| {
-            for (ci.methods.items) |mi| {
-                const f = c.funcs.items[mi];
-                const mmid: u8 = if (f.id < vm.fn_masks.len) @intCast(f.id) else vm.NO_MASK;
-                const ar = declaredArity(&f);
-                const np: u8 = if (ar < vm.unchecked_arity) @intCast(ar) else vm.unchecked_arity;
-                try mt.append(alloc, .{ .entry = f.entry, .frame = f.frame, .id = mmid, .nparams = np });
-                tab[@as(usize, ci.id) * nnm + f.name_idx] = @intCast(mt.items.len);
+    } else {
+        if (c.classes.items.len > 0) {
+            // Every attribute name is a name too, so `o.attr` resolved at run
+            // time (gattrn) can find it; interned BEFORE the dispatch table is
+            // sized, so the two tables agree on what a name index is.
+            for (c.classes.items) |ci| {
+                for (ci.attrs.items) |a| _ = try c.nameIndex(a.name);
             }
+            // resident: rows wider than the names, so the admissions that follow
+            // can add names and keep this table
+            const nnm = if (c.resident) c.names.items.len + c.names.items.len / 8 + 256 else c.names.items.len;
+            vm.n_names = @intCast(nnm);
+            const ct = try buildClassTables(c, talloc, nnm);
+            vm.dispatch = ct.dispatch;
+            vm.method_tab = ct.method_tab;
+            vm.class_slots = ct.class_slots;
+            vm.attr_from = ct.attr_from;
+            vm.attr_ent = ct.attr_ent;
+            vm.class_konst = ct.class_konst;
+            vm.class_parent = ct.class_parent;
         }
-        // A child inherits every method its parent defines and does not
-        // override -- resolved here, once, rather than walked at every call.
-        for (c.classes.items) |ci| {
-            var p = ci.parent;
-            while (p) |pid| {
-                const par = c.classes.items[pid];
-                var nm: usize = 0;
-                while (nm < nnm) : (nm += 1) {
-                    const dstv = @as(usize, ci.id) * nnm + nm;
-                    if (tab[dstv] == 0) tab[dstv] = tab[@as(usize, par.id) * nnm + nm];
-                }
-                p = par.parent;
-            }
-        }
-        vm.dispatch = tab;
-        vm.method_tab = try mt.toOwnedSlice(alloc);
-        const cs = try alloc.alloc(u32, ncls);
-        for (c.classes.items, 0..) |ci, ix| cs[ix] = @intCast(ci.attrs.items.len);
-        vm.class_slots = cs;
-
-        // Attribute name -> slot per class, for the run-time path. Own
-        // attributes first, then each ancestor's that the class did not
-        // redeclare -- the same walk the dispatch table makes for methods.
-        {
-            var ents = std.ArrayListUnmanaged(vm.AttrEnt){};
-            const from = try alloc.alloc(u32, ncls + 1);
-            for (c.classes.items, 0..) |ci, ix| {
-                from[ix] = @intCast(ents.items.len);
-                for (ci.attrs.items) |a| {
-                    try ents.append(alloc, .{ .name = try c.nameIndex(a.name), .slot = a.slot });
-                }
-                var p = ci.parent;
-                while (p) |pid| {
-                    for (c.classes.items[pid].attrs.items) |a| {
-                        const ni = try c.nameIndex(a.name);
-                        var have = false;
-                        var q = from[ix];
-                        while (q < ents.items.len) : (q += 1) {
-                            if (ents.items[q].name == ni) have = true;
-                        }
-                        if (!have) try ents.append(alloc, .{ .name = ni, .slot = a.slot });
-                    }
-                    p = c.classes.items[pid].parent;
-                }
-            }
-            from[ncls] = @intCast(ents.items.len);
-            vm.attr_from = from;
-            vm.attr_ent = try ents.toOwnedSlice(alloc);
-        }
-
-        // Each class's lowercased name, as a constant, so `clsname` is a
-        // table read at run time. Built here rather than lazily because
-        // `konst` is handed to the VM immediately below and must be final.
-        const ck = try alloc.alloc(u32, ncls);
-        for (c.classes.items, 0..) |ci, ix| ck[ix] = @intCast(try c.classNameKonst(ci.name));
-        vm.class_konst = ck;
-
-        // Reflection's two facts the dispatch table cannot say: a class's
-        // PARENT, and the class that DEFINES each function (0xFFFF for a
-        // plain function). `methods(o)` lists a class's own methods in
-        // definition order before its parent's, as Ring does, and needs
-        // both (2026-09-23).
-        const cp = try alloc.alloc(u16, ncls);
-        for (c.classes.items, 0..) |ci, ix| cp[ix] = if (ci.parent) |p| @intCast(p) else 0xFFFF;
-        vm.class_parent = cp;
-    }
-    {
-        const fo = try alloc.alloc(u16, c.funcs.items.len);
-        for (c.funcs.items, 0..) |f, ix| fo[ix] = if (f.owner) |o| o else 0xFFFF;
-        vm.fn_owner = fo;
-    }
-    {
-        // RING'S AUTOMATIC GETTERS AND SETTERS (F-73): `o.x` calls getx()
-        // and `o.x = v` calls setx(v) when the object's class has them. Per
-        // attribute NAME, the name index of `get<name>` and `set<name>`, or
-        // NONE -- so the VM asks one table and one dispatch cell, and a
-        // name no class ever pairs with an accessor costs a single load.
-        const nn = c.names.items.len;
-        const ag = try alloc.alloc(u32, nn);
-        const as = try alloc.alloc(u32, nn);
-        @memset(ag, vm.ACC_NONE);
-        @memset(as, vm.ACC_NONE);
-        var buf: [256]u8 = undefined;
-        for (c.names.items, 0..) |nm, i| {
-            if (nm.len <= 3 or nm.len > buf.len) continue;
-            const is_get = std.ascii.eqlIgnoreCase(nm[0..3], "get");
-            if (!is_get and !std.ascii.eqlIgnoreCase(nm[0..3], "set")) continue;
-            const key = std.ascii.lowerString(&buf, nm[3..]);
-            const ai = c.name_index.get(key) orelse continue;
-            if (is_get) ag[ai] = @intCast(i) else as[ai] = @intCast(i);
-        }
-        vm.acc_get = ag;
-        vm.acc_set = as;
+        vm.fn_owner = try buildFnOwner(c, talloc);
+        const acc = try buildAccessors(c, talloc);
+        vm.acc_get = acc[0];
+        vm.acc_set = acc[1];
     }
     vm.konst = c.konst.items;
 
-    // THE LOCALS TABLES for eval (F-72): by function id, every local's
-    // name, register and boxed flag, parameters first as they sit in r0..
-    const locals_tab = blk: {
-        var mx: usize = 0;
-        for (c.funcs.items) |f| mx = @max(mx, f.id);
-        const from = alloc.alloc(u32, mx + 2) catch unreachable;
-        @memset(from, 0);
-        var total: usize = 0;
-        for (c.funcs.items) |f| total += f.locals.items.len;
-        const names = alloc.alloc([]const u8, total) catch unreachable;
-        const regs = alloc.alloc(u8, total) catch unreachable;
-        const boxed = alloc.alloc(bool, total) catch unreachable;
-        // functions are appended in id order, but count per id first so a
-        // gap in ids (none expected) cannot misplace a table
-        var per = alloc.alloc(u32, mx + 1) catch unreachable;
-        @memset(per, 0);
-        for (c.funcs.items) |f| per[f.id] = @intCast(f.locals.items.len);
-        var acc: u32 = 0;
-        for (0..mx + 1) |id| {
-            from[id] = acc;
-            acc += per[id];
-        }
-        from[mx + 1] = acc;
-        for (c.funcs.items) |f| {
-            var at: usize = from[f.id];
-            for (f.locals.items) |l| {
-                names[at] = l.name;
-                regs[at] = l.reg;
-                boxed[at] = l.class.boxed();
-                at += 1;
-            }
-        }
-        break :blk .{ .from = from, .names = names, .regs = regs, .boxed = boxed };
-    };
+    // Resident (rung 5): the tables below for this admission's functions and
+    // code only -- the VM holds the rest and appends these (rnxc.zig's
+    // installer). Built whole they walked all 49,000 functions of
+    // Softanza's library and its 1.4 million instructions, every admission.
+    const dfn: usize = if (c.resident) from_fn else 0;
+    const dcode: usize = if (c.resident) c.prefix_code else 0;
+    const ft = try fnTables(c.funcs.items, talloc, dfn);
 
     return .{
         .code = c.code.items,
         .funcs = c.funcs.items,
         .rows = c.rows.items,
         .files = c.files.items,
-        .fn_of = fnOfTable(alloc, c.funcs.items, c.code.items.len, body_end) catch &.{},
+        .fn_of = fnOfTable(talloc, c.funcs.items[dfn..], c.code.items.len, body_end, dfn, dcode) catch &.{},
+        .fn_base = dfn,
+        .code_base = dcode,
+        .body_end = body_end,
+        .grow_classes = grow,
+        .class_konst_new = class_konst_new.items,
         // A SENTINEL, not 0, when the file has no top level at all. The VM
         // reads this as "the frame that is the top level", printing the
         // file alone where every other frame gets `In function f()`. Zero
@@ -8756,28 +9509,14 @@ fn compileFinish(c: *Compiler, alloc: std.mem.Allocator) Error!Program {
         .names = c.names.items,
         .nglobals = c.globals.items.len,
         .global_names = c.globals.items,
-        .fn_entry = blk: {
-            var mx: usize = 0;
-            for (c.funcs.items) |f| mx = @max(mx, f.id);
-            const t = alloc.alloc(u32, mx + 1) catch unreachable;
-            @memset(t, 0);
-            for (c.funcs.items) |f| t[f.id] = f.entry;
-            break :blk t;
-        },
-        .fn_frame = blk: {
-            var mx: usize = 0;
-            for (c.funcs.items) |f| mx = @max(mx, f.id);
-            const t = alloc.alloc(u8, mx + 1) catch unreachable;
-            @memset(t, 0);
-            for (c.funcs.items) |f| t[f.id] = f.frame;
-            break :blk t;
-        },
-        .fn_local_from = locals_tab.from,
-        .local_names = locals_tab.names,
-        .local_regs = locals_tab.regs,
-        .local_boxed = locals_tab.boxed,
+        .fn_entry = ft.entry,
+        .fn_frame = ft.frame,
+        .fn_local_from = ft.local_from,
+        .local_names = ft.local_names,
+        .local_regs = ft.local_regs,
+        .local_boxed = ft.local_boxed,
         .class_attrs_fn = blk: {
-            const t = alloc.alloc(u32, c.classes.items.len) catch unreachable;
+            const t = talloc.alloc(u32, c.classes.items.len) catch unreachable;
             for (c.classes.items, 0..) |ci, ix| t[ix] = ci.attrs_fn orelse 0xFFFFFFFF;
             break :blk t;
         },
@@ -8909,6 +9648,41 @@ fn collectAll(c: *Compiler, root: ts.Node, alloc: std.mem.Allocator) Error!void 
             // section as well as a public one.
             if (nm.len > 0) try ci.attrs.append(alloc, .{ .name = nm, .slot = 0 });
         }
+        // Rung 4: REPLACING a class the program holds takes over its entry --
+        // same id, so every object already made answers with the new
+        // methods. What its objects were laid out for is kept for
+        // compileAdmit, which refuses a replacement that lays them out
+        // differently; the layout and the prologue are rebuilt from the new
+        // definition, and its methods join the old ones (a later one of a
+        // name wins the dispatch, and the old one is replaced).
+        if (c.resident and c.replacing) {
+            const held = for (c.classes.items[0..c.prefix_classes]) |*hc| {
+                if (std.ascii.eqlIgnoreCase(hc.name, ci.name)) break hc;
+            } else null;
+            if (held) |oc| {
+                const names = try alloc.alloc([]const u8, oc.attrs.items.len);
+                for (oc.attrs.items, 0..) |a, k| names[k] = a.name;
+                try c.class_repl.append(alloc, .{
+                    .cid = oc.id,
+                    .attrs = names,
+                    .parent = oc.parent,
+                    .attrs_fn = oc.attrs_fn,
+                    .methods = try alloc.dupe(u32, oc.methods.items),
+                });
+                oc.node = ci.node;
+                oc.parent_name = ci.parent_name;
+                oc.parent = null;
+                oc.attrs = ci.attrs;
+                oc.inherited = 0;
+                oc.attrs_fn = null;
+                oc.attrs_done = false;
+                oc.pass = 0;
+                oc.graft_pass = 0;
+                oc.grafted = 0;
+                oc.parent_prologue = null;
+                continue;
+            }
+        }
         try c.classes.append(alloc, ci);
     }
 
@@ -8934,8 +9708,12 @@ fn collectAll(c: *Compiler, root: ts.Node, alloc: std.mem.Allocator) Error!void 
             .class => {
                 cur_fn = null;
                 cur_class = null;
+                // the class at this offset OF THIS FILE: another file's
+                // class, or one restored from a prefix (a blank node), can
+                // stand at the same offset (rung 4 reuses an entry, so the
+                // last match is no longer always this file's)
                 for (c.classes.items) |*ci| {
-                    if (ci.node.startByte() == p.off) cur_class = ci.id;
+                    if (ci.node.startByte() == p.off and ci.node.src.ptr == p.node.src.ptr) cur_class = ci.id;
                 }
             },
             .func => {
@@ -9392,6 +10170,7 @@ fn graftPrologue(c: *Compiler, cid: u16, alloc: std.mem.Allocator) !void {
     // read AFTER its child was frozen with a one-shot flag, and the child's
     // instances then started life without the parent's initialisers -- the
     // parent's own `cTag = "parent"` read back as R24, uninitialised.
+    if (residentFrozen(c, cid)) return;
     if (c.classes.items[cid].graft_pass == c.resolve_pass) return;
     if (c.classes.items[cid].grafting) return; // a cycle in `from`
     c.classes.items[cid].grafting = true;
@@ -9421,6 +10200,22 @@ fn graftPrologue(c: *Compiler, cid: u16, alloc: std.mem.Allocator) !void {
     c.funcs.items[cfn].stmts.deinit(alloc);
     c.funcs.items[cfn].stmts = merged;
     c.classes.items[cid].grafted = from_parent;
+}
+
+/// Rung 4: does a class whose own methods are `own`, under `parent`, answer
+/// `init`? -- the question `new K()` asked when it was compiled.
+fn classHasInit(c: *Compiler, parent: ?u16, own: []const u32) bool {
+    for (own) |mi| {
+        if (std.ascii.eqlIgnoreCase(c.funcs.items[mi].name, "init")) return true;
+    }
+    var p = parent;
+    while (p) |pid| {
+        for (c.classes.items[pid].methods.items) |mi| {
+            if (std.ascii.eqlIgnoreCase(c.funcs.items[mi].name, "init")) return true;
+        }
+        p = c.classes.items[pid].parent;
+    }
+    return false;
 }
 
 /// The number of arguments a call must pass: a method's `params` begins
@@ -9500,9 +10295,178 @@ fn startFunc(c: *Compiler, n: ts.Node, owner: ?u16, alloc: std.mem.Allocator) !v
 /// inherited method `_EngineListFromContent` then read `@aContent` at slot
 /// 39 of an object that had twelve, and five tests in the wide clock died
 /// on the same line.
+/// RESIDENT (rung 5): a class an earlier admission laid out is FIXED -- its
+/// methods were compiled for its slots -- so resolving and grafting leave it
+/// alone, unless this admission replaces it (rung 4). Re-laying it every
+/// admission cost time and, worse, could move it: a class admitted with a
+/// parent nothing defined yet was re-laid under the parent when a later file
+/// defined it, slots its compiled methods did not know (compileAdmit now
+/// refuses that file instead).
+/// A class's REGION -- the statements its `new` runs -- in order: the walk
+/// collect makes over the class's children and a `private_section`'s, a
+/// statement counting between `class` and the first method and again after
+/// a `private` marker (rung 7 reads it; collect gathers the attributes).
+fn classRegion(alloc: std.mem.Allocator, node: ts.Node, out: *std.ArrayListUnmanaged(ts.Node)) !void {
+    var seq = std.ArrayListUnmanaged(ts.Node){};
+    defer seq.deinit(alloc);
+    var k0: u32 = 1;
+    while (k0 < node.namedChildCount()) : (k0 += 1) {
+        const ch0 = node.namedChild(k0);
+        try seq.append(alloc, ch0);
+        if (std.mem.eql(u8, ch0.kind(), "private_section")) {
+            var k1: u32 = 0;
+            while (k1 < ch0.namedChildCount()) : (k1 += 1) try seq.append(alloc, ch0.namedChild(k1));
+        }
+    }
+    var attr_ctx = true;
+    for (seq.items) |ch| {
+        const ck = ch.kind();
+        if (std.mem.eql(u8, ck, "class_definition") or std.mem.eql(u8, ck, "function_definition")) {
+            attr_ctx = false;
+            continue;
+        }
+        if (std.mem.eql(u8, ck, "class_parent")) continue;
+        if (isPrivateMarker(ch)) {
+            attr_ctx = true;
+            continue;
+        }
+        if (attr_ctx) try out.append(alloc, ch);
+    }
+}
+
+/// Does `n` name `nm` anywhere -- an identifier of that spelling, in any
+/// case (rung 7: code in a class region that touches an attribute it gains).
+fn mentionsName(n: ts.Node, nm: []const u8) bool {
+    if (std.mem.eql(u8, n.kind(), "identifier") and std.ascii.eqlIgnoreCase(n.text(), nm)) return true;
+    var k: u32 = 0;
+    while (k < n.namedChildCount()) : (k += 1) {
+        if (mentionsName(n.namedChild(k), nm)) return true;
+    }
+    return false;
+}
+
+/// Rung 7: the value of a CONSTANT initialiser, as the class's prologue
+/// would compute it -- a number (an integer the width of `loadi`, else a
+/// number of the table, as exprBody loads it), its negation, a string, a
+/// symbol, TRUE/FALSE, NULL, a parenthesised one, or a list of them. Null
+/// for anything else: code that must run, which an object made before the
+/// class grew cannot be given.
+fn constOf(c: *Compiler, alloc: std.mem.Allocator, n: ts.Node) Error!?ConstVal {
+    const k = n.kind();
+    if (std.mem.eql(u8, k, "number")) return try constNumber(c, std.mem.trim(u8, n.text(), " \t\r\n"), false);
+    if (std.mem.eql(u8, k, "unary_expression") and n.namedChildCount() == 1) {
+        const t = std.mem.trimLeft(u8, n.text(), " \t");
+        const inner = n.namedChild(0);
+        if (t.len > 0 and t[0] == '-' and std.mem.eql(u8, inner.kind(), "number"))
+            return try constNumber(c, std.mem.trim(u8, inner.text(), " \t\r\n"), true);
+        return null;
+    }
+    if (std.mem.eql(u8, k, "boolean"))
+        return .{ .int = if (std.ascii.eqlIgnoreCase(std.mem.trim(u8, n.text(), " \t\r\n"), "true")) 1 else 0 };
+    if (std.mem.eql(u8, k, "null")) return .{ .konst = try c.konstIndex("\"\"") };
+    if (std.mem.eql(u8, k, "string")) return .{ .konst = try c.konstIndex(try c.literalText(n.text())) };
+    if (std.mem.eql(u8, k, "symbol")) return .{ .konst = try c.konstSymbol(n.text()) };
+    if (std.mem.eql(u8, k, "parenthesized_expression") and n.namedChildCount() == 1) return constOf(c, alloc, n.namedChild(0));
+    if (std.mem.eql(u8, k, "list_literal")) {
+        const items = try alloc.alloc(ConstVal, n.namedChildCount());
+        var i: u32 = 0;
+        while (i < n.namedChildCount()) : (i += 1) {
+            items[i] = (try constOf(c, alloc, n.namedChild(i))) orelse return null;
+        }
+        return .{ .list = items };
+    }
+    return null;
+}
+
+fn constNumber(c: *Compiler, t: []const u8, neg: bool) Error!?ConstVal {
+    if (std.fmt.parseInt(i64, t, 10)) |v0| {
+        const v = if (neg) -v0 else v0;
+        if (v >= std.math.minInt(i32) and v <= std.math.maxInt(i32)) return .{ .int = v };
+        return .{ .konst = try c.konstNum(@floatFromInt(v)) };
+    } else |_| {}
+    const d = std.fmt.parseFloat(f64, t) catch return null;
+    return .{ .konst = try c.konstNum(if (neg) -d else d) };
+}
+
+/// THE RESIDENT VM, RUNG 7: a replaced class that lays out MORE attributes
+/// than its objects hold -- the old ones first, in their order (compileAdmit
+/// checked), the gained ones after them. The objects made before take each
+/// gained attribute at the first access past their own slots
+/// (VM.fitObj), starting as its declared constant (Compiler.class_gained).
+/// Null when it can be done, else why not:
+///   - a class the program holds INHERITS from it: its own attributes come
+///     after this class's, and its compiled methods name them by slot;
+///   - a gained attribute is not declared exactly once, as `name` or
+///     `name = <constant>` in the class region: what it starts as must be
+///     known without running anything an old object never ran;
+///   - other code in the region names it: a new object would get what that
+///     code computes, an old one only the declared value.
+fn gainAttrs(c: *Compiler, alloc: std.mem.Allocator, oc: *ClassInfo, r: ClassRepl) Error!?[]const u8 {
+    for (c.classes.items[0..c.prefix_classes], 0..) |*d, di| {
+        if (di == r.cid) continue;
+        var p = d.parent;
+        const descends = while (p) |pid| {
+            if (pid == r.cid) break true;
+            p = c.classes.items[pid].parent;
+        } else false;
+        if (descends)
+            return std.fmt.bufPrint(&admit_buf, "class {s}: it gains attributes, and the program's class {s} inherits from it -- {s}'s own attributes come after {s}'s, and its methods were compiled for their slots", .{ oc.name, d.name, d.name, oc.name }) catch "a class with subclasses gains attributes";
+    }
+    var region = std.ArrayListUnmanaged(ts.Node){};
+    defer region.deinit(alloc);
+    try classRegion(alloc, oc.node, &region);
+    for (oc.attrs.items[r.attrs.len..]) |a| {
+        var decl: ?ts.Node = null;
+        var value: ?ts.Node = null;
+        var count: u32 = 0;
+        for (region.items) |st| {
+            if (!std.mem.eql(u8, st.kind(), "expression_statement") or st.namedChildCount() == 0) continue;
+            const e = st.namedChild(0);
+            if (std.mem.eql(u8, e.kind(), "identifier") and std.ascii.eqlIgnoreCase(e.text(), a.name)) {
+                count += 1;
+                decl = st;
+                value = null;
+            } else if (std.mem.eql(u8, e.kind(), "assignment_expression") and e.namedChildCount() >= 2 and
+                std.mem.eql(u8, e.namedChild(0).kind(), "identifier") and std.ascii.eqlIgnoreCase(e.namedChild(0).text(), a.name))
+            {
+                count += 1;
+                decl = st;
+                value = e.namedChild(e.namedChildCount() - 1);
+            }
+        }
+        if (count != 1)
+            return std.fmt.bufPrint(&admit_buf, "class {s}: the attribute {s} it gains is not declared once as `{s}` or `{s} = <constant>` in its class region -- the objects made before it need its starting value without running code", .{ oc.name, a.name, a.name, a.name }) catch "a gained attribute is not declared once";
+        const cv: ConstVal = if (value) |v|
+            (try constOf(c, alloc, v)) orelse
+                return std.fmt.bufPrint(&admit_buf, "class {s}: the attribute {s} it gains starts as `{s}`, which runs code -- the objects made before it need a constant (a number, a string, a symbol, TRUE, FALSE, NULL, or a list of them)", .{ oc.name, a.name, v.text() }) catch "a gained attribute's starting value is not a constant"
+        else
+            .{ .konst = try c.konstIndex("NULL") };
+        for (region.items) |st| {
+            if (st.raw.id == decl.?.raw.id) continue;
+            if (mentionsName(st, a.name))
+                return std.fmt.bufPrint(&admit_buf, "class {s}: its class region uses the attribute {s} it gains beyond declaring it (`{s}`) -- the objects made before it cannot be given what that code computes", .{ oc.name, a.name, std.mem.trim(u8, st.text(), " \t\r\n") }) catch "a gained attribute is used in the class region";
+        }
+        // its name, interned NOW: the installer's attribute table (classAttrEnts)
+        // runs after the program's names reached the VM, and a name it added
+        // then would be one the VM never saw (`?` in a printed object)
+        _ = try c.nameIndex(a.name);
+        try c.class_gained.append(alloc, .{ .cid = r.cid, .slot = a.slot, .val = cv });
+    }
+    return null;
+}
+
+fn residentFrozen(c: *const Compiler, cid: usize) bool {
+    if (!c.resident or cid >= c.prefix_classes) return false;
+    for (c.class_repl.items) |r| {
+        if (r.cid == cid) return false;
+    }
+    return true;
+}
+
 fn resolveAllSlots(c: *Compiler, alloc: std.mem.Allocator) !void {
     for (c.classes.items) |*ci| {
         if (ci.parent_name.len == 0) continue;
+        if (residentFrozen(c, ci.id)) continue;
         for (c.classes.items) |*p| {
             if (std.ascii.eqlIgnoreCase(p.name, ci.parent_name)) ci.parent = p.id;
         }
@@ -9514,6 +10478,7 @@ fn resolveAllSlots(c: *Compiler, alloc: std.mem.Allocator) !void {
 }
 
 fn resolveSlots(c: *Compiler, ci: *ClassInfo, alloc: std.mem.Allocator) !void {
+    if (residentFrozen(c, ci.id)) return;
     if (ci.pass == c.resolve_pass) return;
     if (ci.resolving) return; // a cycle in `from` -- lay it out as its own
     ci.resolving = true;
@@ -11528,7 +12493,9 @@ fn openElemsIn(c: *Compiler, f: *Func, n: ts.Node, observed: bool, top_plus: boo
 fn widenEntryParams(c: *Compiler, from: usize) bool {
     var changed = false;
     for (c.funcs.items[from..]) |*f| {
-        if (f.called) continue;
+        // resident: every function is an entry point, since code admitted
+        // later may call it with anything (Compiler.resident)
+        if (f.called and !c.resident) continue;
         for (f.params) |p| {
             for (f.locals.items) |*l| {
                 if (std.ascii.eqlIgnoreCase(l.name, p) and !l.declared and l.class != .ref) {
@@ -11855,6 +12822,10 @@ fn promoteCallArgs(c: *Compiler, f: *Func, n: ts.Node) Error!bool {
             }
         }
         if (c.findFunc(callee)) |g| {
+            if (c.resident and !g.called) {
+                const gi = c.funcIndex(g);
+                if (gi < c.prefix_funcs) try c.called_log.append(c.alloc, gi);
+            }
             g.called = true;
             var a: u32 = 0;
             var args_idx: u32 = 0;
@@ -12048,7 +13019,8 @@ fn exprClass(c: *Compiler, f: *Func, n: ts.Node) Class {
             std.ascii.eqlIgnoreCase(callee, "ascii")) return .int;
         if (std.ascii.eqlIgnoreCase(callee, "len")) return .int;
         if (std.ascii.eqlIgnoreCase(callee, "floor")) return .int;
-        if (c.findFunc(callee)) |g| return g.ret;
+        // resident: a replacement (rung 3) may answer another class
+        if (c.findFunc(callee)) |g| return if (c.resident) .ref else g.ret;
         return .ref;
     }
     return .ref;

@@ -1,0 +1,9 @@
+admitted rp_drv_lib.ring: 2 function(s), 3 statement(s), # ms -- program: 3 function(s), # instruction(s), 0 global(s)
+drv lib: bill 10
+refused  rp_drv_v2.ring: function Tax is already defined (Ring: C22); replacefile and replacecode replace a running function
+         -- program unchanged: 3 function(s), # instruction(s), 0 global(s)
+admitted rp_drv_v2.ring: 1 function(s), 1 of them replacing, 2 statement(s), # ms -- program: 5 function(s), # instruction(s), 0 global(s)
+drv v2: bill 15
+refused  rp_drv_none.ring: it replaces nothing: no function or class it defines is in the program (admitfile and admitcode add new ones)
+         -- program unchanged: 5 function(s), # instruction(s), 0 global(s)
+resident: 2 admitted, 2 refused, 0 top level(s) stopped on an error; 5 function(s), # instruction(s), 0 global(s)

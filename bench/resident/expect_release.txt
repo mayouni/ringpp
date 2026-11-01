@@ -1,0 +1,67 @@
+admitted rl_host.ring: 5 function(s), 79 statement(s), # ms -- program: 7 function(s), # instruction(s), 6 global(s)
+host: start
+admit: 1
+call: one a
+release: 1
+called after: Error (R3) : Calling Function without definition: handle
+by name after: Error (R3) : Calling Function without definition: handle
+eval after: Error (R3) : Calling Function without definition: handle
+the name again: 1
+call: two c
+admit: 1
+release: 1
+kept text: a literal of the released code
+kept list: 3 x
+admit a: 1
+admit b: 1
+a before b: Error : not released: a: the program's last admission is b, and only the last can be released
+release b: 1
+release a: 1
+release req: 1
+admit file: 1
+lib: the lib answers
+release file: 1
+lib after: Error (R3) : Calling Function without definition: libanswer
+admit fresh: 1
+fresh, a method of the host's object: 0
+release fresh: 1
+after: 0
+admit reader: 1
+a global while it reads: Error : not admitted: early: global zLater: the admitted function ReadsLater reads zLater as an unassigned local, and a global of that name would change what it reads (Rule A)
+release reader: 1
+a global after: 1
+admit g: 1
+release g: 1
+admit h: 1
+a new global in its place: Error (R24) : Using uninitialized variable: $gnew
+release h: 1
+admit acc: 1
+release acc: 1
+admit brand: 1
+nV after: 3
+release brand: 1
+the name back: 1
+brand after: 99
+release brand2: 1
+admit ev: 1
+eval before: A
+release ev: 1
+eval after: BA
+admit self: 1
+from inside itself: Error : not released: self: a frame of its code is running
+release self from the host: 1
+admit att: 1
+attached: 7
+attached by addmethod: Error : not released: att: addmethod attached one of its functions to a class, as the method attached
+admit keep: 1
+admit lam: 1
+lambda: Error : not released: lam: the program's last admission cannot be released: it defined a lambda, which could outlive it
+under it: Error : not released: keep: the program's last admission cannot be released: it defined a lambda, which could outlive it
+admit cls: 1
+class: Error : not released: cls: the program's last admission cannot be released: it defined a class, whose objects could outlive it
+admit f: 1
+replace f: 1
+replacement: Error : not released: frep: the program's last admission cannot be released: it replaced what the program held
+500 rounds: 125250
+host: end
+resident: 523 admitted, 1 refused, 515 released, 0 top level(s) stopped on an error; 15 function(s), # instruction(s), 8 global(s)

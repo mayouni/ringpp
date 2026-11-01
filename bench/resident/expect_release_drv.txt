@@ -1,0 +1,5 @@
+admitted rl_lib.ring: 1 function(s), 1 statement(s), # ms -- program: 1 function(s), # instruction(s), 0 global(s)
+released rl_lib.ring -- program: 0 function(s), # instruction(s), 0 global(s)
+admitted rl_lib.ring: 1 function(s), 1 statement(s), # ms -- program: 1 function(s), # instruction(s), 0 global(s)
+not released nosuch.ring: the program's last admission is rl_lib.ring, and only the last can be released
+resident: 2 admitted, 0 refused, 1 released, 0 top level(s) stopped on an error; 1 function(s), # instruction(s), 0 global(s)

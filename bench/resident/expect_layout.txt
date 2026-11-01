@@ -1,0 +1,46 @@
+admitted gl_host.ring: 0 function(s), 56 statement(s), # ms -- program: 1 function(s), # instruction(s), 13 global(s)
+host: start
+admit: 1
+before: 12
+replace: 1
+the total kept: 12
+printed first:
+ntotal: 0
+nadds: 0
+atags: [This Attribute Contains A List]
+cnote: NULL
+
+listed first: 4
+getattribute first: 0
+a method reading it first: 2 in 0 add(s), tags 0, note NULL
+a method writing it first: 0 in 0 add(s), tags 0, note set
+a method appending to it first: 0 in 0 add(s), tags 1, note NULL
+found first: 1
+a gained attribute, by name: 0
+after an add: 13 in 1 add(s), tags 1, note NULL
+printed:
+ntotal: 13
+nadds: 1
+atags: [This Attribute Contains A List]
+cnote: NULL
+
+attributes: 4
+getattribute: 1
+setattribute on one held only in a list: 40
+a list of its own: 2 and 1
+found by the gained attribute: 2
+a copy: 113 in 2 add(s), tags 1, note NULL / the original: 13 in 1 add(s), tags 1, note NULL
+made after, by the old new site: 0 in 0 add(s), tags 0, note NULL
+replace again: 1
+both: -2.50 3 1 40
+swap: Error : not admitted: swap: class Tally: its objects hold 6 attribute(s) laid out under no parent; the replacement lays out 7 under no parent -- a replacement keeps the attributes, their order and the parent, and may add attributes after them
+drop: Error : not admitted: drop: class Tally: its objects hold 6 attribute(s) laid out under no parent; the replacement lays out 1 under no parent -- a replacement keeps the attributes, their order and the parent, and may add attributes after them
+computed: Error : not admitted: computed: class Tally: the attribute nLen it gains starts as `len("ab")`, which runs code -- the objects made before it need a constant (a number, a string, a symbol, TRUE, FALSE, NULL, or a list of them)
+region: Error : not admitted: region: class Tally: its class region uses the attribute nTwice it gains beyond declaring it (`nTwice++`) -- the objects made before it cannot be given what that code computes
+loop: Error : not admitted: loop: class Tally: the attribute i it gains is not declared once as `i` or `i = <constant>` in its class region -- the objects made before it need its starting value without running code
+twice: Error : not admitted: twice: class Tally: the attribute nTwo it gains is not declared once as `nTwo` or `nTwo = <constant>` in its class region -- the objects made before it need its starting value without running code
+after the refusals: 13 in 1 add(s), tags 1, note NULL
+admit a subclass: 1
+with a subclass: Error : not admitted: tally4: class Tally: it gains attributes, and the program's class SubTally inherits from it -- SubTally's own attributes come after Tally's, and its methods were compiled for their slots
+host: end
+resident: 5 admitted, 7 refused, 0 top level(s) stopped on an error; 13 function(s), # instruction(s), 13 global(s)

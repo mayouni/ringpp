@@ -4318,3 +4318,39 @@ list is the core names Ring 1.27 registers (`src/builtins.zig`) followed by ever
 core name this VM lacks is listed as Ring lists it. `bench/exec/ringvm_reflect.ring`, eleven lines over three classes in a chain, identical on
 the oracle and the official 1.27; the build before stops at its first line. Gate PASSED, 174 probes in both modes; census unchanged. **Not in
 v2.0.6.**
+
+## F-147. A string builtin handed a number panicked, and substr had a fourth signature nothing compiled
+
+Ring's string builtins check their arguments and raise "Bad parameter type!", catchable, for anything that is not a string -- a number or
+a list. Measured on the oracle and the official 1.27, which agree on every row: 73 calls, each a string builtin with a number in one of its
+string positions, every one that error. Ring++ PANICKED on five of them, which no `try` can catch: `strcmp`'s second argument, `substr(n,
+"x")` (the `sfind` opcode), `substr(n, v)` with v a number at run time (`substr2d`), and `substr`'s three-argument forms with a mixed pair --
+`substr("abc", "b", 5)` in `strOf`, `substr("abc", 5, "x")` in `asInt`. Found by the stzlib OCR desk (2026-10-30), whose guard's top-level
+`nL = 77` clobbered `nl` before library code handed it to a string builtin.
+
+Ring's `substr` (genlib_e.c:884), measured while there: two numbers are a substring and two strings a replace, any other pair "Bad
+parameter type!"; a replace with an empty needle is "Bad parameter value!"; a FOURTH argument that is the number 0 makes it the
+three-argument call, 1 (or 1.0) a replace that ignores case (C's tolower, ASCII), any other number answers "", anything else "Bad parameter
+type!"; and any other count is "Bad parameters count!". Ring++ had no four-argument form -- `substr4` existed in the VM and nothing emitted
+it, so the call went to a native nothing registers (R3). And `ascii(5)` answered 5 where Ring raises: it took an integer while `s[i]` was a
+byte (F-54), and C-3 left that behind (the fused `ascii(s[i])` is its own opcode).
+
+**Fixed, not decided**: `VM.substrMore` is Ring's rule for three and four arguments, out of the run loop; `sfind` and `substr2d` test the
+haystack, `strcmp` its second argument, `ascii` takes a string only, and the compiler emits `substr4` for four arguments and Ring's count
+error for any other. `bench/exec/str_args.ring`, 35 rows and the uncaught report (`In substr()`), identical on the oracle and the official
+1.27; the build before panics at its first row. Gate PASSED, 175 probes in both modes (ReleaseSafe included); census unchanged. **Cost**:
+none measured -- a million calls each, minima of nine: substr's substring 30 -> 30 ms, its replace 67 -> 63, strcmp 17 -> 16; kernels B/A
+0.961 on two runs, a layout move in the favourable direction, not claimed. **Not reproduced**: an uncaught "Bad parameters count!" reports
+`in file` where Ring adds `In substr()`.
+
+## F-148. A class an eval defines, from a class an earlier eval defined, loses its inherited init once it has two methods
+
+Found building the resident VM's class probe (rung 4), whose Ring answer is read through `eval(read(file))` the way RingServ's host feeds
+Ring source. On the oracle and the official 1.27 alike: `eval` defines `class Shape` with `func init n`; a second `eval` defines `class
+Square from Shape` and a function returning `new Square(n)`. With ONE method in Square, `new Square(4)` runs Shape's init; with TWO or
+THREE -- whatever they do, `super`, `This` or a constant -- it raises `Error (R3) : Calling Function without definition: init`. The same
+classes in one file, or one method, work. Measured with a child of one, two and three methods, each returning a constant.
+
+**Not a decision**: Ring++'s `eval` cannot define a class at all (F-72, refused loudly), and the resident VM admits classes by compiling
+them (`rnxc resident`, `admitfile`), so nothing of Ring++ reproduces the shape. bench/resident/cl_square.ring keeps each class it admits
+to one method so that the oracle can answer for it.

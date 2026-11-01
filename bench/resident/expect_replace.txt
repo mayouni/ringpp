@@ -1,0 +1,40 @@
+admitted rp_host.ring: 0 function(s), 31 statement(s), # ms -- program: 1 function(s), # instruction(s), 1 global(s)
+host: start
+lib: its top level runs
+admit lib: 1
+before: report 30, 30, kind 7 7 5
+replace: 1
+after: report 300, 300
+by name: 300
+eval: 300
+replace kind: 1
+describe: kind SEVENx SEVENx 10
+describe: kind SEVENx SEVENx 10
+describe: kind SEVENx SEVENx 10
+again: 1
+after again: report 3000, 3000
+arity: Error : not admitted: bad1: function Price takes 1 parameter(s) and its replacement 2: the running program's calls pass 1
+nothing: Error : not admitted: bad2: it replaces nothing: no function or class it defines is in the program (admitfile and admitcode add new ones)
+broken: Error : not admitted: bad3: 1 statement(s) do not compile -- bad3:2 in Price: bare name is not a local (Rule A) `f`
+admit is not replace: Error : not admitted: bad4: function Price is already defined (Ring: C22); replacefile and replacecode replace a running function
+still: report 3000
+loop old 1
+loop old 2
+loop old 3
+loop old finished
+loop new
+countdown old 3
+countdown old 2
+countdown new 1
+countdown new 0
+countdown again
+countdown new 1
+countdown new 0
+admit mod: 1
+mod: v1
+admit again: Error : not admitted: rp_mod.ring: it is already admitted (Ring loads a file once)
+mod v2: its top level runs
+replace mod: 1
+mod: v2
+host: end
+resident: 9 admitted, 5 refused, 0 top level(s) stopped on an error; 16 function(s), # instruction(s), 1 global(s)

@@ -21,6 +21,7 @@ const dumpjson = @import("dumpjson.zig");
 const fmt = @import("fmt.zig");
 const graph = @import("graph.zig");
 const zip = @import("zip.zig");
+const httpd = @import("httpd.zig");
 const prefix = @import("prefix.zig");
 const lift = @import("lift.zig");
 const native = @import("native.zig");
@@ -101,6 +102,15 @@ const Unit = struct {
     /// The first implicit file Ring would read beside a file of the unit,
     /// and that file (C-28, `implicitIn`).
     implicit: ?Implicit = null,
+    /// The ROOT's text when it is not a file: `admitcode(cName, cSource)`
+    /// admits source a program built, under a name it chose. Its loads
+    /// resolve as a root's do, against the current directory.
+    root_src: ?[]const u8 = null,
+    /// The `already` paths loadUnit is handed are normalised already
+    /// (normalisePath): the resident VM keeps its held files' keys, where
+    /// normalising them again opened every one on each admission -- 612
+    /// files, ~25 ms of a small admission at Softanza's size (rung 5).
+    already_norm: bool = false,
 };
 
 /// RING READS FILES NOBODY NAMED (vendor/ring-vm/src/state.c:177-203 and
@@ -539,7 +549,7 @@ fn loadUnit(
     try qnames.append(alloc, queue.items[0]);
     const cwd = std.process.getCwdAlloc(alloc) catch ".";
     var seen = std.StringHashMapUnmanaged(void){};
-    for (already) |p| try seen.put(alloc, try normalisePath(alloc, p), {});
+    for (already) |p| try seen.put(alloc, if (u.already_norm) p else try normalisePath(alloc, p), {});
     var implicit_dirs = std.StringHashMapUnmanaged(void){};
 
     var missing: u32 = 0;
@@ -551,7 +561,7 @@ fn loadUnit(
         try seen.put(alloc, key, {});
 
         var tr = std.time.Timer.start() catch unreachable;
-        const src = std.fs.cwd().readFileAlloc(alloc, p, 64 << 20) catch |e| {
+        const src = if (qi == 0 and u.root_src != null) u.root_src.? else std.fs.cwd().readFileAlloc(alloc, p, 64 << 20) catch |e| {
             // Named, not counted: "2 file(s) could not be read" sends the
             // reader to grep for what a line here would have told them.
             std.debug.print("note: could not read {s} ({s})\n", .{ p, @errorName(e) });
@@ -1159,7 +1169,7 @@ fn isSubcommand(a: []const u8) bool {
         "exec",    "dis",   "dump",   "census", "check",
         "call",    "time",  "poison", "usable", "migrate",
         "shadows", "attrs", "bench",  "run",    "prefix",
-        "fmt",     "graph",
+        "fmt",     "graph", "resident",
     }) |c| {
         if (std.mem.eql(u8, a, c)) return true;
     }
@@ -1508,6 +1518,1376 @@ fn dupKonst(h: std.mem.Allocator, in: []const vm.Value) ![]vm.Value {
     return out;
 }
 
+// ------------------------------------------------------------ the resident VM
+
+/// THE RESIDENT VM: `rnxc resident <file.ring>...`. ONE program, fed files
+/// while it runs -- RingServ's shape (one resident state, its library files
+/// run into it one by one, every app arriving as more source), and Haro's
+/// first rung past the bridge (haro/FROM-RINGPP.md).
+///
+/// Each file is ADMITTED or REFUSED whole (co.compileAdmit says why). The
+/// program between admissions is the compiler's state, KEPT ALIVE (rung 5:
+/// it was restored from bytes and saved again around every admission, two
+/// thirds of a small one's cost at Softanza's size). An admission moves it
+/// into a compiler of its own (co.takeProgram), compiles the file on top,
+/// and is either rolled back to its marks (co.rollbackProgram) -- the
+/// running VM never saw it -- or installed into the VM as a delta: code,
+/// constants, names and globals appended, the per-function tables grown,
+/// the class tables rebuilt only when a class changed, every value the
+/// program holds left where it is. Then the file's top level runs, as Ring
+/// runs a loaded file's. An error nothing catches there is reported as Ring
+/// reports it, and the program carries on with the next file (VM.resident).
+///
+/// The live program's arena keeps what each admission's compile allocated
+/// beside it, so it is COMPACTED -- saved to bytes and restored into a fresh
+/// arena, the old path -- once it has doubled (plus 16 MB) since the last
+/// time. A released admission's source and compile stay there until the
+/// next compaction (rung 6). RNXC_RESIDENT_BLOB=1 compacts after every
+/// admission, which IS the old path, so the two can be compared;
+/// RNXC_RESIDENT_CHECK=1 saves the
+/// program before each admission and, after a refusal, again, and stops if
+/// the bytes differ.
+const Resident = struct {
+    /// the live program and the arena it lives in (rung 5)
+    P: *co.Compiler = undefined,
+    parena: *std.heap.ArenaAllocator = undefined,
+    live: bool = false,
+    /// every admitted file, as the program's own state records them
+    stamps: std.ArrayListUnmanaged(image.Stamp) = .{},
+    fnames: std.ArrayListUnmanaged([]const u8) = .{},
+    compact_at: usize = compact_slack,
+    compactions: usize = 0,
+    prog_code: usize = 0,
+    prog_konst: usize = 0,
+    nfuncs: usize = 0,
+    admitted: usize = 0,
+    refused: usize = 0,
+    stopped: usize = 0,
+    /// codes admitted so far (`admitcode`), so each gets a path of its own
+    codes: usize = 0,
+    /// what an admission needs, kept here because a running program asks
+    /// for one through `admitfile`/`admitcode` (admitHook), not the driver
+    m: *vm.VM = undefined,
+    parser: ts.Parser = undefined,
+    exe: image.ExeStamp = undefined,
+    /// the reason a refusal from inside the program raises with
+    why: [640]u8 = undefined,
+    /// each admitted file's normalised key, parallel to the program's
+    /// stamps, so an admission does not open every held file again (rung 5)
+    held_norm: std.ArrayListUnmanaged([]const u8) = .{},
+    /// THE VM's TABLES (rung 5), grown by each admission rather than built
+    /// again and copied whole: the VM's slices are views of these lists. A
+    /// compile hands only what it added (co.Program's fn_base, code_base).
+    vt: VmTables = .{},
+    /// some function of the program has been replaced (rung 3), so the VM's
+    /// name map is the installer's, which knows the replacements
+    ever_replaced: bool = false,
+    /// the running code's `r24` sites by name index (Compiler.r24_sites)
+    r24: std.AutoHashMapUnmanaged(u32, std.ArrayListUnmanaged(u32)) = .{},
+    /// RUNG 6: where the program stood before each admission that can still
+    /// be released, the last on top -- a stack, since only the last can be
+    /// (residentRelease). An admission that cannot be released empties it:
+    /// nothing under it can be released before it is
+    rel: std.ArrayListUnmanaged(ReleaseRec) = .{},
+    /// why the last admission cannot be released, when the stack is empty
+    unreleasable: []const u8 = "nothing has been admitted",
+    /// what residentRelease formats its reasons into -- not `why`, which the
+    /// hook then formats the error into, reading this
+    rel_why: [640]u8 = undefined,
+    released: usize = 0,
+};
+
+/// THE RESIDENT VM, RUNG 6: what releasing an admission needs -- where the
+/// program stood before it, the compiler's lists and the VM's tables, by
+/// their lengths (everything an admission adds is appended past them), and
+/// the few things it set on what was there: the `called` flags (the
+/// compiler's undo log) and the native-call list it refilled. Kept only for
+/// an admission that defined no class and no lambda and replaced nothing,
+/// since an object of a released class or a closure over a released function
+/// could outlive it and reach code that is gone.
+const ReleaseRec = struct {
+    name: []const u8,
+    coded: bool,
+    code: usize,
+    fixups: usize,
+    names: usize,
+    globals: usize,
+    konst: usize,
+    funcs: usize,
+    classes: usize,
+    natives: []u16,
+    counters: [5]usize,
+    prefix_main: ?u32,
+    called: []u32,
+    prog_code: usize,
+    prog_konst: usize,
+    nfuncs: usize,
+    file_names: usize,
+    stamps: usize,
+    fnames: usize,
+    main_fn: u32,
+    fn_owner: usize,
+    acc: usize,
+    vt: [vt_lists.len]usize,
+    /// RNXC_RESIDENT_CHECK: the program's bytes before the admission, which a
+    /// release must give back exactly
+    check_before: ?[]u8,
+
+    fn deinit(self: *ReleaseRec) void {
+        vmheap.free(self.name);
+        vmheap.free(self.natives);
+        vmheap.free(self.called);
+        if (self.check_before) |b| vmheap.free(b);
+    }
+};
+
+/// The VM tables the installer grows (Resident.vt), and which of them hold
+/// strings it duplicated
+const vt_lists = .{ "fn_of", "rows", "files", "names", "global_names", "fn_entry", "fn_frame", "fn_local_from", "local_names", "local_regs", "local_boxed", "fn_names", "fn_method", "fn_nparams", "name_fn", "name_cls", "ncache" };
+const vt_string_lists = .{ "names", "global_names", "local_names", "fn_names" };
+
+const VmTables = struct {
+    fn_of: std.ArrayListUnmanaged(u32) = .{},
+    rows: std.ArrayListUnmanaged(u32) = .{},
+    files: std.ArrayListUnmanaged(u16) = .{},
+    names: std.ArrayListUnmanaged([]const u8) = .{},
+    global_names: std.ArrayListUnmanaged([]const u8) = .{},
+    fn_entry: std.ArrayListUnmanaged(u32) = .{},
+    fn_frame: std.ArrayListUnmanaged(u8) = .{},
+    fn_local_from: std.ArrayListUnmanaged(u32) = .{},
+    local_names: std.ArrayListUnmanaged([]const u8) = .{},
+    local_regs: std.ArrayListUnmanaged(u8) = .{},
+    local_boxed: std.ArrayListUnmanaged(bool) = .{},
+    fn_names: std.ArrayListUnmanaged([]const u8) = .{},
+    fn_method: std.ArrayListUnmanaged(bool) = .{},
+    fn_nparams: std.ArrayListUnmanaged(u8) = .{},
+    name_fn: std.ArrayListUnmanaged(u32) = .{},
+    name_cls: std.ArrayListUnmanaged(u32) = .{},
+    ncache: std.ArrayListUnmanaged(?native.RppFn) = .{},
+    /// the dispatch rows (vm.dispatch is its items), with room for a few
+    /// more classes, since a row is as wide as the names
+    dispatch: std.ArrayListUnmanaged(u32) = .{},
+};
+var g_res = Resident{};
+
+/// Where an admission's top level runs. The driver's: an idle VM, the
+/// handler floor its own, an error nothing caught REPORTED and the program
+/// carrying on. Inside the program (`admitfile`, rung 2): just above the
+/// caller's frame, the floor the caller's handler depth, so an error nothing
+/// inside caught comes back to the call and is raised there, as eval's is.
+const RunAt = struct { base: u32 = 0, fsp: u32 = 0, hsp: u32 = 1, nested: bool = false, pc: u32 = 0 };
+
+fn residentMain(alloc: std.mem.Allocator, parser: ts.Parser, files: []const [:0]u8) !void {
+    const H = vmheap;
+    const regs = try H.alloc(vm.Value, 65536);
+    @memset(regs, vm.Value.nil());
+    var m = vm.VM{
+        .code = &.{},
+        .regs = regs,
+        .frames = try H.alloc(vm.Frame, 4096),
+        .alloc = H,
+        .argv = g_sysargv,
+        .handlers = try H.alloc(vm.Handler, 256),
+        .eval_hook = &evalHook,
+        .resident = true,
+    };
+    _ = alloc;
+    m.admit_hook = &admitHook;
+    const rs = &g_res;
+    rs.m = &m;
+    rs.parser = parser;
+    rs.exe = image.ExeStamp.ofSelf(H);
+    // `--replace <file>`: that file may redefine functions the program holds
+    // (rung 3), as `replacefile` does from inside it
+    // `--release <name>` releases the program's last admission (rung 6)
+    var replace = false;
+    var release = false;
+    for (files) |path| {
+        if (std.mem.eql(u8, path, "--replace")) {
+            replace = true;
+            continue;
+        }
+        if (std.mem.eql(u8, path, "--release")) {
+            release = true;
+            continue;
+        }
+        if (release) {
+            if (residentRelease(rs, path, .{})) |why| {
+                vm.outPrint("not released {s}: {s}\n", .{ path, why });
+            } else {
+                vm.outPrint("released {s} -- program: {d} function(s), {d} instruction(s), {d} global(s)\n", .{ path, rs.nfuncs, rs.prog_code, m.globals.len -| 1 });
+            }
+            release = false;
+            continue;
+        }
+        _ = try residentAdmit(rs, path, null, replace, .{});
+        replace = false;
+    }
+    if (rs.released > 0) {
+        vm.outPrint("resident: {d} admitted, {d} refused, {d} released, {d} top level(s) stopped on an error; {d} function(s), {d} instruction(s), {d} global(s)\n", .{ rs.admitted, rs.refused, rs.released, rs.stopped, rs.nfuncs, rs.prog_code, m.globals.len -| 1 });
+    } else vm.outPrint("resident: {d} admitted, {d} refused, {d} top level(s) stopped on an error; {d} function(s), {d} instruction(s), {d} global(s)\n", .{ rs.admitted, rs.refused, rs.stopped, rs.nfuncs, rs.prog_code, m.globals.len -| 1 });
+    vm.outFlush();
+}
+
+/// `admitfile(cPath)` and `admitcode(cName, cSource)` from inside the
+/// running program (VM.AdmitHook): the same admission as the driver's, its
+/// top level run above the caller's frame, nothing printed -- a refusal is
+/// the reason the call raises with. `replacefile`/`replacecode` the same,
+/// `replace` set (mode 1); `releasefile`/`releasecode` release the program's
+/// last admission (mode 2, rung 6).
+fn admitHook(m: *vm.VM, name: []const u8, src: ?[]const u8, mode: u8, base: u32, fsp: u32, hsp: u32, pc: u32) ?[]const u8 {
+    _ = m;
+    const at: RunAt = .{ .base = base, .fsp = fsp, .hsp = hsp, .nested = true, .pc = pc };
+    if (mode == 2) {
+        const why = residentRelease(&g_res, name, at) orelse return null;
+        return std.fmt.bufPrint(&g_res.why, "Error : not released: {s}: {s}", .{ name, why }) catch "Error : not released";
+    }
+    return residentAdmit(&g_res, name, src, mode == 1, at) catch |e|
+        (std.fmt.bufPrint(&g_res.why, "Error : not admitted: {s}: {s}", .{ name, @errorName(e) }) catch "Error : not admitted");
+}
+
+/// RNXC_ADMIT_PHASES=1: one line per admission on stderr -- restoring the
+/// program's state, loading the file, compiling it (and inside that,
+/// co.admit_ns's four), installing the delta, saving the state, running its
+/// top level. The resident VM's cost is the sum, and which part grows with
+/// the program is the question this answers.
+const AdmitPhases = struct {
+    const Phase = enum { restore, load, compile, install, save, run };
+    ns: [6]u64 = .{0} ** 6,
+    t: ?std.time.Timer = null,
+    fn lap(self: *AdmitPhases, p: Phase) void {
+        if (self.t == null) self.t = std.time.Timer.start() catch return;
+        self.ns[@intFromEnum(p)] = self.t.?.lap();
+    }
+    fn report(self: *AdmitPhases, path: []const u8, rs: *const Resident) void {
+        if (!admitPhasesOn()) return;
+        const msOf = struct {
+            fn f(x: u64) f64 {
+                return @as(f64, @floatFromInt(x)) / 1e6;
+            }
+        }.f;
+        std.debug.print("phases: {s}: restore {d:.1} load {d:.1} compile {d:.1} (collect {d:.1} resolve {d:.1} front {d:.1} finish {d:.1}) install {d:.1} save {d:.1} run {d:.1} ms; program arena {d} MB, compacted {d}x\n", .{
+            std.fs.path.basename(path), msOf(self.ns[0]), msOf(self.ns[1]), msOf(self.ns[2]),
+            msOf(co.admit_ns[0]), msOf(co.admit_ns[1]), msOf(co.admit_ns[2]), msOf(co.admit_ns[3]),
+            msOf(self.ns[3]), msOf(self.ns[4]), msOf(self.ns[5]),
+            rs.parena.queryCapacity() >> 20, rs.compactions,
+        });
+    }
+};
+var g_admit_phases: ?bool = null;
+fn admitPhasesOn() bool {
+    if (g_admit_phases == null) g_admit_phases = std.process.hasEnvVarConstant("RNXC_ADMIT_PHASES");
+    return g_admit_phases.?;
+}
+
+/// A REFUSED admission undone (rung 5): the live program rolled back to its
+/// marks and moved back. Under RNXC_RESIDENT_CHECK=1 the program is saved
+/// again and must be the bytes it was before -- the proof the undo is whole,
+/// since those bytes are everything the next admission would start from.
+const Undo = struct {
+    rs: *Resident,
+    c: *co.Compiler,
+    marks: *const co.Marks,
+    before: ?[]u8,
+    fn done(self: *Undo, why: []const u8) ?[]const u8 {
+        co.rollbackProgram(self.c, self.marks);
+        co.takeProgram(self.rs.P, self.c);
+        if (self.before) |b| {
+            const after = prefix.encode(vmheap, self.rs.exe, self.rs.stamps.items, self.rs.fnames.items, self.rs.P) catch @panic("resident: the program could not be saved");
+            defer vmheap.free(after);
+            if (!std.mem.eql(u8, b, after)) {
+                std.debug.print("resident: RNXC_RESIDENT_CHECK -- a refused admission changed the program ({d} bytes before, {d} after): a defect of rnxc\n", .{ b.len, after.len });
+                std.process.exit(2);
+            }
+        }
+        return why;
+    }
+};
+
+/// THE CLASS TABLES GROW (rung 5): what an admission adds to the object
+/// model, written into the VM's tables where they stand -- never a rebuild.
+/// A rebuild cost a class admission ~80 ms at Softanza's size (a dispatch
+/// row per class, as wide as the names: ~175 MB), and lost what `addmethod`
+/// had attached at run time.
+///
+///   a new class        a row: its own methods, then its parent's row for
+///                      every name it does not define -- the parent's row
+///                      already holds each ancestor's answer
+///   a replaced class   its new methods over the row it has (rung 4: the
+///                      later method wins), and in every descendant's row
+///                      each cell that held the replaced class's old answer
+///                      -- an inherited cell holds exactly that, an
+///                      overriding one never does
+///   more names than the rows are wide: every row laid out again, wider
+///
+/// The method table only grows, so every slot a row or `addmethod` holds
+/// stays valid. RNXC_RESIDENT_CHECK compares the result, cell by cell, with
+/// the tables a whole build gives (checkVmTables).
+/// Rung 7: a gained attribute's starting value as the VM holds it -- built
+/// once, kept in vm.class_gained, copied into each object that takes it
+fn gainedValue(m: *vm.VM, v: co.ConstVal) vm.Value {
+    return switch (v) {
+        .int => |i| vm.Value.int(i),
+        .konst => |k| vm.konst[@intCast(k)],
+        .list => |items| blk: {
+            const vec = m.newVec(@intCast(items.len));
+            for (items, 0..) |it, i| {
+                const e = gainedValue(m, it);
+                vm.VM.holdValue(e);
+                vec.ptr[i] = e;
+            }
+            vec.len = @intCast(items.len);
+            break :blk vm.Value.vec(vec);
+        },
+    };
+}
+
+fn growClassTables(rs: *Resident, c: *co.Compiler, prog: co.Program, old_funcs: usize, old_classes: usize) !void {
+    const H = vmheap;
+    const vt = &rs.vt;
+    const ncls = c.classes.items.len;
+    const nn = c.names.items.len;
+    var nnm: usize = vm.n_names;
+    std.debug.assert(vm.class_slots.len == old_classes and vt.dispatch.items.len == old_classes * nnm);
+    // the rows' width
+    if (nn > nnm) {
+        const wide = nn + nn / 8 + 256;
+        var nd = std.ArrayListUnmanaged(u32){};
+        try nd.ensureTotalCapacityPrecise(H, (old_classes + 32) * wide);
+        for (0..old_classes) |k| {
+            nd.appendSliceAssumeCapacity(vt.dispatch.items[k * nnm ..][0..nnm]);
+            nd.appendNTimesAssumeCapacity(0, wide - nnm);
+        }
+        vt.dispatch.deinit(H);
+        vt.dispatch = nd;
+        nnm = wide;
+        vm.n_names = @intCast(wide);
+    }
+    // the method table: an entry for each method this admission added to a
+    // class -- a new class's, or a replaced class's new ones
+    const slot_of = try H.alloc(u32, c.funcs.items.len - old_funcs);
+    defer H.free(slot_of);
+    @memset(slot_of, 0);
+    var added = std.ArrayListUnmanaged(u32){};
+    defer added.deinit(H);
+    for (c.class_repl.items) |r| {
+        for (c.classes.items[r.cid].methods.items) |mi| {
+            if (mi >= old_funcs) try added.append(H, mi);
+        }
+    }
+    for (c.classes.items[old_classes..]) |ci| try added.appendSlice(H, ci.methods.items);
+    if (added.items.len > 0) {
+        const mt = try H.alloc(vm.MethodEnt, vm.method_tab.len + added.items.len);
+        @memcpy(mt[0..vm.method_tab.len], vm.method_tab);
+        for (added.items, vm.method_tab.len..) |mi, at| {
+            mt[at] = co.methodEnt(&c.funcs.items[mi]);
+            slot_of[mi - old_funcs] = @intCast(at + 1);
+        }
+        if (vm.method_tab.len > 0) H.free(vm.method_tab);
+        vm.method_tab = mt;
+    }
+    const slotOf = struct {
+        fn f(so: []const u32, base: usize, mi: u32) u32 {
+            return so[mi - base];
+        }
+    }.f;
+    // the replaced classes, and what inherited from them
+    const Change = struct { nm: u32, was: u32, now: u32 };
+    var changes = std.ArrayListUnmanaged(Change){};
+    defer changes.deinit(H);
+    for (c.class_repl.items) |r| {
+        changes.clearRetainingCapacity();
+        const row = vt.dispatch.items[@as(usize, r.cid) * nnm ..][0..nnm];
+        for (c.classes.items[r.cid].methods.items) |mi| {
+            if (mi < old_funcs) continue;
+            const nm = c.funcs.items[mi].name_idx;
+            const now = slotOf(slot_of, old_funcs, mi);
+            const seen = for (changes.items) |*ch| {
+                if (ch.nm == nm) break ch;
+            } else null;
+            if (seen) |ch| ch.now = now else try changes.append(H, .{ .nm = nm, .was = row[nm], .now = now });
+            row[nm] = now;
+        }
+        for (0..old_classes) |d| {
+            if (d == r.cid) continue;
+            var p = c.classes.items[d].parent;
+            const descends = while (p) |pid| {
+                if (pid == r.cid) break true;
+                p = c.classes.items[pid].parent;
+            } else false;
+            if (!descends) continue;
+            const drow = vt.dispatch.items[d * nnm ..][0..nnm];
+            for (changes.items) |ch| {
+                if (drow[ch.nm] == ch.was) drow[ch.nm] = ch.now;
+            }
+        }
+    }
+    // RUNG 7: a replaced class that GAINED attributes -- its slot count and
+    // the attribute table (rebuilt for the classes there were, so the new
+    // ones below append to it), and what each gained slot starts as in the
+    // objects made before (vm.class_gained, read by VM.fitObj)
+    {
+        var relaid = false;
+        for (c.class_repl.items) |r| {
+            const now: u32 = @intCast(c.classes.items[r.cid].attrs.items.len);
+            if (now != vm.class_slots[r.cid]) {
+                vm.class_slots[r.cid] = now;
+                relaid = true;
+            }
+        }
+        if (relaid) {
+            var ents = std.ArrayListUnmanaged(vm.AttrEnt){};
+            const from = try H.alloc(u32, old_classes + 1);
+            for (0..old_classes) |k| {
+                from[k] = @intCast(ents.items.len);
+                try co.classAttrEnts(c, H, @intCast(k), &ents, from[k]);
+            }
+            from[old_classes] = @intCast(ents.items.len);
+            if (vm.attr_ent.len > 0) H.free(vm.attr_ent);
+            if (vm.attr_from.len > 0) H.free(vm.attr_from);
+            vm.attr_ent = try ents.toOwnedSlice(H);
+            vm.attr_from = from;
+        }
+        for (c.class_gained.items) |g| {
+            if (g.cid >= vm.class_gained.len) {
+                const rows = try H.alloc([]vm.Value, @as(usize, g.cid) + 1);
+                @memcpy(rows[0..vm.class_gained.len], vm.class_gained);
+                for (rows[vm.class_gained.len..]) |*row| row.* = &.{};
+                if (vm.class_gained.len > 0) H.free(vm.class_gained);
+                vm.class_gained = rows;
+            }
+            const row = &vm.class_gained[g.cid];
+            if (g.slot >= row.len) {
+                const nr = try H.alloc(vm.Value, vm.class_slots[g.cid]);
+                @memcpy(nr[0..row.len], row.*);
+                @memset(nr[row.len..], vm.Value.nil());
+                if (row.len > 0) H.free(row.*);
+                row.* = nr;
+            }
+            const v = gainedValue(rs.m, g.val);
+            vm.VM.holdValue(v);
+            row.*[g.slot] = v;
+        }
+    }
+    // the new classes' rows, a parent before its children
+    if (ncls > old_classes) {
+        if (vt.dispatch.capacity < ncls * nnm) try vt.dispatch.ensureTotalCapacityPrecise(H, (ncls + 32) * nnm);
+        vt.dispatch.appendNTimesAssumeCapacity(0, (ncls - old_classes) * nnm);
+        const done = try H.alloc(bool, ncls - old_classes);
+        defer H.free(done);
+        @memset(done, false);
+        var left = ncls - old_classes;
+        while (left > 0) {
+            const before = left;
+            for (old_classes..ncls) |k| {
+                if (done[k - old_classes]) continue;
+                const ci = &c.classes.items[k];
+                if (ci.parent) |pp| {
+                    if (pp >= old_classes and !done[pp - old_classes]) continue;
+                }
+                const row = vt.dispatch.items[k * nnm ..][0..nnm];
+                for (ci.methods.items) |mi| row[c.funcs.items[mi].name_idx] = slotOf(slot_of, old_funcs, mi);
+                if (ci.parent) |pp| {
+                    const prow = vt.dispatch.items[@as(usize, pp) * nnm ..][0..nnm];
+                    for (row, prow) |*cell, pv| {
+                        if (cell.* == 0) cell.* = pv;
+                    }
+                }
+                done[k - old_classes] = true;
+                left -= 1;
+            }
+            if (left == before) return error.ClassCycle;
+        }
+        // their slots, parents, names and attributes
+        const grow = struct {
+            fn f(comptime T: type, old: []T, extra: usize) ![]T {
+                const n = try vmheap.alloc(T, old.len + extra);
+                @memcpy(n[0..old.len], old);
+                if (old.len > 0) vmheap.free(old);
+                return n;
+            }
+        }.f;
+        const add = ncls - old_classes;
+        vm.class_slots = try grow(u32, vm.class_slots, add);
+        vm.class_parent = try grow(u16, vm.class_parent, add);
+        vm.class_konst = try grow(u32, vm.class_konst, add);
+        std.debug.assert(prog.class_konst_new.len == add);
+        var ents = std.ArrayListUnmanaged(vm.AttrEnt){};
+        try ents.appendSlice(H, vm.attr_ent);
+        const from = try grow(u32, vm.attr_from, add);
+        for (old_classes..ncls) |k| {
+            const ci = c.classes.items[k];
+            vm.class_slots[k] = @intCast(ci.attrs.items.len);
+            vm.class_parent[k] = if (ci.parent) |pp| @intCast(pp) else 0xFFFF;
+            vm.class_konst[k] = prog.class_konst_new[k - old_classes];
+            from[k] = @intCast(ents.items.len);
+            try co.classAttrEnts(c, H, @intCast(k), &ents, from[k]);
+        }
+        from[ncls] = @intCast(ents.items.len);
+        if (vm.attr_ent.len > 0) H.free(vm.attr_ent);
+        vm.attr_ent = try ents.toOwnedSlice(H);
+        vm.attr_from = from;
+    }
+    vm.dispatch = vt.dispatch.items;
+    // a method `addmethod` attached under a name the program did not have --
+    // not yet, or no longer, a release having taken it (rung 6) -- reaches
+    // its class once an admission brings the name: the cell is written then,
+    // the later attachment winning, a method of the class's own kept
+    {
+        var set = std.AutoHashMapUnmanaged(usize, void){};
+        defer set.deinit(H);
+        var lb: [256]u8 = undefined;
+        for (vm.dyn_methods.items) |dm| {
+            if (dm.name.len > lb.len) continue;
+            const ni = c.name_index.get(std.ascii.lowerString(&lb, dm.name)) orelse continue;
+            const cell = @as(usize, dm.cls) * nnm + ni;
+            if (ni >= nnm or cell >= vt.dispatch.items.len) continue;
+            if (vt.dispatch.items[cell] == 0 or set.contains(cell)) {
+                vt.dispatch.items[cell] = dm.slot;
+                try set.put(H, cell, {});
+            }
+        }
+    }
+    // the class that defines each new function
+    {
+        const fo = try H.alloc(u16, c.funcs.items.len);
+        @memcpy(fo[0..vm.fn_owner.len], vm.fn_owner);
+        for (c.funcs.items[vm.fn_owner.len..], vm.fn_owner.len..) |f, ix| fo[ix] = if (f.owner) |o| o else 0xFFFF;
+        if (vm.fn_owner.len > 0) H.free(vm.fn_owner);
+        vm.fn_owner = fo;
+    }
+    // the accessor tables: a new name `get<k>` names k's getter, and a new
+    // name k takes a `get<k>` the program already had
+    {
+        const old_nn = vm.acc_get.len;
+        const ag = try H.alloc(u32, nn);
+        const as = try H.alloc(u32, nn);
+        @memcpy(ag[0..old_nn], vm.acc_get);
+        @memcpy(as[0..old_nn], vm.acc_set);
+        @memset(ag[old_nn..], vm.ACC_NONE);
+        @memset(as[old_nn..], vm.ACC_NONE);
+        var buf: [256]u8 = undefined;
+        for (c.names.items[old_nn..], old_nn..) |nm, i| {
+            co.accessorOf(c, nm, @intCast(i), ag, as);
+            if (nm.len + 3 > buf.len) continue;
+            _ = std.ascii.lowerString(buf[3 .. 3 + nm.len], nm);
+            @memcpy(buf[0..3], "get");
+            if (c.name_index.get(buf[0 .. 3 + nm.len])) |gi| ag[i] = gi;
+            @memcpy(buf[0..3], "set");
+            if (c.name_index.get(buf[0 .. 3 + nm.len])) |si| as[i] = si;
+        }
+        if (old_nn > 0) {
+            H.free(vm.acc_get);
+            H.free(vm.acc_set);
+        }
+        vm.acc_get = ag;
+        vm.acc_set = as;
+    }
+}
+
+/// RNXC_RESIDENT_CHECK's third part (rung 5): the grown class tables against
+/// the ones a whole build of the program gives. A dispatch cell is compared
+/// by the method it reaches, since a grown table numbers its methods in the
+/// order they arrived; a cell `addmethod` wrote at run time is left out.
+fn checkClassTables(c: *co.Compiler, a: std.mem.Allocator, bad: *const fn ([]const u8) noreturn) void {
+    const names_before = c.names.items.len;
+    const konst_before = c.konst.items.len;
+    const nnm: usize = vm.n_names;
+    const ncls = c.classes.items.len;
+    if (ncls > 0) {
+        const full = co.buildClassTables(c, a, nnm) catch @panic("oom");
+        if (!std.mem.eql(u32, vm.class_slots, full.class_slots)) bad("class_slots");
+        if (!std.mem.eql(u16, vm.class_parent, full.class_parent)) bad("class_parent");
+        if (!std.mem.eql(u32, vm.class_konst, full.class_konst)) bad("class_konst");
+        if (vm.attr_from.len != full.attr_from.len) bad("attr_from's length");
+        for (0..ncls) |k| {
+            const x = vm.attr_ent[vm.attr_from[k]..vm.attr_from[k + 1]];
+            const y = full.attr_ent[full.attr_from[k]..full.attr_from[k + 1]];
+            if (x.len != y.len) bad("attr_ent");
+            for (x, y) |p, q| if (p.name != q.name or p.slot != q.slot) bad("attr_ent");
+        }
+        if (vm.dispatch.len != full.dispatch.len) bad("dispatch's length");
+        var skip = std.AutoHashMapUnmanaged(usize, void){};
+        for (vm.dyn_methods.items) |dm| {
+            if (c.name_index.get(dm.name)) |ni| skip.put(a, @as(usize, dm.cls) * nnm + ni, {}) catch @panic("oom");
+        }
+        for (vm.dispatch, full.dispatch, 0..) |x, y, cell| {
+            if (x == y and x == 0) continue;
+            if (skip.contains(cell)) continue;
+            if ((x == 0) != (y == 0)) bad("dispatch");
+            const p = vm.method_tab[x - 1];
+            const q = full.method_tab[y - 1];
+            if (p.entry != q.entry or p.frame != q.frame or p.id != q.id or p.nparams != q.nparams or p.shift != q.shift) bad("dispatch");
+        }
+    }
+    const fo = co.buildFnOwner(c, a) catch @panic("oom");
+    if (!std.mem.eql(u16, vm.fn_owner, fo)) bad("fn_owner");
+    const acc = co.buildAccessors(c, a) catch @panic("oom");
+    if (!std.mem.eql(u32, vm.acc_get, acc[0]) or !std.mem.eql(u32, vm.acc_set, acc[1])) bad("accessor tables");
+    if (c.names.items.len != names_before or c.konst.items.len != konst_before) bad("program (the check itself added a name)");
+}
+
+/// RNXC_RESIDENT_CHECK: the `r24` index (Resident.r24) is exactly the running
+/// code's `r24` sites, each once -- an admission adds its own, a release takes
+/// them away again. An entry a release left behind names a place past the
+/// code, which the next new-global check would read (rung 6)
+fn checkR24Index(rs: *Resident) void {
+    const code = rs.m.code;
+    var n: usize = 0;
+    for (code) |in| {
+        if (in.op == .r24 and in.d >= 0) n += 1;
+    }
+    var listed: usize = 0;
+    var it = rs.r24.iterator();
+    while (it.next()) |e| {
+        for (e.value_ptr.items) |pc| {
+            listed += 1;
+            if (pc >= code.len or code[pc].op != .r24 or code[pc].d != @as(i32, @intCast(e.key_ptr.*))) {
+                std.debug.print("resident: RNXC_RESIDENT_CHECK -- the r24 index names {d}, which is not an r24 of its name in the {d} instruction(s) of the code: a defect of rnxc\n", .{ pc, code.len });
+                std.process.exit(2);
+            }
+        }
+    }
+    if (listed != n) {
+        std.debug.print("resident: RNXC_RESIDENT_CHECK -- the r24 index lists {d} site(s), the code holds {d}: a defect of rnxc\n", .{ listed, n });
+        std.process.exit(2);
+    }
+}
+
+/// RNXC_RESIDENT_CHECK's second half (rung 5): the VM's grown tables against
+/// the ones a whole build of the program gives -- per function and per name
+/// whole; per instruction, the code this admission added (an earlier
+/// admission's was checked when it was added, and is never written again).
+/// A difference is a defect of rnxc, and stops it.
+fn checkVmTables(m: *vm.VM, c: *co.Compiler, prog: co.Program, a: std.mem.Allocator) void {
+    const S = struct {
+        fn bad(what: []const u8) noreturn {
+            std.debug.print("resident: RNXC_RESIDENT_CHECK -- the VM's {s} is not what a whole build gives: a defect of rnxc\n", .{what});
+            std.process.exit(2);
+        }
+        fn strs(x: []const []const u8, y: []const []const u8) bool {
+            if (x.len != y.len) return false;
+            for (x, y) |p, q| if (!std.mem.eql(u8, p, q)) return false;
+            return true;
+        }
+    };
+    const ft = co.fnTables(prog.funcs, a, 0) catch @panic("oom");
+    if (!std.mem.eql(u32, m.fn_entry, ft.entry)) S.bad("fn_entry");
+    if (!std.mem.eql(u8, m.fn_frame, ft.frame)) S.bad("fn_frame");
+    if (!std.mem.eql(u32, m.fn_local_from, ft.local_from)) S.bad("fn_local_from");
+    if (!S.strs(m.local_names, ft.local_names)) S.bad("local_names");
+    if (!std.mem.eql(u8, m.local_regs, ft.local_regs)) S.bad("local_regs");
+    if (!std.mem.eql(bool, m.local_boxed, ft.local_boxed)) S.bad("local_boxed");
+    const fo = co.fnOfTable(a, prog.funcs, prog.code.len, prog.body_end, 0, 0) catch @panic("oom");
+    // A function's code begins with a placeholder jump its entry moves past
+    // when the body clears no local (F-89). A whole build gives the first
+    // new function's placeholder to the function before it by address -- an
+    // earlier admission's, whose range that admission closed -- and the
+    // delta to none. It never runs; it is the one difference allowed, and
+    // only for a jump.
+    if (m.fn_of.len != fo.len) S.bad("fn_of's length");
+    var lo = prog.code_base;
+    while (lo < fo.len and m.fn_of[lo] == std.math.maxInt(u32) and fo[lo] < prog.fn_base and prog.code[lo].op == .jmp) lo += 1;
+    if (!std.mem.eql(u32, m.fn_of[lo..], fo[lo..])) S.bad("fn_of");
+    if (!std.mem.eql(u32, m.rows, prog.rows)) S.bad("rows");
+    if (!std.mem.eql(u16, m.files, prog.files)) S.bad("files");
+    if (!S.strs(m.names, prog.names)) S.bad("names");
+    if (!S.strs(vm.global_names, prog.global_names)) S.bad("global_names");
+    if (m.fn_names.len != prog.funcs.len or m.fn_method.len != prog.funcs.len or m.fn_nparams.len != prog.funcs.len) S.bad("per-function table lengths");
+    const nfn = a.alloc(u32, prog.names.len) catch @panic("oom");
+    @memset(nfn, vm.NO_FN);
+    for (prog.funcs, 0..) |f, i| {
+        if (!std.mem.eql(u8, m.fn_names[i], f.name)) S.bad("fn_names");
+        if (m.fn_method[i] != (f.owner != null)) S.bad("fn_method");
+        const plain = f.owner == null and f.lambda_at == null and !std.mem.startsWith(u8, f.name, "@@");
+        if (m.fn_nparams[i] != (if (plain and f.params.len < 0xFF) @as(u8, @intCast(f.params.len)) else 0xFF)) S.bad("fn_nparams");
+        if (plain and f.name_idx < nfn.len and nfn[f.name_idx] == vm.NO_FN) nfn[f.name_idx] = prog.funcs[c.live(@intCast(i))].id;
+    }
+    if (!std.mem.eql(u32, m.name_fn, nfn)) S.bad("name_fn");
+    const ncl = a.alloc(u32, prog.names.len) catch @panic("oom");
+    @memset(ncl, vm.NO_CLS);
+    co.lateClasses(c, ncl);
+    if (!std.mem.eql(u32, m.name_cls, ncl)) S.bad("name_cls");
+    if (m.ncache.len != m.names.len) S.bad("native cache's length");
+    if (m.fn_index) |fi| {
+        var want = std.StringHashMapUnmanaged(u32){};
+        for (prog.funcs, 0..) |f, i| {
+            if (f.name.len == 0 or f.name.len > 250 or f.owner != null) continue;
+            const key = a.alloc(u8, f.name.len) catch @panic("oom");
+            for (f.name, 0..) |ch, k| key[k] = std.ascii.toLower(ch);
+            if (want.contains(key)) continue;
+            want.put(a, key, prog.funcs[c.live(@intCast(i))].id) catch @panic("oom");
+        }
+        if (want.count() != fi.count()) S.bad("name map's size");
+        var it = want.iterator();
+        while (it.next()) |e| if ((fi.get(e.key_ptr.*) orelse S.bad("name map")) != e.value_ptr.*) S.bad("name map");
+    }
+    if (m.name_lc) |nl| {
+        var n: usize = 0;
+        for (prog.names, 0..) |nm, i| {
+            if (nm.len == 0 or nm.len > 250) continue;
+            var low: [250]u8 = undefined;
+            const key = std.ascii.lowerString(&low, nm);
+            const got = nl.get(key) orelse S.bad("name index map");
+            if (got == i) n += 1;
+        }
+        if (n != nl.count()) S.bad("name index map's size");
+    }
+    checkClassTables(c, a, &S.bad);
+}
+
+/// The live program's first state: empty, in an arena of its own.
+fn residentLive(rs: *Resident) !void {
+    const pa = try vmheap.create(std.heap.ArenaAllocator);
+    pa.* = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const p = try pa.allocator().create(co.Compiler);
+    p.* = .{ .alloc = pa.allocator(), .lenient = true };
+    rs.parena = pa;
+    rs.P = p;
+    rs.live = true;
+}
+
+/// The live program COMPACTED: saved to bytes and restored into a fresh
+/// arena -- the path every admission took before rung 5 -- and the old arena,
+/// with everything the compiles left in it, released. Run when the arena has
+/// doubled (plus `compact_slack`) since the last time, and after every admission under
+/// RNXC_RESIDENT_BLOB=1. Nothing still running reads the old arena: an
+/// admission releases its trees and finishes with `prog` before it can run a
+/// top level that compacts.
+fn residentCompact(rs: *Resident) !void {
+    const H = vmheap;
+    var tm = std.time.Timer.start() catch null;
+    const cap_before = rs.parena.queryCapacity();
+    const blob = try prefix.encode(H, rs.exe, rs.stamps.items, rs.fnames.items, rs.P);
+    defer H.free(blob);
+    const na = try H.create(std.heap.ArenaAllocator);
+    na.* = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const a = na.allocator();
+    const np = try a.create(co.Compiler);
+    np.* = .{ .alloc = a, .lenient = true };
+    var st = std.ArrayListUnmanaged(image.Stamp){};
+    var fnm = std.ArrayListUnmanaged([]const u8){};
+    // the dispatch rows' width is the VM's; the restore sets it to the names
+    const keep_stride = vm.n_names;
+    if (!prefix.decode(a, blob, rs.exe, np, &st, &fnm)) {
+        std.debug.print("resident: the program's own state did not read back -- a defect of rnxc\n", .{});
+        std.process.exit(2);
+    }
+    vm.n_names = keep_stride;
+    // room to grow: a list restored at its exact length doubles -- into this
+    // arena, for good -- the first time the next admission appends to it
+    inline for (.{ "code", "rows", "files", "fixups", "names", "globals", "natives", "konst", "funcs", "classes" }) |f| {
+        const l = &@field(np, f);
+        try l.ensureTotalCapacity(a, l.items.len + l.items.len / 4 + 256);
+    }
+    rs.parena.deinit();
+    H.destroy(rs.parena);
+    rs.parena = na;
+    rs.P = np;
+    rs.compact_at = na.queryCapacity() * 2 + compact_slack;
+    rs.compactions += 1;
+    if (admitPhasesOn()) std.debug.print("compaction {d}: program arena {d} -> {d} KB in {d:.1} ms\n", .{
+        rs.compactions, cap_before >> 10, na.queryCapacity() >> 10, if (tm) |*t| @as(f64, @floatFromInt(t.read())) / 1e6 else 0,
+    });
+}
+
+/// What the arena may grow by past twice what it held after the last
+/// compaction. 64 MB until rung 6; a server releasing code per request left
+/// its sources there, and a small program climbed 64 MB before it was
+/// reclaimed (measured 2026-10-31: ~17 KB a run of 16 KB of source). A
+/// compaction of a small program costs a few milliseconds; at Softanza's size
+/// the doubling, not this, decides when.
+const compact_slack: usize = 16 << 20;
+
+var g_resident_check: ?bool = null;
+fn residentCheckOn() bool {
+    if (g_resident_check == null) g_resident_check = std.process.hasEnvVarConstant("RNXC_RESIDENT_CHECK");
+    return g_resident_check.?;
+}
+var g_resident_blob: ?bool = null;
+fn residentBlobOn() bool {
+    if (g_resident_blob == null) g_resident_blob = std.process.hasEnvVarConstant("RNXC_RESIDENT_BLOB");
+    return g_resident_blob.?;
+}
+
+/// One admission: null when admitted (and its top level run), else why not.
+/// `path` is the file, or with `src` the NAME code is admitted under.
+/// `replace` (rung 3): it may redefine functions the program holds -- and a
+/// file may then be one the program already admitted, read again as it is
+/// now on disk, the shape of a redeploy.
+fn residentAdmit(rs: *Resident, path: []const u8, src: ?[]const u8, replace: bool, at: RunAt) !?[]const u8 {
+    const why = try residentAdmitOnce(rs, path, src, replace, at);
+    // compacted once the admission is wholly over -- its own cleanup reads
+    // lists in the program's arena -- and before the next one starts
+    if (residentBlobOn() or rs.parena.queryCapacity() > rs.compact_at) try residentCompact(rs);
+    return why;
+}
+
+fn residentAdmitOnce(rs: *Resident, path: []const u8, src: ?[]const u8, replace: bool, at: RunAt) !?[]const u8 {
+    const H = vmheap;
+    const m = rs.m;
+    const parser = rs.parser;
+    const exe = rs.exe;
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var timer = try std.time.Timer.start();
+    if (!at.nested) vm.outFlush();
+    // RNXC_ADMIT_PHASES=1: where each admission's time goes, on stderr
+    var ph = AdmitPhases{ .t = std.time.Timer.start() catch null };
+
+    // the program so far, moved into a compiler of this admission's own: the
+    // live program's lists and indexes, everything per-admission fresh. What
+    // the compile allocates beside the program goes in the program's arena
+    // (`pa`), since the program keeps it; the tables built for the VM, which
+    // the install copies, in this admission's (`a`)
+    if (!rs.live) try residentLive(rs);
+    const pa = rs.parena.allocator();
+    const c = try a.create(co.Compiler);
+    c.* = .{ .alloc = pa, .lenient = true };
+    var sa = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer sa.deinit();
+    c.scratch_arena = &sa;
+    c.scratch = sa.allocator();
+    co.takeProgram(c, rs.P);
+    c.tables_alloc = a;
+    c.r24_sites = &rs.r24;
+    const marks = try co.markProgram(c, a);
+    const check_before: ?[]u8 = if (residentCheckOn()) try prefix.encode(H, exe, rs.stamps.items, rs.fnames.items, c) else null;
+    defer if (check_before) |b| H.free(b);
+    var undo = Undo{ .rs = rs, .c = c, .marks = &marks, .before = check_before };
+    const nadm = rs.stamps.items.len;
+    ph.lap(.restore);
+
+    // the file, and what it loads that the program does not already hold
+    var on_top = Unit{};
+    var held_l = std.ArrayListUnmanaged([]const u8){};
+    const root_key = if (replace and src == null) try normalisePath(a, path) else "";
+    std.debug.assert(rs.held_norm.items.len == rs.stamps.items.len);
+    for (rs.held_norm.items) |key| {
+        // replacing a file the program holds reads it again; what IT loads
+        // that the program holds stays held
+        if (root_key.len > 0 and std.mem.eql(u8, key, root_key)) continue;
+        try held_l.append(a, key);
+    }
+    const held = held_l.items;
+    on_top.already_norm = true;
+    // code is admitted under a path of its own, so the same name twice is two
+    // admissions (a redefinition is still refused), and reported by its name
+    const root_path = if (src != null) try std.fmt.allocPrint(pa, "admitcode:{d}:{s}", .{ rs.codes + 1, path }) else path;
+    // the source lives with the program, whose names are slices of it: a
+    // program's own string handed to admitcode may be released after
+    on_top.root_src = if (src) |t| try pa.dupe(u8, t) else null;
+    try loadUnit(pa, parser, root_path, &on_top, true, held);
+    if (src != null and on_top.names.items.len > 0) on_top.names.items[0] = path;
+    if (on_top.roots.items.len == 0) {
+        return undo.done(refuse(rs, at, path, if (on_top.missing > 0) "it cannot be read" else "it is already admitted (Ring loads a file once)", null, &.{}));
+    }
+    if (on_top.missing + on_top.scan_bad > 0 or on_top.implicit != null) {
+        for (on_top.trees.items) |t| t.deinit();
+        on_top.trees.clearRetainingCapacity();
+        return undo.done(refuse(rs, at, path, if (on_top.implicit != null)
+            "Ring would read an implicit file beside it (C-28)"
+        else if (on_top.scan_bad > 0)
+            "a file does not scan (an unclosed literal or comment)"
+        else
+            "a load names a file that cannot be opened", null, &.{}));
+    }
+
+    // the unit: the admitted files hold their places, so every file index
+    // baked into admitted code still names the same file
+    var roots = std.ArrayListUnmanaged(ts.Node){};
+    var paths = std.ArrayListUnmanaged([]const u8){};
+    const blank = ts.Node{ .raw = std.mem.zeroes(@TypeOf(on_top.roots.items[0].raw)), .src = "" };
+    for (0..nadm) |k| {
+        try roots.append(a, blank);
+        try paths.append(a, rs.stamps.items[k].path);
+    }
+    try roots.appendSlice(a, on_top.roots.items);
+    try paths.appendSlice(a, on_top.paths.items);
+    const srcs = try a.alloc([*]const u8, paths.items.len);
+    for (srcs) |*x| x.* = @ptrCast(&no_src);
+    for (on_top.roots.items, 0..) |r, k| srcs[nadm + k] = r.src.ptr;
+    co.load_srcs = srcs;
+    co.load_paths = paths.items;
+    defer {
+        co.load_srcs = &.{};
+        co.load_paths = &.{};
+    }
+    defer for (on_top.trees.items) |t| t.deinit();
+
+    // what compileFinish overwrites in the VM's globals: kept, so a refusal
+    // leaves them exactly as they were and an admission can tell its own
+    const keep_konst = vm.konst;
+    const keep_konst_cap = vm.konst_cap;
+    const keep = .{
+        .dispatch = vm.dispatch,
+        .method_tab = vm.method_tab,
+        .class_slots = vm.class_slots,
+        .attr_from = vm.attr_from,
+        .attr_ent = vm.attr_ent,
+        .class_konst = vm.class_konst,
+        .class_parent = vm.class_parent,
+        .fn_owner = vm.fn_owner,
+        .acc_get = vm.acc_get,
+        .acc_set = vm.acc_set,
+    };
+    const old_funcs = c.funcs.items.len;
+    const old_classes = c.classes.items.len;
+    ph.lap(.load);
+    c.replacing = replace;
+    const prog = co.compileAdmit(c, roots.items, @intCast(nadm), pa) catch |e| {
+        vm.konst = keep_konst;
+        vm.konst_cap = keep_konst_cap;
+        if (e != co.Error.Refused) return undo.done(refuse(rs, at, path, @errorName(e), null, &.{}));
+        return undo.done(refuse(rs, at, path, co.admit_why, c, paths.items));
+    };
+    vm.konst = keep_konst;
+    vm.konst_cap = keep_konst_cap;
+
+    ph.lap(.compile);
+    // rung 6: where the VM's side stood before the install, for a release
+    var rec_vt: [vt_lists.len]usize = undefined;
+    inline for (vt_lists, 0..) |f, k| rec_vt[k] = @field(rs.vt, f).items.len;
+    const rec_vm = .{ .prog_code = rs.prog_code, .prog_konst = rs.prog_konst, .nfuncs = rs.nfuncs, .file_names = m.file_names.len, .stamps = rs.stamps.items.len, .fnames = rs.fnames.items.len, .main_fn = m.main_fn, .fn_owner = vm.fn_owner.len, .acc = vm.acc_get.len };
+    // ---- INSTALL: the VM takes the delta ------------------------------
+    // Eval code past the program is cut and its cache forgotten: a string
+    // compiled before this admission may have read a name this file now
+    // defines as something else.
+    m.truncateCode(rs.prog_code);
+    m.truncateKonst(rs.prog_konst);
+    evalReset();
+    std.debug.assert(c.prefix_code == rs.prog_code);
+    _ = m.appendCode(prog.code[rs.prog_code..]);
+    // the admitted code's `r24` sites, by name: what the next admission's
+    // new-global refusal reads (compileAdmit) -- code is never rewritten
+    // there, so the list only grows
+    for (prog.code[rs.prog_code..], rs.prog_code..) |in, pc| {
+        if (in.op != .r24 or in.d < 0) continue;
+        const gop = try rs.r24.getOrPut(H, @intCast(in.d));
+        if (!gop.found_existing) gop.value_ptr.* = .{};
+        try gop.value_ptr.append(H, @intCast(pc));
+    }
+    // rung 3: the running code's calls to a replaced function now reach the
+    // replacement -- one instruction each, rewritten where it stands (the
+    // run loop reads the code again after an admission from inside)
+    for (c.repatched.items) |site| {
+        std.debug.assert(site < rs.prog_code);
+        @constCast(m.code.ptr)[site] = prog.code[site];
+    }
+    // THE VM's TABLES GROW (rung 5): what this admission added is appended
+    // to each, the program's own lists never copied again. An earlier
+    // instruction keeps its row, file and function -- a replacement rewrites
+    // an instruction, never where it came from -- and an earlier function
+    // its entry, frame and locals (a replacement is a new function).
+    const vt = &rs.vt;
+    {
+        std.debug.assert(prog.code_base == rs.prog_code and vt.fn_of.items.len == rs.prog_code);
+        try vt.fn_of.appendSlice(H, prog.fn_of);
+        try vt.rows.appendSlice(H, prog.rows[vt.rows.items.len..]);
+        try vt.files.appendSlice(H, prog.files[vt.files.items.len..]);
+        m.fn_of = vt.fn_of.items;
+        m.rows = vt.rows.items;
+        m.files = vt.files.items;
+    }
+    // constants: appended, pinned as the freeze pins them
+    {
+        const add = try dupKonst(H, c.konst.items[rs.prog_konst..]);
+        for (add) |kv| _ = m.appendKonst(kv);
+        H.free(add);
+    }
+    // names: appended, and the VM's two maps that read them extended rather
+    // than dropped (a name's index never changes)
+    const old_names = vt.names.items.len;
+    for (prog.names[old_names..]) |nm| try vt.names.append(H, try H.dupe(u8, nm));
+    m.names = vt.names.items;
+    if (m.name_lc) |*nl| {
+        for (vt.names.items[old_names..], old_names..) |nm, i| {
+            if (nm.len == 0 or nm.len > 250) continue;
+            const key = try H.alloc(u8, nm.len);
+            for (nm, 0..) |ch, k| key[k] = std.ascii.toLower(ch);
+            if (nl.contains(key)) {
+                H.free(key);
+                continue;
+            }
+            try nl.put(H, key, @intCast(i));
+        }
+    }
+    // a name's native, once found, is still that name's: the cache grows
+    try vt.ncache.appendNTimes(H, null, vt.names.items.len - vt.ncache.items.len);
+    m.ncache = vt.ncache.items;
+    // globals: grown, every value kept in its slot
+    {
+        const ng = prog.nglobals + 1;
+        const g = try H.alloc(vm.Value, ng);
+        @memset(g, vm.Value.nil());
+        @memcpy(g[0..m.globals.len], m.globals);
+        const gs = try H.alloc(bool, ng);
+        @memset(gs, false);
+        @memcpy(gs[0..m.globals_set.len], m.globals_set);
+        H.free(m.globals);
+        H.free(m.globals_set);
+        m.globals = g;
+        m.globals_set = gs;
+        for (prog.global_names[vt.global_names.items.len..]) |nm| try vt.global_names.append(H, try H.dupe(u8, nm));
+        vm.global_names = vt.global_names.items;
+    }
+    // the per-function tables: this admission's functions appended (the
+    // compile built them for those alone, fn_local_from counting from the
+    // first new function's first local)
+    {
+        const fb = prog.fn_base;
+        // a program with no function yet had one empty row; it goes
+        std.debug.assert(fb <= vt.fn_entry.items.len and fb + 1 >= vt.fn_entry.items.len);
+        const lbase: u32 = if (fb < vt.fn_local_from.items.len) vt.fn_local_from.items[fb] else 0;
+        vt.fn_entry.shrinkRetainingCapacity(fb);
+        vt.fn_frame.shrinkRetainingCapacity(fb);
+        vt.fn_local_from.shrinkRetainingCapacity(fb);
+        std.debug.assert(lbase == vt.local_names.items.len);
+        try vt.fn_entry.appendSlice(H, prog.fn_entry);
+        try vt.fn_frame.appendSlice(H, prog.fn_frame);
+        for (prog.fn_local_from) |x| try vt.fn_local_from.append(H, lbase + x);
+        for (prog.local_names) |nm| try vt.local_names.append(H, try H.dupe(u8, nm));
+        try vt.local_regs.appendSlice(H, prog.local_regs);
+        try vt.local_boxed.appendSlice(H, prog.local_boxed);
+        m.fn_entry = vt.fn_entry.items;
+        m.fn_frame = vt.fn_frame.items;
+        m.fn_local_from = vt.fn_local_from.items;
+        m.local_names = vt.local_names.items;
+        m.local_regs = vt.local_regs.items;
+        m.local_boxed = vt.local_boxed.items;
+    }
+    // by function: its name, whether it is a method, how many parameters a
+    // call by name must pass (0xFF: not counted) -- and by NAME, the function
+    // a call compiled before it existed reaches (VM.name_fn: the first plain
+    // function of that name, as Ring takes the first definition)
+    const old_fns = vt.fn_names.items.len;
+    {
+        for (prog.funcs[old_fns..], old_fns..) |f, i| {
+            std.debug.assert(f.id == i);
+            try vt.fn_names.append(H, try H.dupe(u8, f.name));
+            try vt.fn_method.append(H, f.owner != null);
+            const plain = f.owner == null and f.lambda_at == null and !std.mem.startsWith(u8, f.name, "@@");
+            try vt.fn_nparams.append(H, if (plain and f.params.len < 0xFF) @intCast(f.params.len) else 0xFF);
+        }
+        m.fn_names = vt.fn_names.items;
+        m.fn_method = vt.fn_method.items;
+        m.fn_nparams = vt.fn_nparams.items;
+        try vt.name_fn.appendNTimes(H, vm.NO_FN, prog.names.len - vt.name_fn.items.len);
+        // rung 3: a call by name to a replaced function reaches its
+        // replacement -- the late link here, `call "f"()` and eval through
+        // the name map below (VM.fn_index); the replaced one keeps its own
+        // entries for the frames still running it. A replacement is a new
+        // function of the name it replaces, so the new functions alone say
+        // what moved (rung 5): a name an earlier function held keeps that
+        // function, followed to the one that runs now (Compiler.live), and a
+        // name none held takes the new one -- a full mapping's answer.
+        const nfn = vt.name_fn.items;
+        for (prog.funcs[old_fns..], old_fns..) |f, i| {
+            if (f.owner != null or f.lambda_at != null or std.mem.startsWith(u8, f.name, "@@")) continue;
+            if (f.name_idx >= nfn.len) continue;
+            const cur = nfn[f.name_idx];
+            nfn[f.name_idx] = prog.funcs[c.live(if (cur == vm.NO_FN) @intCast(i) else cur)].id;
+        }
+        m.name_fn = nfn;
+    }
+    // rung 8: by NAME, the class a `new` compiled before it existed reaches
+    // (VM.name_cls) -- grown with the names, filled when the admission added
+    // a name or a class (a class is never released, and a replaced one keeps
+    // its id)
+    {
+        const had = vt.name_cls.items.len;
+        try vt.name_cls.appendNTimes(H, vm.NO_CLS, prog.names.len - had);
+        if (prog.names.len > had or c.classes.items.len > old_classes) co.lateClasses(c, vt.name_cls.items);
+        m.name_cls = vt.name_cls.items;
+    }
+    if (replace) {
+        for (prog.funcs[0..old_fns]) |f| {
+            if (f.replaced_by != null) {
+                rs.ever_replaced = true;
+                break;
+            }
+        }
+    }
+    // the object model's tables: GROWN in place once the VM holds them
+    // (rung 5, growClassTables); until then compileFinish built them whole
+    // in the arena, and those are copied out -- the dispatch rows into the
+    // list they grow in from then on
+    if (prog.grow_classes) {
+        try growClassTables(rs, c, prog, old_funcs, old_classes);
+    } else {
+        inline for (.{ "dispatch", "method_tab", "class_slots", "attr_from", "attr_ent", "class_konst", "class_parent", "fn_owner", "acc_get", "acc_set" }) |t| {
+            const cur = @field(vm, t);
+            const was = @field(keep, t);
+            if (cur.ptr != was.ptr) {
+                @field(vm, t) = try H.dupe(@TypeOf(cur[0]), cur);
+                H.free(was);
+            }
+        }
+        // room for 32 more classes now, while the first classes' admission
+        // pays for a copy anyway: a row is as wide as the names (~175 MB of
+        // rows at Softanza's size, ~40 ms to move)
+        if (vm.dispatch.len > 0 and vt.dispatch.items.len == 0) {
+            vt.dispatch = std.ArrayListUnmanaged(u32).fromOwnedSlice(vm.dispatch);
+            try vt.dispatch.ensureTotalCapacityPrecise(H, vt.dispatch.items.len + 32 * @as(usize, vm.n_names));
+            vm.dispatch = vt.dispatch.items;
+        }
+    }
+    H.free(vm.class_attrs_fn);
+    vm.class_attrs_fn = try H.dupe(u32, prog.class_attrs_fn);
+    // THE VM's NAME MAP (VM.fn_index), by VM.funcByName's own rules -- a
+    // function, not a method; Ring folds case and takes the first definition
+    // of a name. The VM builds it on its first use; from then on each
+    // admission's functions join it here, a name already mapped followed to
+    // the function that runs now (rung 3: the VM is not taught a replacement,
+    // the map it keeps carries it). A program that replaced a function before
+    // the VM built the map gets it built HERE, the replacements followed.
+    const lowKey = struct {
+        fn f(nm: []const u8) ![]u8 {
+            const key = try vmheap.alloc(u8, nm.len);
+            for (nm, 0..) |ch, k| key[k] = std.ascii.toLower(ch);
+            return key;
+        }
+    }.f;
+    if (m.fn_index == null) {
+        if (rs.ever_replaced) {
+            var mp = std.StringHashMapUnmanaged(u32){};
+            for (prog.funcs, 0..) |f, i| {
+                if (f.name.len == 0 or f.name.len > 250 or f.owner != null) continue;
+                const key = try lowKey(f.name);
+                if (mp.contains(key)) {
+                    H.free(key);
+                    continue;
+                }
+                try mp.put(H, key, prog.funcs[c.live(@intCast(i))].id);
+            }
+            m.fn_index = mp;
+        }
+    } else if (m.fn_index) |*fi| {
+        for (prog.funcs[old_fns..], old_fns..) |f, i| {
+            if (f.name.len == 0 or f.name.len > 250 or f.owner != null) continue;
+            const key = try lowKey(f.name);
+            if (fi.getPtr(key)) |v| {
+                v.* = prog.funcs[c.live(v.*)].id;
+                H.free(key);
+                continue;
+            }
+            try fi.put(H, key, prog.funcs[c.live(@intCast(i))].id);
+        }
+    }
+    {
+        const old = m.file_names;
+        const fn2 = try H.alloc([]const u8, old.len + on_top.names.items.len);
+        @memcpy(fn2[0..old.len], old);
+        for (on_top.names.items, 0..) |nm, k| fn2[old.len + k] = try H.dupe(u8, nm);
+        H.free(old);
+        m.file_names = fn2;
+    }
+    m.main_fn = prog.main_fn;
+    // RNXC_RESIDENT_CHECK: each table the VM now holds is the one a whole
+    // build of the program gives -- the proof the appends ARE the tables
+    if (residentCheckOn()) {
+        checkVmTables(m, c, prog, a);
+        checkR24Index(rs);
+    }
+
+    ph.lap(.install);
+    // ---- the program, kept for the next admission ---------------------
+    for (on_top.paths.items, 0..) |p, k| {
+        const text = on_top.origs.items[k];
+        try rs.stamps.append(H, .{ .path = try H.dupe(u8, p), .len = text.len, .hash = image.hashOf(text) });
+        try rs.held_norm.append(H, try normalisePath(H, p));
+    }
+    for (on_top.names.items) |nm| try rs.fnames.append(H, try H.dupe(u8, nm));
+    var new_funcs: usize = 0;
+    for (c.funcs.items[old_funcs..]) |f| {
+        if (f.lambda_at == null and !std.mem.startsWith(u8, f.name, "@@")) new_funcs += 1;
+    }
+    var replaced: usize = 0;
+    if (replace) for (c.funcs.items[0..old_funcs]) |f| {
+        if (f.replaced_by) |r| {
+            // a class's prologue (rung 4) is not one of its functions
+            if (r >= old_funcs and !std.mem.startsWith(u8, f.name, "@@")) replaced += 1;
+        }
+    };
+    const stmts = c.stmts_ok;
+    // what the rest needs of `prog`, which points into the program's arena
+    const entry: ?u32 = prog.entry_tramp orelse
+        (if (prog.main_fn < prog.funcs.len) prog.funcs[prog.main_fn].tramp else null);
+    const prog_funcs = prog.funcs.len;
+    const prog_nglobals = prog.nglobals;
+    // rung 6: can it be released later? Not when it defined a class or a
+    // lambda (an object, a closure, could outlive it) or replaced anything
+    // (the running code's calls were re-pointed). If it can, where it all
+    // stood goes on the stack; if not, nothing under it can be either
+    {
+        var why: []const u8 = "";
+        if (replace) why = "it replaced what the program held";
+        if (c.classes.items.len != old_classes) why = "it defined a class, whose objects could outlive it";
+        for (c.funcs.items[old_funcs..]) |f| {
+            if (f.lambda_at != null) why = "it defined a lambda, which could outlive it";
+        }
+        if (why.len == 0) {
+            try rs.rel.append(H, .{
+                .name = try H.dupe(u8, path),
+                .coded = src != null,
+                .code = marks.code,
+                .fixups = marks.fixups,
+                .names = marks.names,
+                .globals = marks.globals,
+                .konst = marks.konst,
+                .funcs = marks.funcs,
+                .classes = marks.classes,
+                .natives = try H.dupe(u16, marks.natives_copy),
+                .counters = marks.counters,
+                .prefix_main = marks.prefix_main,
+                .called = try H.dupe(u32, c.called_log.items),
+                .prog_code = rec_vm.prog_code,
+                .prog_konst = rec_vm.prog_konst,
+                .nfuncs = rec_vm.nfuncs,
+                .file_names = rec_vm.file_names,
+                .stamps = rec_vm.stamps,
+                .fnames = rec_vm.fnames,
+                .main_fn = rec_vm.main_fn,
+                .fn_owner = rec_vm.fn_owner,
+                .acc = rec_vm.acc,
+                .vt = rec_vt,
+                .check_before = if (check_before) |b| try H.dupe(u8, b) else null,
+            });
+        } else {
+            for (rs.rel.items) |*r| r.deinit();
+            rs.rel.clearRetainingCapacity();
+            rs.unreleasable = why;
+        }
+    }
+    // its new functions and classes in the shape a restore would give them,
+    // the trees they were read from released, the program moved back
+    prefix.freeze(c, old_funcs, old_classes, c.class_repl.items);
+    c.prefix_funcs = c.funcs.items.len;
+    c.prefix_classes = c.classes.items.len;
+    c.prefix_code = c.code.items.len;
+    c.prefix_fixups = c.fixups.items.len;
+    c.prefix_main = null;
+    c.main_fn = null;
+    co.takeProgram(rs.P, c);
+    for (on_top.trees.items) |t| t.deinit();
+    on_top.trees.clearRetainingCapacity();
+    ph.lap(.save);
+    rs.prog_code = prog.code.len;
+    rs.prog_konst = vm.konst.len;
+    rs.nfuncs = prog_funcs;
+    rs.admitted += 1;
+    if (src != null) rs.codes += 1;
+    const took = timer.read() / std.time.ns_per_ms;
+    if (!at.nested) {
+        if (replace) {
+            vm.outPrint("admitted {s}: {d} function(s), {d} of them replacing, {d} statement(s), {d} ms -- program: {d} function(s), {d} instruction(s), {d} global(s)\n", .{ path, new_funcs, replaced, stmts, took, prog_funcs, rs.prog_code, prog_nglobals });
+        } else {
+            vm.outPrint("admitted {s}: {d} function(s), {d} statement(s), {d} ms -- program: {d} function(s), {d} instruction(s), {d} global(s)\n", .{ path, new_funcs, stmts, took, prog_funcs, rs.prog_code, prog_nglobals });
+        }
+    }
+
+    // ---- its top level runs, as a loaded file's does ------------------
+    if (entry) |e| {
+        // nested: just above the frame that called admitfile, as `.opcall`
+        // places an operator's window
+        const win: u32 = if (at.nested) at.base + m.frames[at.fsp - 1].size else 0;
+        const saved_floor = m.hsp_floor;
+        m.hsp_floor = at.hsp;
+        _ = m.runFrom(e, win, at.fsp, at.hsp);
+        m.hsp_floor = saved_floor;
+        if (!at.nested) vm.outFlush();
+        if (m.eval_escaped) {
+            // its frames' registers are forgotten, not released: a borrow
+            // among them was never counted (VM.forgetUnwound's rule)
+            var hw: u32 = win;
+            var k: u32 = at.fsp;
+            while (k < m.esc_fsp) : (k += 1) {
+                const own: u32 = if (k + 1 < m.esc_fsp) m.frames[k + 1].base else m.esc_base;
+                hw = @max(hw, own + m.frames[k].size);
+            }
+            var r: u32 = win;
+            while (r < hw and r < m.regs.len) : (r += 1) m.regs[r] = vm.Value.nil();
+            rs.stopped += 1;
+            // nested, the error is left pending: the call raises it
+            if (!at.nested) {
+                m.eval_escaped = false;
+                m.pending = "";
+                vm.outPrint("\n         its top level stopped on that error; the program carries on\n", .{});
+            }
+        }
+    }
+    ph.lap(.run);
+    ph.report(path, rs);
+    return null;
+}
+
+/// A refusal, and the program it left exactly as it was: printed by the
+/// driver, with the statements behind it; from inside the program, the
+/// reason the call raises with, the first statement named.
+fn refuse(rs: *Resident, at: RunAt, path: []const u8, why: []const u8, c: ?*co.Compiler, paths: []const []const u8) []const u8 {
+    rs.refused += 1;
+    const m = rs.m;
+    if (!at.nested) vm.outPrint("refused  {s}: {s}\n         -- program unchanged: {d} function(s), {d} instruction(s), {d} global(s)\n", .{ path, why, rs.nfuncs, rs.prog_code, m.globals.len -| 1 });
+    var first: ?co.Refusal = null;
+    var first_file: []const u8 = path;
+    if (c) |cc| {
+        for (cc.refusals.items, 0..) |r, k| {
+            // a statement re-read from a copy (F-80) names no file: the
+            // admitted root is the likeliest, and the row is the file's
+            const fi = cc.fileOfPub(r.src.ptr);
+            var fname = std.fs.path.basename(if (fi) |x| (if (x < paths.len) paths[x] else path) else path);
+            // code admitted under a path of its own is named as the program named it
+            if (std.mem.startsWith(u8, fname, "admitcode:")) {
+                if (std.mem.indexOfScalarPos(u8, fname, "admitcode:".len, ':')) |colon| fname = fname[colon + 1 ..];
+            }
+            if (k == 0) {
+                first = r;
+                first_file = fname;
+            }
+            if (at.nested) break;
+            if (k == 8) {
+                vm.outPrint("         ... and {d} more\n", .{cc.refusals.items.len - 8});
+                break;
+            }
+            vm.outPrint("         {s}:{d}  in {s}  {s}  `{s}`\n", .{ fname, r.row, r.func, r.kind, r.text });
+        }
+    }
+    if (first) |r| return std.fmt.bufPrint(&rs.why, "Error : not admitted: {s}: {s} -- {s}:{d} in {s}: {s} `{s}`", .{ path, why, first_file, r.row, r.func, r.kind, r.text }) catch why;
+    return std.fmt.bufPrint(&rs.why, "Error : not admitted: {s}: {s}", .{ path, why }) catch why;
+}
+
+/// Free a table dupStrings made: each string, then the array.
+fn freeStrings(xs: []const []const u8) void {
+    for (xs) |s| vmheap.free(s);
+    vmheap.free(xs);
+}
+
+/// Forget everything eval built from the program's old tables: its compiler
+/// (names, globals and classes are read at init) and its cache, whose code
+/// sat past the program and is cut by the admission.
+fn evalReset() void {
+    if (!g_eval.inited) return;
+    var it = g_eval.cache.keyIterator();
+    while (it.next()) |k| vmheap.free(k.*);
+    g_eval.cache.deinit(vmheap);
+    g_eval.cache = .{};
+    g_eval.cache_instrs = 0;
+    var ci = g_eval.classes.keyIterator();
+    while (ci.next()) |k| vmheap.free(k.*);
+    g_eval.classes.deinit(vmheap);
+    g_eval.classes = .{};
+    if (g_eval.ready) {
+        g_eval.scratch.deinit();
+        if (g_eval.c.eval_parser) |p| p.deinit();
+        g_eval.c.names.deinit(vmheap);
+        g_eval.c.globals.deinit(vmheap);
+    }
+    g_eval.inited = false;
+    g_eval.ready = false;
+    g_eval.depth = 0;
+}
+
 var g_arena: ?*std.heap.ArenaAllocator = null;
 fn arenaCap() usize {
     return if (g_arena) |a| a.queryCapacity() else 0;
@@ -1638,6 +3018,9 @@ pub fn main() !void {
     // commitment 5 says this is one binary, so the twelve names are
     // published here, through the same table `rpp_init` fills.
     zip.registerAll(vmheap);
+    // a server's socket, for a program that holds its own request loop
+    // (HaroServer's host, under `rnxc resident`)
+    httpd.registerAll(vmheap);
     native.register("shutdown", &ringShutdown);
     if (vm.poison_on) std.debug.print("note: POISONING HEAP -- freed memory is 0xDD and never reused\n", .{});
     if (std.process.getEnvVarOwned(std.heap.page_allocator, "RNXC_TRACE_RET")) |v| {
@@ -1697,11 +3080,27 @@ pub fn main() !void {
         std.process.exit(fmt.run(alloc, fargs.items));
     }
 
+    // `rnxc resident <file.ring>...`: ONE program, each file admitted into it
+    // while it runs, or refused whole (residentMain).
+    if (argv.len >= 3 and std.mem.eql(u8, argv[1], "resident")) {
+        var sa = std.ArrayListUnmanaged([]const u8){};
+        try sa.append(alloc, argv[0]);
+        for (argv[2..]) |x| try sa.append(alloc, x);
+        g_sysargv = sa.items;
+        const rparser = ts.Parser.init();
+        defer rparser.deinit();
+        co.exe_dir = exeDir(alloc);
+        try residentMain(alloc, rparser, argv[2..]);
+        return;
+    }
+
     if (argv.len < 3) {
         std.debug.print("usage: rnxc <file.ring>            run it, as `ring` does\n", .{});
         std.debug.print("       rnxc <command> <file.ring>  exec, dis, dump [--json], fmt, graph, census,\n", .{});
         std.debug.print("                                   check, call, time, poison,\n", .{});
         std.debug.print("                                   migrate, shadows, attrs\n", .{});
+        std.debug.print("       rnxc resident <file.ring>...  one program, each file admitted into it\n", .{});
+        std.debug.print("                                     (--replace <file>: it may redefine a function it holds)\n", .{});
         return;
     }
 
@@ -2872,4 +4271,292 @@ pub fn main() !void {
         try runKernels(alloc, prog);
     }
     try w.flush();
+}
+
+/// THE RESIDENT VM, RUNG 6: RELEASE. The program's LAST admission undone after
+/// it was admitted -- its functions, globals, constants, names and code gone,
+/// the program exactly as it was before it (RNXC_RESIDENT_CHECK compares the
+/// saved bytes). A server that admits code with a request releases it when
+/// the request is done, and a program fed code for ever stays its size: an
+/// admission it keeps costs about a kilobyte for good (measured, 2026-10-31).
+///
+/// Null when released, else why not. Refused: anything but the LAST admission
+/// (a stack -- what came after it may call it); one that defined a class or a
+/// lambda, or replaced anything (ReleaseRec); and while a frame of it runs.
+/// `name` is what it was admitted under: admitcode's name, admitfile's path.
+fn residentRelease(rs: *Resident, name: []const u8, at: RunAt) ?[]const u8 {
+    var rl_t = std.time.Timer.start() catch null;
+    const H = vmheap;
+    const m = rs.m;
+    if (!rs.live) return "nothing has been admitted";
+    const top = if (rs.rel.items.len > 0) &rs.rel.items[rs.rel.items.len - 1] else
+        return std.fmt.bufPrint(&rs.rel_why, "the program's last admission cannot be released: {s}", .{rs.unreleasable}) catch "the last admission cannot be released";
+    const same = if (top.coded) std.mem.eql(u8, top.name, name) else blk: {
+        const a = normalisePath(H, top.name) catch break :blk false;
+        defer H.free(a);
+        const b = normalisePath(H, name) catch break :blk false;
+        defer H.free(b);
+        break :blk std.mem.eql(u8, a, b);
+    };
+    if (!same) return std.fmt.bufPrint(&rs.rel_why, "the program's last admission is {s}, and only the last can be released", .{top.name}) catch "only the last admission can be released";
+    // a frame of it still running -- the caller, or one the caller returns to
+    const lo = top.prog_code;
+    const hi = rs.prog_code;
+    if (at.nested) {
+        var running = at.pc >= lo and at.pc < hi;
+        for (m.frames[0..at.fsp]) |fr| {
+            if (fr.ret_pc >= lo and fr.ret_pc < hi) running = true;
+        }
+        if (running) return "a frame of its code is running";
+    }
+    // one of its functions attached to a class by `addmethod`: the class's
+    // row would reach code that is gone, as a closure would (ReleaseRec)
+    for (vm.dyn_methods.items) |dm| {
+        if (dm.slot == 0 or dm.slot > vm.method_tab.len) continue;
+        const e = vm.method_tab[dm.slot - 1].entry;
+        if (e >= lo and e < hi) return std.fmt.bufPrint(&rs.rel_why, "addmethod attached one of its functions to a class, as the method {s}", .{dm.name}) catch "addmethod attached one of its functions to a class";
+    }
+    const P = rs.P;
+    const vt = &rs.vt;
+    const old_names = top.names;
+    const old_funcs = top.funcs;
+
+    var rl_ns = [_]u64{0} ** 9;
+    rl_ns[8] = if (rl_t) |*t| t.lap() else 0;
+    // ---- the VM: first what it holds BY NAME of the released functions --
+    // the late link (VM.name_fn) of a name it filled, the name map, the name
+    // index, the r24 index -- then every table cut back to where it stood
+    const lowKey = struct {
+        fn f(buf: []u8, nm: []const u8) ?[]u8 {
+            if (nm.len == 0 or nm.len > buf.len) return null;
+            return std.ascii.lowerString(buf[0..nm.len], nm);
+        }
+    }.f;
+    var kb: [256]u8 = undefined;
+    for (P.funcs.items[old_funcs..], old_funcs..) |f, i| {
+        if (f.owner == null and f.lambda_at == null and f.name_idx < old_names and f.name_idx < vt.name_fn.items.len) {
+            if (vt.name_fn.items[f.name_idx] == i) vt.name_fn.items[f.name_idx] = vm.NO_FN;
+        }
+        if (f.owner != null) continue;
+        if (m.fn_index) |*fi| {
+            if (lowKey(&kb, f.name)) |key| {
+                if (fi.get(key)) |v| {
+                    if (v == i) {
+                        if (fi.fetchRemove(key)) |kv| H.free(kv.key);
+                    }
+                }
+            }
+        }
+    }
+    if (m.name_lc) |*nl| {
+        for (vt.names.items[old_names..], old_names..) |nm, i| {
+            const key = lowKey(&kb, nm) orelse continue;
+            if (nl.get(key)) |v| {
+                if (v == i) {
+                    if (nl.fetchRemove(key)) |kv| H.free(kv.key);
+                }
+            }
+        }
+    }
+    for (m.code[lo..@min(hi, m.code.len)], lo..) |in, pc| {
+        if (in.op != .r24 or in.d < 0) continue;
+        if (rs.r24.getPtr(@intCast(in.d))) |l| {
+            if (l.items.len > 0 and l.items[l.items.len - 1] == pc) _ = l.pop();
+        }
+    }
+    // its constants: the table's pin taken off (dupKonst pins at konst_rc,
+    // appendKonst holds one more) and the size it was allocated restored, so
+    // a constant nothing else holds is freed as the table lets go -- and one
+    // a value still holds (a reply the host kept) lives as long as that value
+    for (vm.konst[@min(top.prog_konst, vm.konst.len)..]) |v| {
+        if (v.tag != .str) continue;
+        const sp = v.p.s;
+        if (sp.rc < vm.konst_rc) continue; // eval's, held once by the table
+        sp.rc -= vm.konst_rc;
+        sp.cap = if (sp.len == 0) 1 else sp.len;
+    }
+    // the frame masks compileFinish wrote for its functions with an id under
+    // 64 (vm.fn_masks), back to what an id nothing has used holds -- the
+    // check found them left behind, harmless and not "as it was"
+    for (P.funcs.items[old_funcs..]) |f| {
+        if (f.id < vm.fn_masks.len) vm.fn_masks[f.id] = 0;
+    }
+    if (rl_t) |*t| rl_ns[0] = t.lap();
+    m.truncateCode(top.prog_code);
+    m.truncateKonst(top.prog_konst);
+    evalReset();
+    if (rl_t) |*t| rl_ns[1] = t.lap();
+    // the tables the installer grew
+    inline for (vt_string_lists) |f| {
+        const l = &@field(vt, f);
+        const keep = top.vt[comptime vtIndex(f)];
+        for (l.items[keep..]) |sx| H.free(sx);
+    }
+    inline for (vt_lists, 0..) |f, k| @field(vt, f).shrinkRetainingCapacity(top.vt[k]);
+    m.fn_of = vt.fn_of.items;
+    m.rows = vt.rows.items;
+    m.files = vt.files.items;
+    m.names = vt.names.items;
+    m.ncache = vt.ncache.items;
+    vm.global_names = vt.global_names.items;
+    m.fn_entry = vt.fn_entry.items;
+    m.fn_frame = vt.fn_frame.items;
+    m.fn_local_from = vt.fn_local_from.items;
+    m.local_names = vt.local_names.items;
+    m.local_regs = vt.local_regs.items;
+    m.local_boxed = vt.local_boxed.items;
+    m.fn_names = vt.fn_names.items;
+    m.fn_method = vt.fn_method.items;
+    m.fn_nparams = vt.fn_nparams.items;
+    m.name_fn = vt.name_fn.items;
+    m.name_cls = vt.name_cls.items;
+    // a cell `addmethod` wrote for one of its NAMES -- the only cells past the
+    // names it found, since it defined no class -- emptied, so the index the
+    // next admission's name takes does not answer for it. The attachment
+    // stays in vm.dyn_methods and comes back with the name (growClassTables)
+    // -- found through the attachments, whose names the compiler still
+    // knows here: zeroing every row past the old names cost ~2 ms a release
+    // at Softanza's size (600 classes, the rows' headroom)
+    {
+        const nnm: usize = vm.n_names;
+        var lb: [256]u8 = undefined;
+        for (vm.dyn_methods.items) |dm| {
+            if (dm.name.len > lb.len) continue;
+            const ni = P.name_index.get(std.ascii.lowerString(&lb, dm.name)) orelse continue;
+            if (ni < old_names or ni >= nnm) continue;
+            const cell = @as(usize, dm.cls) * nnm + ni;
+            if (cell < vt.dispatch.items.len) vt.dispatch.items[cell] = 0;
+        }
+    }
+    if (rl_t) |*t| rl_ns[2] = t.lap();
+    // its globals, and what they held. Slots count from 0 and the VM's table
+    // is one longer than the program's list (`prog.nglobals + 1`), so the
+    // admission's first global sat in the slot past the list as it stood --
+    // inside the table's old length. Cut to the list, and that slot emptied:
+    // a global admitted after the release takes it, and must find it unset
+    const keep_g = top.globals;
+    if (m.globals.len > keep_g) {
+        for (m.globals[keep_g..]) |v| m.dropValue(v);
+        const g = H.alloc(vm.Value, keep_g + 1) catch @panic("oom");
+        @memcpy(g[0..keep_g], m.globals[0..keep_g]);
+        g[keep_g] = vm.Value.nil();
+        const gs = H.alloc(bool, keep_g + 1) catch @panic("oom");
+        @memcpy(gs[0..keep_g], m.globals_set[0..keep_g]);
+        gs[keep_g] = false;
+        H.free(m.globals);
+        H.free(m.globals_set);
+        m.globals = g;
+        m.globals_set = gs;
+    }
+    if (m.file_names.len > top.file_names) {
+        for (m.file_names[top.file_names..]) |fnm| H.free(fnm);
+        const fl = H.alloc([]const u8, top.file_names) catch @panic("oom");
+        @memcpy(fl, m.file_names[0..top.file_names]);
+        H.free(m.file_names);
+        m.file_names = fl;
+    }
+    m.main_fn = top.main_fn;
+    if (rl_t) |*t| rl_ns[3] = t.lap();
+    // the class each function belongs to, and the accessor tables: an old
+    // name whose getter or setter was one of the released names had none
+    // before (names are unique in any case, so it was that one or nothing)
+    if (vm.fn_owner.len > top.fn_owner) {
+        const fo = H.alloc(u16, top.fn_owner) catch @panic("oom");
+        @memcpy(fo, vm.fn_owner[0..top.fn_owner]);
+        H.free(vm.fn_owner);
+        vm.fn_owner = fo;
+    }
+    if (vm.acc_get.len > top.acc) {
+        const ag = H.alloc(u32, top.acc) catch @panic("oom");
+        const as = H.alloc(u32, top.acc) catch @panic("oom");
+        @memcpy(ag, vm.acc_get[0..top.acc]);
+        @memcpy(as, vm.acc_set[0..top.acc]);
+        for (ag, as) |*g, *s| {
+            if (g.* != vm.ACC_NONE and g.* >= old_names) g.* = vm.ACC_NONE;
+            if (s.* != vm.ACC_NONE and s.* >= old_names) s.* = vm.ACC_NONE;
+        }
+        H.free(vm.acc_get);
+        H.free(vm.acc_set);
+        vm.acc_get = ag;
+        vm.acc_set = as;
+    }
+
+    if (rl_t) |*t| rl_ns[4] = t.lap();
+    // ---- the compiler: rolled back as a refusal is, from the record -------
+    const marks = co.Marks{
+        .code = top.code,
+        .fixups = top.fixups,
+        .names = top.names,
+        .globals = top.globals,
+        .konst = top.konst,
+        .funcs = top.funcs,
+        .classes = top.classes,
+        .classes_copy = &.{}, // no class was touched (ReleaseRec)
+        .natives_copy = top.natives,
+        .counters = top.counters,
+        .prefix_main = top.prefix_main,
+    };
+    P.called_log.clearRetainingCapacity();
+    P.called_log.appendSlice(P.alloc, top.called) catch @panic("oom");
+    co.rollbackProgram(P, &marks);
+    P.called_log.clearRetainingCapacity();
+    P.prefix_funcs = top.funcs;
+    P.prefix_classes = top.classes;
+    P.prefix_code = top.code;
+    P.prefix_fixups = top.fixups;
+    P.main_fn = null;
+
+    if (rl_t) |*t| rl_ns[5] = t.lap();
+    // ---- the resident's own record of what it holds -----------------------
+    for (rs.stamps.items[top.stamps..]) |st| H.free(st.path);
+    rs.stamps.shrinkRetainingCapacity(top.stamps);
+    for (rs.held_norm.items[top.stamps..]) |k| H.free(k);
+    rs.held_norm.shrinkRetainingCapacity(top.stamps);
+    for (rs.fnames.items[top.fnames..]) |f| H.free(f);
+    rs.fnames.shrinkRetainingCapacity(top.fnames);
+    rs.prog_code = top.prog_code;
+    rs.prog_konst = top.prog_konst;
+    rs.nfuncs = top.nfuncs;
+    rs.released += 1;
+
+    if (rl_t) |*t| rl_ns[6] = t.lap();
+    // RNXC_RESIDENT_CHECK: the program's bytes are what they were before
+    // the admission, and the VM's tables are as long as the program's lists
+    if (top.check_before) |b| {
+        const after = prefix.encode(H, rs.exe, rs.stamps.items, rs.fnames.items, P) catch @panic("resident: the program could not be saved");
+        defer H.free(after);
+        if (!std.mem.eql(u8, b, after)) {
+            std.debug.print("resident: RNXC_RESIDENT_CHECK -- a release left the program other than it was ({d} bytes before the admission, {d} after the release): a defect of rnxc\n", .{ b.len, after.len });
+            std.process.exit(2);
+        }
+        if (m.code.len != P.code.items.len or m.names.len != P.names.items.len or m.fn_names.len != P.funcs.items.len or
+            vm.global_names.len != P.globals.items.len or m.fn_of.len != P.code.items.len or vm.konst.len != P.konst.items.len or
+            m.globals.len != P.globals.items.len + 1 or m.globals_set[P.globals.items.len] or m.globals[P.globals.items.len].tag != .nil)
+        {
+            std.debug.print("resident: RNXC_RESIDENT_CHECK -- after a release the VM's tables and the program disagree in length, or the slot past the last global is not empty: a defect of rnxc\n", .{});
+            std.process.exit(2);
+        }
+        checkR24Index(rs);
+    }
+    // what is now last keeps its own record, or the reason it has none
+    var done = rs.rel.pop().?;
+    done.deinit();
+    if (rl_t) |*t| rl_ns[7] = t.lap();
+    if (admitPhasesOn()) {
+        std.debug.print("release: {s}:", .{name});
+        const lbl = [_][]const u8{ "by-name", "truncate", "vm-lists", "dispatch", "globals", "owner-acc", "compiler", "resident", "checks" };
+        for (lbl, rl_ns) |l, x| std.debug.print(" {s} {d:.2}", .{ l, @as(f64, @floatFromInt(x)) / 1e6 });
+        std.debug.print(" ms\n", .{});
+    }
+    // what the admission's compile left in the program's arena is garbage
+    // now, and the next admission's compaction rule reclaims it with the
+    // rest: a release adds nothing to the arena, so a check here never fires
+    return null;
+}
+
+fn vtIndex(comptime f: []const u8) usize {
+    inline for (vt_lists, 0..) |g, k| {
+        if (comptime std.mem.eql(u8, f, g)) return k;
+    }
+    @compileError("not a VM table: " ++ f);
 }

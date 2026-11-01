@@ -1,0 +1,25 @@
+admitted in_host.ring: 1 function(s), 22 statement(s), # ms -- program: 2 function(s), # instruction(s), 1 global(s)
+host: start
+lib: its top level runs
+admit lib: 1
+lib says: hello Ring++
+admit code: 1
+7 squared: 49
+refused: Error : not admitted: in_bad.ring: 1 statement(s) do not compile -- in_bad.ring:8 in Bad: bare name is not a local (Rule A) `nBadGlobal`
+after the refusal: 0 hello again
+outer: admitting inner
+outer: 1
+outer: inner says inner
+admit outer: 1
+inner, from the host: inner
+eval: 9
+inside eval: Error : admitfile(), admitcode(), replacefile(), replacecode(), releasefile() and releasecode() are not admitted inside eval()
+twice: Error : not admitted: in_lib.ring: it is already admitted (Ring loads a file once)
+redefined: Error : not admitted: again: function Square is already defined (Ring: C22); replacefile and replacecode replace a running function
+Square still: 16
+from a function: 42
+raises: before
+its top level raised: raised in an admitted top level
+its function stays: yes
+host: end
+resident: 7 admitted, 3 refused, 1 top level(s) stopped on an error; 11 function(s), # instruction(s), 1 global(s)

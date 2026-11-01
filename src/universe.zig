@@ -56,6 +56,9 @@ const types = @import("types.zig");
 const FileScan = struct {
     parsed_ok: bool,
     has_dynamic: bool,
+    /// it calls admitfile(), admitcode() or a replace: the resident VM adds functions
+    /// and classes while it runs, so absence is no proof either
+    has_admit: bool = false,
     has_opaque_eval: bool,
     eval_names: []const []const u8,
     defnames: []const []const u8,
@@ -156,6 +159,10 @@ pub const Universe = struct {
                 u.complete_vars = false;
                 if (u.reason.len == 0) u.reason = "a loaded file did not parse";
             }
+            if (s.has_admit and u.complete) {
+                u.complete = false;
+                if (u.reason.len == 0) u.reason = "the unit admits code while it runs (admitfile, admitcode, replacefile, replacecode)";
+            }
             if (s.has_dynamic and u.complete) {
                 u.complete = false;
                 if (u.reason.len == 0) u.reason = "the unit calls loadlib() or eval()";
@@ -210,6 +217,8 @@ fn scan(arena: std.mem.Allocator, root: ts.Node) !FileScan {
         .parsed_ok = !root.hasError(),
         .has_dynamic = hasCallTo(src, "loadlib") or hasCallTo(src, "loadlibfile") or
             hasCallTo(src, "eval"),
+        .has_admit = hasCallTo(src, "admitfile") or hasCallTo(src, "admitcode") or
+            hasCallTo(src, "replacefile") or hasCallTo(src, "replacecode"),
         .has_opaque_eval = false,
         .eval_names = &.{},
         .defnames = &.{},

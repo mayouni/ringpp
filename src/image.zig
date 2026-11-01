@@ -406,10 +406,22 @@ pub fn prune(just_written: []const u8) void {
 /// without asking the OS for anything. A cache that changes what a program
 /// observes about itself is not transparent, whatever its output says.
 pub const R = struct {
-    f: std.fs.File,
+    f: std.fs.File = undefined,
+    /// Read from these bytes instead of `f`: the resident VM keeps its
+    /// compiler state as a prefix in memory between admissions.
+    mem: ?[]const u8 = null,
     off: usize = 0,
 
     pub fn readInto(self: *R, dst: []u8) !void {
+        if (self.mem) |m| {
+            if (self.off + dst.len > m.len) {
+                say("short read at {d}: wanted {d}, have {d}", .{ self.off, dst.len, m.len - self.off });
+                return error.Corrupt;
+            }
+            @memcpy(dst, m[self.off .. self.off + dst.len]);
+            self.off += dst.len;
+            return;
+        }
         const n = try self.f.readAll(dst);
         if (n != dst.len) {
             say("short read at {d}: wanted {d}, got {d}", .{ self.off, dst.len, n });

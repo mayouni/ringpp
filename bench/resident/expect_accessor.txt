@@ -1,0 +1,7 @@
+admitted ac_host.ring: 0 function(s), 7 statement(s), # ms -- program: 1 function(s), # instruction(s), 1 global(s)
+admit painter: 1
+painter: the painter's
+admit box: 1
+box colour through its getter: got raw
+box colour set through its setter: got blue (set)
+resident: 3 admitted, 0 refused, 0 top level(s) stopped on an error; 10 function(s), # instruction(s), 1 global(s)
