@@ -1,0 +1,8 @@
+admitted bg_never.ring: 1 function(s), 2 statement(s), # ms -- program: 2 function(s), # instruction(s), 0 global(s)
+never: start 1
+not admitted forgotten: started in the background (admitstart) and never finished
+admitted bg_after.ring: 1 function(s), 3 statement(s), # ms -- program: 4 function(s), # instruction(s), 0 global(s)
+after: Forgotten() this file's, NeverKept(7) kept 7, functions 2
+after: start another 1
+not admitted last: started in the background (admitstart) and never finished
+resident: 2 admitted, 2 refused, 0 top level(s) stopped on an error; 4 function(s), # instruction(s), 0 global(s)

@@ -10,6 +10,10 @@
 //!     rpp_http_listen(nPort)        1 when 127.0.0.1:nPort is ours, 0 when not
 //!     rpp_http_next()               waits for the next request; 1, or 0 when the
 //!                                   listener is gone
+//!     rpp_http_next(nWaitMs)        waits at most nWaitMs: 1, 0 when the listener is
+//!                                   gone, -1 when no request came -- so a loop with
+//!                                   work of its own (a deployment compiling in the
+//!                                   background, rung 9) is not held by an idle socket
 //!     rpp_http_method()             "GET", "POST", ...
 //!     rpp_http_path()               the path, without the query
 //!     rpp_http_query()              what followed `?`, or ""
@@ -168,8 +172,13 @@ fn headerValue(headers: []const u8, name: []const u8) ?[]const u8 {
 }
 
 fn httpNext(args: [*]const RppVal, argc: u32, out: *RppVal) callconv(.c) c_int {
-    _ = args;
-    if (argc != 0) return 1;
+    if (argc > 1) return 1;
+    // rpp_http_next(nWaitMs): at most that long for a connection, -1 when none came
+    var wait_ms: ?i32 = null;
+    if (argc == 1) {
+        const w = argNum(args, 0) orelse return 1;
+        wait_ms = if (w <= 0) 0 else if (w > 86_400_000) 86_400_000 else @intFromFloat(w);
+    }
     // a request the program never answered is answered for it
     if (conn != null) {
         if (conn) |cn| sendAll(cn.stream, "HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n") catch {};
@@ -180,6 +189,14 @@ fn httpNext(args: [*]const RppVal, argc: u32, out: *RppVal) callconv(.c) c_int {
         return 0;
     });
     while (true) {
+        if (wait_ms) |ms| {
+            var fds = [_]std.posix.pollfd{.{ .fd = s.stream.handle, .events = std.posix.POLL.IN, .revents = 0 }};
+            const n = std.posix.poll(&fds, ms) catch 0;
+            if (n == 0) {
+                out.* = RppVal.int(-1);
+                return 0;
+            }
+        }
         // one loop serves everything, so nothing a single client does may stop
         // it: a connection that fails as it is accepted is passed over, and
         // one that sends nothing is given up after RECV_TIMEOUT_MS
@@ -244,6 +261,7 @@ fn reason(status: u16) []const u8 {
     return switch (status) {
         200 => "OK",
         201 => "Created",
+        202 => "Accepted",
         204 => "No Content",
         400 => "Bad Request",
         404 => "Not Found",
@@ -252,6 +270,7 @@ fn reason(status: u16) []const u8 {
         413 => "Payload Too Large",
         422 => "Unprocessable Content",
         500 => "Internal Server Error",
+        503 => "Service Unavailable",
         else => "Status",
     };
 }

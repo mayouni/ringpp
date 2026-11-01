@@ -111,6 +111,12 @@ const Unit = struct {
     /// normalising them again opened every one on each admission -- 612
     /// files, ~25 ms of a small admission at Softanza's size (rung 5).
     already_norm: bool = false,
+    /// `rnxc check --subst=<file>=<text>`: the unit as it would be with one file's text replaced -- the rung-5
+    /// gate asks about a refined library file inside the program that loads it, without writing the tree.
+    /// Normalised keys (normalisePath), parallel to `subst_with`; the file keeps its own path, so its loads
+    /// resolve from where it stands.
+    subst_keys: []const []const u8 = &.{},
+    subst_with: []const []const u8 = &.{},
 };
 
 /// RING READS FILES NOBODY NAMED (vendor/ring-vm/src/state.c:177-203 and
@@ -224,8 +230,8 @@ fn printScanError(w: *std.Io.Writer, e: ScanErr, name: []const u8, loaded: bool)
 /// Where the seconds go. A census of the corpus took 170-220 s and no
 /// one knew which phase owned it; these are read from `phases:` in the
 /// census output, so the number is never guessed.
-var t_read_ns: u64 = 0;
-var t_parse_ns: u64 = 0;
+threadlocal var t_read_ns: u64 = 0;
+threadlocal var t_parse_ns: u64 = 0;
 
 /// A single dummy address for the library's sources, which are not read on
 /// the prefix path. `fileOf` maps a source POINTER to a file index, and it is
@@ -561,7 +567,10 @@ fn loadUnit(
         try seen.put(alloc, key, {});
 
         var tr = std.time.Timer.start() catch unreachable;
-        const src = if (qi == 0 and u.root_src != null) u.root_src.? else std.fs.cwd().readFileAlloc(alloc, p, 64 << 20) catch |e| {
+        const sub: ?[]const u8 = for (u.subst_keys, 0..) |sk, si| {
+            if (std.mem.eql(u8, sk, key)) break u.subst_with[si];
+        } else null;
+        const src = if (qi == 0 and u.root_src != null) u.root_src.? else std.fs.cwd().readFileAlloc(alloc, sub orelse p, 64 << 20) catch |e| {
             // Named, not counted: "2 file(s) could not be read" sends the
             // reader to grep for what a line here would have told them.
             std.debug.print("note: could not read {s} ({s})\n", .{ p, @errorName(e) });
@@ -1595,7 +1604,58 @@ const Resident = struct {
     /// hook then formats the error into, reading this
     rel_why: [640]u8 = undefined,
     released: usize = 0,
+    /// D31: the app the admission under way is admitted into, and what it exports (admitHook sets both for the call)
+    cur_app: ?[]const u8 = null,
+    cur_exports: []const []const u8 = &.{},
+    /// every export of every app, as the compiler checked them: the installer and the resident check apply them alike
+    exports: std.ArrayListUnmanaged(co.AppExport) = .{},
+    /// the apps admitted so far
+    apps: usize = 0,
+    /// RUNG 9: the admission compiling on a thread of its own (`admitstart`) until `admitfinish` installs it. One at a
+    /// time -- the program has one compiler -- and while it compiles every other admission and release is refused, so
+    /// nothing but that thread touches the program's compiler and its arena
+    bg: ?*AdmitJob = null,
+    /// THE COMPILING THREAD, started at the first `admitstart` and kept for the program's life: one per admission cost
+    /// ~0.6 ms an admission on Windows (measured 2026-11-01: 300 small admissions 231 ms against 40 synchronously),
+    /// most of it committing the new thread's stack. It waits for `bg_go`, compiles `bg`, and sets `bg_done`
+    bg_started: bool = false,
+    bg_go: std.Thread.ResetEvent = .{},
+    /// set by that thread when its compile is over: `admitstate` reads and waits on it
+    bg_done: std.Thread.ResetEvent = .{},
+    /// THE TIDY-UP after a background admission's install, on that thread too: its parse trees released (146 ms at
+    /// Softanza's size) and the program compacted when due (~90 ms) -- a pause for every request on the program's thread,
+    /// measured 2026-11-01. While it runs nothing may touch the program's compiler: bgQuiet waits for it first
+    bg_trees: std.ArrayListUnmanaged(ts.Tree) = .{},
+    bg_compact: bool = false,
+    bg_tidying: bool = false,
+    /// what an admission refused while one compiles raises with (`why` is the compile's)
+    busy_why: [640]u8 = undefined,
 };
+
+/// D31: VM.name_up for name `i` -- the unqualified name an APP's late name `app::x` falls back to, when that name came
+/// first (the compiler interns it first: Compiler.appName's callers). From the names alone, so the installer's delta
+/// and a whole build agree.
+fn nameUpOf(c: *co.Compiler, names: []const []const u8, i: usize) u32 {
+    const nm = names[i];
+    if (std.mem.startsWith(u8, nm, "@@")) return vm.NO_FN;
+    const k = std.mem.lastIndexOf(u8, nm, "::") orelse return vm.NO_FN;
+    const suf = nm[k + 2 ..];
+    var buf: [256]u8 = undefined;
+    if (suf.len == 0 or suf.len > buf.len) return vm.NO_FN;
+    const j = c.name_index.get(std.ascii.lowerString(&buf, suf)) orelse return vm.NO_FN;
+    return if (j < i) j else vm.NO_FN;
+}
+
+/// D31: each export answers by its public name `app.Name` -- the function that runs under the internal name now (a
+/// replacement followed) in `nfn`, or the class in `ncl`.
+fn applyExports(rs: *const Resident, c: *co.Compiler, nfn: []u32, ncl: []u32) void {
+    for (rs.exports.items) |e| {
+        const t = co.exportTarget(c, e.internal, e.is_class) orelse continue;
+        if (e.is_class) {
+            if (e.pub_idx < ncl.len) ncl[e.pub_idx] = t;
+        } else if (e.pub_idx < nfn.len) nfn[e.pub_idx] = t;
+    }
+}
 
 /// THE RESIDENT VM, RUNG 6: what releasing an admission needs -- where the
 /// program stood before it, the compiler's lists and the VM's tables, by
@@ -1643,7 +1703,7 @@ const ReleaseRec = struct {
 
 /// The VM tables the installer grows (Resident.vt), and which of them hold
 /// strings it duplicated
-const vt_lists = .{ "fn_of", "rows", "files", "names", "global_names", "fn_entry", "fn_frame", "fn_local_from", "local_names", "local_regs", "local_boxed", "fn_names", "fn_method", "fn_nparams", "name_fn", "name_cls", "ncache" };
+const vt_lists = .{ "fn_of", "rows", "files", "names", "global_names", "fn_entry", "fn_frame", "fn_local_from", "local_names", "local_regs", "local_boxed", "fn_names", "fn_method", "fn_nparams", "name_fn", "name_cls", "name_up", "ncache" };
 const vt_string_lists = .{ "names", "global_names", "local_names", "fn_names" };
 
 const VmTables = struct {
@@ -1663,6 +1723,7 @@ const VmTables = struct {
     fn_nparams: std.ArrayListUnmanaged(u8) = .{},
     name_fn: std.ArrayListUnmanaged(u32) = .{},
     name_cls: std.ArrayListUnmanaged(u32) = .{},
+    name_up: std.ArrayListUnmanaged(u32) = .{},
     ncache: std.ArrayListUnmanaged(?native.RppFn) = .{},
     /// the dispatch rows (vm.dispatch is its items), with room for a few
     /// more classes, since a row is as wide as the names
@@ -1693,6 +1754,7 @@ fn residentMain(alloc: std.mem.Allocator, parser: ts.Parser, files: []const [:0]
     };
     _ = alloc;
     m.admit_hook = &admitHook;
+    m.admit_state_hook = &admitStateHook;
     const rs = &g_res;
     rs.m = &m;
     rs.parser = parser;
@@ -1711,6 +1773,8 @@ fn residentMain(alloc: std.mem.Allocator, parser: ts.Parser, files: []const [:0]
             release = true;
             continue;
         }
+        bgQuiet(rs);
+        bgDiscard(rs);
         if (release) {
             if (residentRelease(rs, path, .{})) |why| {
                 vm.outPrint("not released {s}: {s}\n", .{ path, why });
@@ -1723,10 +1787,146 @@ fn residentMain(alloc: std.mem.Allocator, parser: ts.Parser, files: []const [:0]
         _ = try residentAdmit(rs, path, null, replace, .{});
         replace = false;
     }
+    // the last file's top level started one and never finished it: said, and
+    // the process ends without waiting for its compile
+    bgQuiet(rs);
+    const left_compiling = rs.bg != null and !rs.bg_done.isSet();
+    if (left_compiling) {
+        vm.outPrint("not admitted {s}: started in the background (admitstart) and never finished\n", .{rs.bg.?.path});
+        rs.refused += 1;
+    } else bgDiscard(rs);
     if (rs.released > 0) {
         vm.outPrint("resident: {d} admitted, {d} refused, {d} released, {d} top level(s) stopped on an error; {d} function(s), {d} instruction(s), {d} global(s)\n", .{ rs.admitted, rs.refused, rs.released, rs.stopped, rs.nfuncs, rs.prog_code, m.globals.len -| 1 });
     } else vm.outPrint("resident: {d} admitted, {d} refused, {d} top level(s) stopped on an error; {d} function(s), {d} instruction(s), {d} global(s)\n", .{ rs.admitted, rs.refused, rs.stopped, rs.nfuncs, rs.prog_code, m.globals.len -| 1 });
     vm.outFlush();
+    if (left_compiling) std.process.exit(0);
+}
+
+/// RUNG 9: `admitstart` -- the admission's COMPILE begins on a thread of its
+/// own and the program carries on. The job owns its copies of what the
+/// program handed it; nothing but that thread touches the program's compiler
+/// until admitfinish joins it.
+fn bgStart(rs: *Resident, name: []const u8, src: ?[]const u8, replace: bool) ?[]const u8 {
+    const job = AdmitJob.create(rs, name, src, replace, true, true) catch |e|
+        return std.fmt.bufPrint(&rs.busy_why, "Error : not started: {s}: {s}", .{ name, @errorName(e) }) catch "Error : not started";
+    if (!rs.bg_started) {
+        startWorker(rs) catch |e| {
+            job.destroy();
+            return std.fmt.bufPrint(&rs.busy_why, "Error : not started: {s}: {s}", .{ name, @errorName(e) }) catch "Error : not started";
+        };
+        rs.bg_started = true;
+    }
+    rs.bg_done.reset();
+    rs.bg = job;
+    rs.bg_go.set();
+    return null;
+}
+
+/// The compiling thread, with the stack the program's own thread has: 16 MB,
+/// rnxc's image -- the compile recurses over the parse tree as deep there as
+/// here. RESERVED, as the image's is, and committed as it is used: Zig's
+/// spawn hands Windows the size as a commit, and the 16 MB showed whole in
+/// the server's private memory (measured 2026-11-01, 51.8 -> 67.8 MB). A
+/// POSIX thread's stack is mapped, not committed.
+fn startWorker(rs: *Resident) !void {
+    const stack: usize = 16 << 20;
+    if (@import("builtin").os.tag == .windows) {
+        const W = struct {
+            fn entry(p: ?*anyopaque) callconv(.winapi) std.os.windows.DWORD {
+                bgWorker(@ptrCast(@alignCast(p)));
+                return 0;
+            }
+        };
+        const STACK_SIZE_PARAM_IS_A_RESERVATION: std.os.windows.DWORD = 0x00010000;
+        const h = std.os.windows.kernel32.CreateThread(null, stack, W.entry, rs, STACK_SIZE_PARAM_IS_A_RESERVATION, null) orelse
+            return error.ThreadNotStarted;
+        std.os.windows.CloseHandle(h);
+    } else {
+        const t = try std.Thread.spawn(.{ .stack_size = stack }, bgWorker, .{rs});
+        t.detach();
+    }
+}
+
+/// The compiling thread: waits for a job, compiles it -- the compile half,
+/// nothing of the VM's -- and signals the program's thread. Ends with the
+/// process.
+fn bgWorker(rs: *Resident) void {
+    while (true) {
+        rs.bg_go.wait();
+        rs.bg_go.reset();
+        if (rs.bg_tidying) {
+            for (rs.bg_trees.items) |t| t.deinit();
+            rs.bg_trees.clearRetainingCapacity();
+            // a compaction that fails changed nothing: the old arena is kept
+            if (rs.bg_compact) residentCompact(rs) catch {};
+            rs.bg_compact = false;
+        } else if (rs.bg) |job| admitCompile(job);
+        rs.bg_done.set();
+    }
+}
+
+/// Rung 9: the tidy-up after a background admission's install, handed to the
+/// compiling thread (Resident.bg_tidying).
+fn bgTidy(rs: *Resident, trees: []const ts.Tree) void {
+    rs.bg_trees.appendSlice(vmheap, trees) catch {
+        for (trees) |t| t.deinit();
+    };
+    rs.bg_compact = residentBlobOn() or rs.parena.queryCapacity() > rs.compact_at;
+    rs.bg_tidying = true;
+    rs.bg_done.reset();
+    rs.bg_go.set();
+}
+
+/// Rung 9: wait for the compiling thread's tidy-up, if one runs -- before
+/// anything touches the program's compiler.
+fn bgQuiet(rs: *Resident) void {
+    if (!rs.bg_tidying) return;
+    rs.bg_done.wait();
+    rs.bg_tidying = false;
+}
+
+/// RUNG 9: `admitfinish` -- waits for the compile if it is still running, then
+/// the install, on the program's own thread, where the call stands: the same
+/// admission as the verb's, refused or admitted as the verb would have been.
+fn bgFinish(rs: *Resident, at: RunAt) ?[]const u8 {
+    const job = rs.bg orelse return "Error : admitfinish(): no admission was started (admitstart)";
+    rs.bg_done.wait();
+    rs.bg = null;
+    const why: ?[]const u8 = blk: {
+        if (job.err) |e| break :blk std.fmt.bufPrint(&rs.why, "Error : not admitted: {s}: {s}", .{ job.path, @errorName(e) }) catch "Error : not admitted";
+        if (job.why) |w| break :blk w;
+        break :blk admitInstall(job, at) catch |e|
+            (std.fmt.bufPrint(&rs.why, "Error : not admitted: {s}: {s}", .{ job.path, @errorName(e) }) catch "Error : not admitted");
+    };
+    // compacted when due by the tidy-up its install handed the compiling
+    // thread (bgTidy), not here
+    job.destroy();
+    return why;
+}
+
+/// RUNG 9: an admission started and never finished, discarded by the driver
+/// before it admits anything else: its compile waited for, the program as it
+/// was before it (the undo a refusal takes), and it is not admitted.
+fn bgDiscard(rs: *Resident) void {
+    const job = rs.bg orelse return;
+    vm.outPrint("not admitted {s}: started in the background (admitstart) and never finished\n", .{job.path});
+    rs.refused += 1;
+    rs.bg_done.wait();
+    rs.bg = null;
+    if (job.compiled) {
+        var undo = Undo{ .rs = rs, .c = job.c, .marks = &job.marks, .before = job.check_before };
+        _ = undo.done("");
+    }
+    job.destroy();
+}
+
+/// `admitstate([nWaitMs])`: 0 none, 1 compiling, 2 compiled.
+fn admitStateHook(m: *vm.VM, wait_ms: i64) u8 {
+    _ = m;
+    const rs = &g_res;
+    if (rs.bg == null) return 0;
+    if (wait_ms > 0 and !rs.bg_done.isSet()) rs.bg_done.timedWait(@as(u64, @intCast(wait_ms)) * std.time.ns_per_ms) catch {};
+    return if (rs.bg_done.isSet()) 2 else 1;
 }
 
 /// `admitfile(cPath)` and `admitcode(cName, cSource)` from inside the
@@ -1735,13 +1935,52 @@ fn residentMain(alloc: std.mem.Allocator, parser: ts.Parser, files: []const [:0]
 /// the reason the call raises with. `replacefile`/`replacecode` the same,
 /// `replace` set (mode 1); `releasefile`/`releasecode` release the program's
 /// last admission (mode 2, rung 6).
-fn admitHook(m: *vm.VM, name: []const u8, src: ?[]const u8, mode: u8, base: u32, fsp: u32, hsp: u32, pc: u32) ?[]const u8 {
-    _ = m;
+fn admitHook(m: *vm.VM, name: []const u8, src: ?[]const u8, mode_in: u8, base: u32, fsp: u32, hsp: u32, pc: u32) ?[]const u8 {
     const at: RunAt = .{ .base = base, .fsp = fsp, .hsp = hsp, .nested = true, .pc = pc };
+    // rung 9: `admitfinish`, and `admitstart` (the verb's mode, ADMIT_BG set) --
+    // and nothing touches the program's compiler during a tidy-up
+    bgQuiet(&g_res);
+    if (mode_in == vm.ADMIT_FINISH) return bgFinish(&g_res, at);
+    const bg = mode_in & vm.ADMIT_BG != 0;
+    const mode = mode_in & 0x0F;
+    // ONE admission compiles at a time: while one does in the background,
+    // the program's compiler is that thread's alone
+    if (g_res.bg) |job| {
+        const verb = if (bg) "not started" else if (mode == 2) "not released" else "not admitted";
+        return std.fmt.bufPrint(&g_res.busy_why, "Error : {s}: {s}: {s} is compiling in the background -- admitfinish() first", .{ verb, name, job.path }) catch "Error : busy";
+    }
     if (mode == 2) {
         const why = residentRelease(&g_res, name, at) orelse return null;
         return std.fmt.bufPrint(&g_res.why, "Error : not released: {s}: {s}", .{ name, why }) catch "Error : not released";
     }
+    // D31: an app -- `admitapp(cApp, cSource, aExports)` (mode 3) and `replaceapp(cApp, cSource)` (mode 4). The app's
+    // name is an identifier; its exports are names, each checked by the compile against what the app defines.
+    if (mode >= 3) {
+        var ok = name.len > 0 and name.len <= 64 and std.ascii.isAlphabetic(name[0]);
+        for (name) |ch| ok = ok and (std.ascii.isAlphanumeric(ch) or ch == '_');
+        if (!ok) return std.fmt.bufPrint(&g_res.why, "Error : not admitted: {s}: an app's name is an identifier (letters, digits, _)", .{name}) catch "Error : not admitted";
+        var ex = std.ArrayListUnmanaged([]const u8){};
+        defer ex.deinit(vmheap);
+        if (mode == 3) {
+            const lv = m.admit_exports;
+            if (lv.tag == .vec) {
+                for (lv.p.v.ptr[0..lv.p.v.len]) |it| {
+                    if (it.tag != .str) return std.fmt.bufPrint(&g_res.why, "Error : not admitted: {s}: an export is a name (a string)", .{name}) catch "Error : not admitted";
+                    ex.append(vmheap, it.p.s.ptr[0..it.p.s.len]) catch return "Error : not admitted";
+                }
+            }
+        }
+        g_res.cur_app = name;
+        g_res.cur_exports = ex.items;
+        defer {
+            g_res.cur_app = null;
+            g_res.cur_exports = &.{};
+        }
+        if (bg) return bgStart(&g_res, name, src, mode == 4);
+        return residentAdmit(&g_res, name, src, mode == 4, at) catch |e|
+            (std.fmt.bufPrint(&g_res.why, "Error : not admitted: {s}: {s}", .{ name, @errorName(e) }) catch "Error : not admitted");
+    }
+    if (bg) return bgStart(&g_res, name, src, mode == 1);
     return residentAdmit(&g_res, name, src, mode == 1, at) catch |e|
         (std.fmt.bufPrint(&g_res.why, "Error : not admitted: {s}: {s}", .{ name, @errorName(e) }) catch "Error : not admitted");
 }
@@ -1759,7 +1998,7 @@ const AdmitPhases = struct {
         if (self.t == null) self.t = std.time.Timer.start() catch return;
         self.ns[@intFromEnum(p)] = self.t.?.lap();
     }
-    fn report(self: *AdmitPhases, path: []const u8, rs: *const Resident) void {
+    fn report(self: *AdmitPhases, path: []const u8, rs: *const Resident, ans: [4]u64) void {
         if (!admitPhasesOn()) return;
         const msOf = struct {
             fn f(x: u64) f64 {
@@ -1768,9 +2007,10 @@ const AdmitPhases = struct {
         }.f;
         std.debug.print("phases: {s}: restore {d:.1} load {d:.1} compile {d:.1} (collect {d:.1} resolve {d:.1} front {d:.1} finish {d:.1}) install {d:.1} save {d:.1} run {d:.1} ms; program arena {d} MB, compacted {d}x\n", .{
             std.fs.path.basename(path), msOf(self.ns[0]), msOf(self.ns[1]), msOf(self.ns[2]),
-            msOf(co.admit_ns[0]), msOf(co.admit_ns[1]), msOf(co.admit_ns[2]), msOf(co.admit_ns[3]),
+            msOf(ans[0]), msOf(ans[1]), msOf(ans[2]), msOf(ans[3]),
             msOf(self.ns[3]), msOf(self.ns[4]), msOf(self.ns[5]),
-            rs.parena.queryCapacity() >> 20, rs.compactions,
+            // a background compile, or its tidy-up, may be using the arena (rung 9)
+            if (rs.bg == null and !rs.bg_tidying) rs.parena.queryCapacity() >> 20 else 0, rs.compactions,
         });
     }
 };
@@ -2203,11 +2443,16 @@ fn checkVmTables(m: *vm.VM, c: *co.Compiler, prog: co.Program, a: std.mem.Alloca
         if (m.fn_nparams[i] != (if (plain and f.params.len < 0xFF) @as(u8, @intCast(f.params.len)) else 0xFF)) S.bad("fn_nparams");
         if (plain and f.name_idx < nfn.len and nfn[f.name_idx] == vm.NO_FN) nfn[f.name_idx] = prog.funcs[c.live(@intCast(i))].id;
     }
-    if (!std.mem.eql(u32, m.name_fn, nfn)) S.bad("name_fn");
     const ncl = a.alloc(u32, prog.names.len) catch @panic("oom");
     @memset(ncl, vm.NO_CLS);
     co.lateClasses(c, ncl);
+    applyExports(&g_res, c, nfn, ncl);
+    if (!std.mem.eql(u32, m.name_fn, nfn)) S.bad("name_fn");
     if (!std.mem.eql(u32, m.name_cls, ncl)) S.bad("name_cls");
+    if (m.name_up.len != prog.names.len) S.bad("name_up's length");
+    for (0..prog.names.len) |i| {
+        if (m.name_up[i] != nameUpOf(c, prog.names, i)) S.bad("name_up");
+    }
     if (m.ncache.len != m.names.len) S.bad("native cache's length");
     if (m.fn_index) |fi| {
         var want = std.StringHashMapUnmanaged(u32){};
@@ -2267,13 +2512,12 @@ fn residentCompact(rs: *Resident) !void {
     np.* = .{ .alloc = a, .lenient = true };
     var st = std.ArrayListUnmanaged(image.Stamp){};
     var fnm = std.ArrayListUnmanaged([]const u8){};
-    // the dispatch rows' width is the VM's; the restore sets it to the names
-    const keep_stride = vm.n_names;
+    // the dispatch rows' width is the VM's, and decode leaves it alone: this
+    // may run on the compiling thread while the VM dispatches (rung 9)
     if (!prefix.decode(a, blob, rs.exe, np, &st, &fnm)) {
         std.debug.print("resident: the program's own state did not read back -- a defect of rnxc\n", .{});
         std.process.exit(2);
     }
-    vm.n_names = keep_stride;
     // room to grow: a list restored at its exact length doubles -- into this
     // arena, for good -- the first time the next admission appends to it
     inline for (.{ "code", "rows", "files", "fixups", "names", "globals", "natives", "konst", "funcs", "classes" }) |f| {
@@ -2319,22 +2563,132 @@ fn residentAdmit(rs: *Resident, path: []const u8, src: ?[]const u8, replace: boo
     const why = try residentAdmitOnce(rs, path, src, replace, at);
     // compacted once the admission is wholly over -- its own cleanup reads
     // lists in the program's arena -- and before the next one starts
-    if (residentBlobOn() or rs.parena.queryCapacity() > rs.compact_at) try residentCompact(rs);
+    // -- and not while a compile started from its top level owns the arena (rung 9)
+    bgQuiet(rs);
+    if (rs.bg == null and (residentBlobOn() or rs.parena.queryCapacity() > rs.compact_at)) try residentCompact(rs);
     return why;
 }
 
+/// ONE ADMISSION IN TWO HALVES (rung 9). admitCompile reads and writes the
+/// program's COMPILER only -- never the VM: nothing it reads is the VM's, and
+/// what compileFinish builds for the VM's globals waits in co.VmOut -- so it
+/// may run on a thread of its own while the program runs (`admitstart`).
+/// admitInstall hands the VM the delta and runs the admitted top level, on
+/// the program's own thread. Back to back on one thread they are the
+/// admission of rungs 1-8, which every synchronous verb still is.
+const AdmitJob = struct {
+    rs: *Resident,
+    path: []const u8,
+    src: ?[]const u8,
+    replace: bool,
+    nested: bool,
+    /// D31: the app it is admitted into, and what that app exports
+    app: ?[]const u8,
+    exports: []const []const u8,
+    /// whether the VM held class tables when the admission began (read on
+    /// the program's thread: the compile may not read the VM's tables)
+    vm_has_classes: bool,
+    /// rung 9: started in the background, so the job owns its copies of
+    /// path, src, app and exports -- the program may release its own -- and
+    /// its install hands the tidy-up to the compiling thread (bgTidy)
+    own: bool,
+    arena: std.heap.ArenaAllocator,
+    sa: std.heap.ArenaAllocator,
+    timer: std.time.Timer,
+    ph: AdmitPhases,
+    c: *co.Compiler = undefined,
+    marks: co.Marks = undefined,
+    check_before: ?[]u8 = null,
+    on_top: Unit = .{},
+    old_funcs: usize = 0,
+    old_classes: usize = 0,
+    prog: co.Program = undefined,
+    admit_ns: [4]u64 = .{0} ** 4,
+    /// the compile's outcome: refused (the program undone, and why), failed
+    /// with an error, or compiled -- ready for admitInstall
+    why: ?[]const u8 = null,
+    err: ?anyerror = null,
+    compiled: bool = false,
+
+    fn create(rs: *Resident, path: []const u8, src: ?[]const u8, replace: bool, nested: bool, own: bool) !*AdmitJob {
+        const H = vmheap;
+        const job = try H.create(AdmitJob);
+        var ex: []const []const u8 = rs.cur_exports;
+        if (own) {
+            const e2 = try H.alloc([]const u8, rs.cur_exports.len);
+            for (rs.cur_exports, 0..) |e, k| e2[k] = try H.dupe(u8, e);
+            ex = e2;
+        }
+        job.* = .{
+            .rs = rs,
+            .path = if (own) try H.dupe(u8, path) else path,
+            .src = if (src) |t| (if (own) try H.dupe(u8, t) else t) else null,
+            .replace = replace,
+            .nested = nested,
+            .app = if (rs.cur_app) |ap| (if (own) try H.dupe(u8, ap) else ap) else null,
+            .exports = ex,
+            .vm_has_classes = vm.dispatch.len > 0,
+            .own = own,
+            .arena = std.heap.ArenaAllocator.init(std.heap.page_allocator),
+            .sa = std.heap.ArenaAllocator.init(std.heap.page_allocator),
+            .timer = try std.time.Timer.start(),
+            .ph = .{ .t = std.time.Timer.start() catch null },
+        };
+        return job;
+    }
+
+    fn destroy(job: *AdmitJob) void {
+        const H = vmheap;
+        for (job.on_top.trees.items) |t| t.deinit();
+        job.on_top.trees.clearRetainingCapacity();
+        if (job.check_before) |b| H.free(b);
+        job.sa.deinit();
+        job.arena.deinit();
+        if (job.own) {
+            H.free(job.path);
+            if (job.src) |t| H.free(t);
+            if (job.app) |ap| H.free(ap);
+            for (job.exports) |e| H.free(e);
+            H.free(job.exports);
+        }
+        H.destroy(job);
+    }
+};
+
 fn residentAdmitOnce(rs: *Resident, path: []const u8, src: ?[]const u8, replace: bool, at: RunAt) !?[]const u8 {
+    const job = try AdmitJob.create(rs, path, src, replace, at.nested, false);
+    defer job.destroy();
+    admitCompile(job);
+    if (job.err) |e| return e;
+    if (job.why) |w| return w;
+    return admitInstall(job, at);
+}
+
+/// The COMPILE half: everything an admission does before the VM is touched.
+/// A refusal is undone here and leaves `why`; an error is kept in `err`.
+fn admitCompile(job: *AdmitJob) void {
+    admitCompileOrFail(job) catch |e| {
+        job.err = e;
+    };
+    // the compiler's own counters are per thread (co.admit_ns): kept here
+    // for the report, which the install half prints
+    job.admit_ns = co.admit_ns;
+}
+
+fn admitCompileOrFail(job: *AdmitJob) !void {
     const H = vmheap;
-    const m = rs.m;
+    const rs = job.rs;
     const parser = rs.parser;
     const exe = rs.exe;
-    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    defer arena.deinit();
-    const a = arena.allocator();
-    var timer = try std.time.Timer.start();
+    const path = job.path;
+    const src = job.src;
+    const replace = job.replace;
+    // a refusal is printed only by the driver (refuse reads `nested` alone)
+    const at: RunAt = .{ .nested = job.nested };
+    const a = job.arena.allocator();
     if (!at.nested) vm.outFlush();
     // RNXC_ADMIT_PHASES=1: where each admission's time goes, on stderr
-    var ph = AdmitPhases{ .t = std.time.Timer.start() catch null };
+    const ph = &job.ph;
 
     // the program so far, moved into a compiler of this admission's own: the
     // live program's lists and indexes, everything per-admission fresh. What
@@ -2345,22 +2699,23 @@ fn residentAdmitOnce(rs: *Resident, path: []const u8, src: ?[]const u8, replace:
     const pa = rs.parena.allocator();
     const c = try a.create(co.Compiler);
     c.* = .{ .alloc = pa, .lenient = true };
-    var sa = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    defer sa.deinit();
-    c.scratch_arena = &sa;
-    c.scratch = sa.allocator();
+    job.c = c;
+    c.scratch_arena = &job.sa;
+    c.scratch = job.sa.allocator();
     co.takeProgram(c, rs.P);
     c.tables_alloc = a;
     c.r24_sites = &rs.r24;
-    const marks = try co.markProgram(c, a);
-    const check_before: ?[]u8 = if (residentCheckOn()) try prefix.encode(H, exe, rs.stamps.items, rs.fnames.items, c) else null;
-    defer if (check_before) |b| H.free(b);
-    var undo = Undo{ .rs = rs, .c = c, .marks = &marks, .before = check_before };
+    c.vm_has_classes = job.vm_has_classes;
+    c.app = if (job.app) |ap| try pa.dupe(u8, ap) else null;
+    c.app_exports = job.exports;
+    job.marks = try co.markProgram(c, a);
+    job.check_before = if (residentCheckOn()) try prefix.encode(H, exe, rs.stamps.items, rs.fnames.items, c) else null;
+    var undo = Undo{ .rs = rs, .c = c, .marks = &job.marks, .before = job.check_before };
     const nadm = rs.stamps.items.len;
     ph.lap(.restore);
 
     // the file, and what it loads that the program does not already hold
-    var on_top = Unit{};
+    const on_top = &job.on_top;
     var held_l = std.ArrayListUnmanaged([]const u8){};
     const root_key = if (replace and src == null) try normalisePath(a, path) else "";
     std.debug.assert(rs.held_norm.items.len == rs.stamps.items.len);
@@ -2374,24 +2729,26 @@ fn residentAdmitOnce(rs: *Resident, path: []const u8, src: ?[]const u8, replace:
     on_top.already_norm = true;
     // code is admitted under a path of its own, so the same name twice is two
     // admissions (a redefinition is still refused), and reported by its name
-    const root_path = if (src != null) try std.fmt.allocPrint(pa, "admitcode:{d}:{s}", .{ rs.codes + 1, path }) else path;
+    const root_path = if (src != null) try std.fmt.allocPrint(pa, "{s}:{d}:{s}", .{ if (job.app != null) "admitapp" else "admitcode", rs.codes + 1, path }) else path;
     // the source lives with the program, whose names are slices of it: a
     // program's own string handed to admitcode may be released after
     on_top.root_src = if (src) |t| try pa.dupe(u8, t) else null;
-    try loadUnit(pa, parser, root_path, &on_top, true, held);
+    try loadUnit(pa, parser, root_path, on_top, true, held);
     if (src != null and on_top.names.items.len > 0) on_top.names.items[0] = path;
     if (on_top.roots.items.len == 0) {
-        return undo.done(refuse(rs, at, path, if (on_top.missing > 0) "it cannot be read" else "it is already admitted (Ring loads a file once)", null, &.{}));
+        job.why = keepWhy(rs, undo.done(refuse(rs, at, path, if (on_top.missing > 0) "it cannot be read" else "it is already admitted (Ring loads a file once)", null, &.{})));
+        return;
     }
     if (on_top.missing + on_top.scan_bad > 0 or on_top.implicit != null) {
         for (on_top.trees.items) |t| t.deinit();
         on_top.trees.clearRetainingCapacity();
-        return undo.done(refuse(rs, at, path, if (on_top.implicit != null)
+        job.why = keepWhy(rs, undo.done(refuse(rs, at, path, if (on_top.implicit != null)
             "Ring would read an implicit file beside it (C-28)"
         else if (on_top.scan_bad > 0)
             "a file does not scan (an unclosed literal or comment)"
         else
-            "a load names a file that cannot be opened", null, &.{}));
+            "a load names a file that cannot be opened", null, &.{})));
+        return;
     }
 
     // the unit: the admitted files hold their places, so every file index
@@ -2414,12 +2771,58 @@ fn residentAdmitOnce(rs: *Resident, path: []const u8, src: ?[]const u8, replace:
         co.load_srcs = &.{};
         co.load_paths = &.{};
     }
-    defer for (on_top.trees.items) |t| t.deinit();
 
-    // what compileFinish overwrites in the VM's globals: kept, so a refusal
-    // leaves them exactly as they were and an admission can tell its own
-    const keep_konst = vm.konst;
-    const keep_konst_cap = vm.konst_cap;
+    job.old_funcs = c.funcs.items.len;
+    job.old_classes = c.classes.items.len;
+    ph.lap(.load);
+    c.replacing = replace;
+    job.prog = co.compileAdmit(c, roots.items, @intCast(nadm), pa) catch |e| {
+        if (e != co.Error.Refused) {
+            job.why = keepWhy(rs, undo.done(refuse(rs, at, path, @errorName(e), null, &.{})));
+            return;
+        }
+        job.why = keepWhy(rs, undo.done(refuse(rs, at, path, co.admit_why, c, paths.items)));
+        return;
+    };
+    ph.lap(.compile);
+    job.compiled = true;
+}
+
+/// A refusal's reason, held where it outlives the compile: `rs.why`, which
+/// refuse formats into -- or, when it could not (the reason was too long),
+/// copied there. The compiler's own reason is per thread (co.admit_why), and
+/// a background compile's thread is gone by the time the reason is raised.
+fn keepWhy(rs: *Resident, wo: ?[]const u8) ?[]const u8 {
+    const w = wo orelse return null;
+    const lo = @intFromPtr(&rs.why);
+    if (@intFromPtr(w.ptr) >= lo and @intFromPtr(w.ptr) < lo + rs.why.len) return w;
+    const n = @min(w.len, rs.why.len);
+    std.mem.copyForwards(u8, rs.why[0..n], w[0..n]);
+    return rs.why[0..n];
+}
+
+/// The INSTALL half (rung 9): the VM takes what admitCompile compiled, and
+/// the admitted top level runs -- on the program's own thread, always.
+fn admitInstall(job: *AdmitJob, at: RunAt) !?[]const u8 {
+    const H = vmheap;
+    const rs = job.rs;
+    const m = rs.m;
+    const a = job.arena.allocator();
+    const c = job.c;
+    const prog = job.prog;
+    const marks = &job.marks;
+    const check_before = job.check_before;
+    const path = job.path;
+    const src = job.src;
+    const replace = job.replace;
+    const old_funcs = job.old_funcs;
+    const old_classes = job.old_classes;
+    const on_top = &job.on_top;
+    const ph = &job.ph;
+    const timer = &job.timer;
+    // what the compile built for the VM's own globals is published HERE, on
+    // the program's thread (co.VmOut) -- what it replaces kept first, so the
+    // install can tell the tables a first class admission built whole
     const keep = .{
         .dispatch = vm.dispatch,
         .method_tab = vm.method_tab,
@@ -2432,20 +2835,7 @@ fn residentAdmitOnce(rs: *Resident, path: []const u8, src: ?[]const u8, replace:
         .acc_get = vm.acc_get,
         .acc_set = vm.acc_set,
     };
-    const old_funcs = c.funcs.items.len;
-    const old_classes = c.classes.items.len;
-    ph.lap(.load);
-    c.replacing = replace;
-    const prog = co.compileAdmit(c, roots.items, @intCast(nadm), pa) catch |e| {
-        vm.konst = keep_konst;
-        vm.konst_cap = keep_konst_cap;
-        if (e != co.Error.Refused) return undo.done(refuse(rs, at, path, @errorName(e), null, &.{}));
-        return undo.done(refuse(rs, at, path, co.admit_why, c, paths.items));
-    };
-    vm.konst = keep_konst;
-    vm.konst_cap = keep_konst_cap;
-
-    ph.lap(.compile);
+    co.publishVm(c);
     // rung 6: where the VM's side stood before the install, for a release
     var rec_vt: [vt_lists.len]usize = undefined;
     inline for (vt_lists, 0..) |f, k| rec_vt[k] = @field(rs.vt, f).items.len;
@@ -2601,6 +2991,15 @@ fn residentAdmitOnce(rs: *Resident, path: []const u8, src: ?[]const u8, replace:
         if (prog.names.len > had or c.classes.items.len > old_classes) co.lateClasses(c, vt.name_cls.items);
         m.name_cls = vt.name_cls.items;
     }
+    // D31: an app's exports answer by their public names, and an app's late names fall back to the base's
+    {
+        for (c.new_exports.items) |e| try rs.exports.append(H, .{ .pub_idx = e.pub_idx, .internal = try H.dupe(u8, e.internal), .is_class = e.is_class });
+        applyExports(rs, c, vt.name_fn.items, vt.name_cls.items);
+        const had = vt.name_up.items.len;
+        for (had..prog.names.len) |i| try vt.name_up.append(H, nameUpOf(c, prog.names, i));
+        m.name_up = vt.name_up.items;
+        if (c.app != null) rs.apps += 1;
+    }
     if (replace) {
         for (prog.funcs[0..old_fns]) |f| {
             if (f.replaced_by != null) {
@@ -2723,6 +3122,7 @@ fn residentAdmitOnce(rs: *Resident, path: []const u8, src: ?[]const u8, replace:
     {
         var why: []const u8 = "";
         if (replace) why = "it replaced what the program held";
+        if (c.app != null) why = "it admitted an app, whose names other apps may reach by its exports";
         if (c.classes.items.len != old_classes) why = "it defined a class, whose objects could outlive it";
         for (c.funcs.items[old_funcs..]) |f| {
             if (f.lambda_at != null) why = "it defined a lambda, which could outlive it";
@@ -2770,7 +3170,12 @@ fn residentAdmitOnce(rs: *Resident, path: []const u8, src: ?[]const u8, replace:
     c.prefix_main = null;
     c.main_fn = null;
     co.takeProgram(rs.P, c);
-    for (on_top.trees.items) |t| t.deinit();
+    if (job.own) {
+        // rung 9: the trees released, and the program compacted when due, on
+        // the compiling thread while the top level runs here -- nothing below
+        // reads the program's arena, and what next does waits (bgQuiet)
+        bgTidy(rs, on_top.trees.items);
+    } else for (on_top.trees.items) |t| t.deinit();
     on_top.trees.clearRetainingCapacity();
     ph.lap(.save);
     rs.prog_code = prog.code.len;
@@ -2818,9 +3223,10 @@ fn residentAdmitOnce(rs: *Resident, path: []const u8, src: ?[]const u8, replace:
         }
     }
     ph.lap(.run);
-    ph.report(path, rs);
+    ph.report(path, rs, job.admit_ns);
     return null;
 }
+
 
 /// A refusal, and the program it left exactly as it was: printed by the
 /// driver, with the statements behind it; from inside the program, the
@@ -2837,9 +3243,10 @@ fn refuse(rs: *Resident, at: RunAt, path: []const u8, why: []const u8, c: ?*co.C
             // admitted root is the likeliest, and the row is the file's
             const fi = cc.fileOfPub(r.src.ptr);
             var fname = std.fs.path.basename(if (fi) |x| (if (x < paths.len) paths[x] else path) else path);
-            // code admitted under a path of its own is named as the program named it
-            if (std.mem.startsWith(u8, fname, "admitcode:")) {
-                if (std.mem.indexOfScalarPos(u8, fname, "admitcode:".len, ':')) |colon| fname = fname[colon + 1 ..];
+            // code admitted under a path of its own is named as the program named it -- an app's too (D31)
+            for ([_][]const u8{ "admitcode:", "admitapp:" }) |pre| {
+                if (!std.mem.startsWith(u8, fname, pre)) continue;
+                if (std.mem.indexOfScalarPos(u8, fname, pre.len, ':')) |colon| fname = fname[colon + 1 ..];
             }
             if (k == 0) {
                 first = r;
@@ -3190,6 +3597,22 @@ pub fn main() !void {
     var unit = Unit{};
     unit.lift = !(std.mem.eql(u8, argv[1], "dump") or std.mem.eql(u8, argv[1], "migrate") or
         std.mem.eql(u8, argv[1], "attrs") or std.mem.eql(u8, argv[1], "shadows"));
+    if (std.mem.eql(u8, argv[1], "check") and argv.len > 3) {
+        var keys = std.ArrayListUnmanaged([]const u8){};
+        var with = std.ArrayListUnmanaged([]const u8){};
+        for (argv[3..]) |a| {
+            if (!std.mem.startsWith(u8, a, "--subst=")) continue;
+            const spec = a["--subst=".len..];
+            const eq = std.mem.lastIndexOfScalar(u8, spec, '=') orelse {
+                std.debug.print("rnxc check: --subst wants <file>=<text file>, got {s}\n", .{a});
+                std.process.exit(2);
+            };
+            try keys.append(alloc, try normalisePath(alloc, spec[0..eq]));
+            try with.append(alloc, spec[eq + 1 ..]);
+        }
+        unit.subst_keys = keys.items;
+        unit.subst_with = with.items;
+    }
     var pre_start: u32 = 0;
     var t_load = try std.time.Timer.start();
     if (pre_c != null) {
@@ -4016,9 +4439,13 @@ pub fn main() !void {
     // reports the per-file rules only.
     if (std.mem.eql(u8, argv[1], "check")) {
         var advise = false;
+        var closed = false;
+        var natives_path: ?[]const u8 = null;
         if (argv.len > 3) {
             for (argv[3..]) |a| {
                 if (std.mem.eql(u8, a, "--advise")) advise = true;
+                if (std.mem.eql(u8, a, "--closed")) closed = true;
+                if (std.mem.startsWith(u8, a, "--natives=")) natives_path = a["--natives=".len..];
             }
         }
         var report = check.Report.init(alloc);
@@ -4027,12 +4454,25 @@ pub fn main() !void {
         // universe is right for all of them. This was `.{}` -- every map
         // null -- and the four absence rules sat silent for fourteen days
         // while the gate counted them (src/universe.zig).
-        const uni = try universe.Universe.build(alloc, unit.roots.items, unit.missing);
+        var uni = try universe.Universe.build(alloc, unit.roots.items, unit.missing, closed);
+        if (closed) try uni.addUnitSigs(alloc, unit.roots.items, unit.paths.items);
+        var n_natives: usize = 0;
+        if (natives_path) |np| {
+            const txt = std.fs.cwd().readFileAlloc(alloc, np, 64 << 20) catch {
+                std.debug.print("rnxc check: cannot read the natives list {s}\n", .{np});
+                std.process.exit(2);
+            };
+            var names = std.ArrayListUnmanaged([]const u8){};
+            var it = std.mem.tokenizeAny(u8, txt, " \t\r\n");
+            while (it.next()) |n| try names.append(alloc, n);
+            try uni.addNatives(alloc, names.items);
+            n_natives = names.items.len;
+        }
         const ctx = uni.ctx();
+        // Each file's text as the unit READ it (origs) -- the file's bytes on disk, or the text `--subst` gave it.
         for (unit.roots.items, 0..) |_, i| {
             const path = unit.paths.items[i];
-            const src = std.fs.cwd().readFileAlloc(alloc, path, 64 << 20) catch continue;
-            check.checkSourceCtx(alloc, parser, path, src, &report, ctx) catch continue;
+            check.checkSourceCtx(alloc, parser, path, unit.origs.items[i], &report, ctx) catch continue;
         }
         var last_file: []const u8 = "";
         for (report.findings.items) |f| {
@@ -4059,6 +4499,9 @@ pub fn main() !void {
         // A rule that stays silent must SAY so, or "0 error" reads as a clean
         // bill of health for four rules that never looked. On the Softanza
         // aggregator this is the line that tells you why: eval and loadlib.
+        if (closed and uni.complete) {
+            try w.print("  checked CLOSED: a name only eval, loadlib or an admission could make is reported absent; {d} native name(s) given\n", .{n_natives});
+        }
         if (!uni.complete) {
             try w.print("  undefined-function, unknown-class/-package: NOT checked -- {s}\n", .{uni.reason});
         }
@@ -4410,6 +4853,7 @@ fn residentRelease(rs: *Resident, name: []const u8, at: RunAt) ?[]const u8 {
     m.fn_nparams = vt.fn_nparams.items;
     m.name_fn = vt.name_fn.items;
     m.name_cls = vt.name_cls.items;
+    m.name_up = vt.name_up.items;
     // a cell `addmethod` wrote for one of its NAMES -- the only cells past the
     // names it found, since it defined no class -- emptied, so the index the
     // next admission's name takes does not answer for it. The attachment

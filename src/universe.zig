@@ -76,6 +76,8 @@ pub const Universe = struct {
     /// whose target cannot be read. Holds wherever `complete` does.
     complete_vars: bool,
     typehints: bool,
+    /// Built for `rnxc check --closed` (see build).
+    closed: bool = false,
 
     all_defined: std.StringHashMap(void),
     all_globals: std.StringHashMap(void),
@@ -83,6 +85,11 @@ pub const Universe = struct {
     all_packages: std.StringHashMap(void),
     all_defined_vars: std.StringHashMap(void),
     all_globals_vars: std.StringHashMap(void),
+    /// Closed only (addUnitSigs): each top-level function the unit defines ONCE, by lower-cased name, with the file it is in -- so the
+    /// arity rule resolves a call through the whole unit, not only through the calling file's own loads; a name defined twice is
+    /// `conflicted` and the rule skips it.
+    unit_sigs: std.StringHashMap(types.ExternSig),
+    conflicted: std.StringHashMap(void),
 
     /// Why a gate is shut, for the one line `rnxc check` prints about it.
     /// A rule that stays silent must be able to say why, or silence reads as
@@ -92,10 +99,19 @@ pub const Universe = struct {
     /// Build it from the loader's own trees. `missing` is how many `load`
     /// targets the loader could not read -- each one a whole file this pass
     /// cannot see.
+    ///
+    /// `closed` is the rung-5 refinement gate's question, not Ring's (`rnxc check --closed`, Haro D32): is
+    /// every name this unit uses one the unit DEFINES? Then a unit in which nothing runs is asked about
+    /// all the same -- a library's bodies run when something loads it, and the gate refines bodies, not
+    /// runs -- and eval, loadlib and an admission no longer shut the rules: a name only one of them could
+    /// make is reported absent, which for the gate is exactly what it is (a body may call only what it
+    /// can see; Ring++'s eval defines no function, F-72). A file that could not be read or parsed still
+    /// shuts them: that is a hole in what the pass can see, closed world or not.
     pub fn build(
         arena: std.mem.Allocator,
         roots: []const ts.Node,
         missing: u32,
+        closed: bool,
     ) !Universe {
         var u = Universe{
             .complete = true,
@@ -107,7 +123,10 @@ pub const Universe = struct {
             .all_packages = std.StringHashMap(void).init(arena),
             .all_defined_vars = std.StringHashMap(void).init(arena),
             .all_globals_vars = std.StringHashMap(void).init(arena),
+            .unit_sigs = std.StringHashMap(types.ExternSig).init(arena),
+            .conflicted = std.StringHashMap(void).init(arena),
             .reason = "",
+            .closed = closed,
         };
         if (missing > 0) {
             u.complete = false;
@@ -141,7 +160,7 @@ pub const Universe = struct {
                 break;
             }
         }
-        if (roots.len > 0 and !runnable) {
+        if (roots.len > 0 and !runnable and !closed) {
             u.complete = false;
             u.complete_vars = false;
             if (u.reason.len == 0) u.reason = "nothing in this unit runs -- no top level and no Main, " ++
@@ -159,6 +178,7 @@ pub const Universe = struct {
                 u.complete_vars = false;
                 if (u.reason.len == 0) u.reason = "a loaded file did not parse";
             }
+            if (closed) continue;
             if (s.has_admit and u.complete) {
                 u.complete = false;
                 if (u.reason.len == 0) u.reason = "the unit admits code while it runs (admitfile, admitcode, replacefile, replacecode)";
@@ -194,11 +214,44 @@ pub const Universe = struct {
         return u;
     }
 
+    /// Names the unit's native libraries register (`rnxc check --natives=<file>`, one a line): defined, as a
+    /// function is, for a closed check -- the engine's names come from the engine (`cfunctions()` on a run
+    /// that loaded it), never from the calls the unit happens to make.
+    pub fn addNatives(self: *Universe, arena: std.mem.Allocator, names: []const []const u8) !void {
+        for (names) |n| {
+            const k = try lower(arena, n);
+            if (self.complete) try self.all_defined.put(k, {});
+            if (self.complete_vars) try self.all_defined_vars.put(k, {});
+        }
+    }
+
+    /// Every top-level function's signature across the unit, for a CLOSED check: the checker resolves a call's signature through the
+    /// calling file's own load graph (F-26), and a library does not load the program that loads it, so a call from a library into its
+    /// loader was checked for its NAME (all_defined) and never for its arity. In one program a name has one definition (C22), so the
+    /// unit-wide signature is the one that runs; a name two files define is conflicted, and the rule says nothing about it.
+    pub fn addUnitSigs(self: *Universe, arena: std.mem.Allocator, roots: []const ts.Node, paths: []const []const u8) !void {
+        for (roots, 0..) |r, i| {
+            if (r.isNull() or r.hasError()) continue;
+            for (try types.collectTopSigs(arena, r)) |sig| {
+                if (self.conflicted.contains(sig.lower)) continue;
+                if (self.unit_sigs.contains(sig.lower)) {
+                    _ = self.unit_sigs.remove(sig.lower);
+                    try self.conflicted.put(sig.lower, {});
+                    continue;
+                }
+                try self.unit_sigs.put(sig.lower, .{ .file = paths[i], .sig = sig });
+            }
+        }
+    }
+
     /// The context one file is checked under. The maps are shared, not
     /// copied: they are the same universe for every file of the unit.
     pub fn ctx(self: *const Universe) types.Ctx {
         return .{
             .typehints_loaded_in_scan = self.typehints,
+            .closed = self.closed,
+            .extern_sigs = if (self.closed) &self.unit_sigs else null,
+            .conflicted = if (self.closed) &self.conflicted else null,
             .assert_undefined = self.complete,
             .assert_undefined_vars = self.complete_vars,
             .all_defined = if (self.complete) &self.all_defined else null,
@@ -218,7 +271,8 @@ fn scan(arena: std.mem.Allocator, root: ts.Node) !FileScan {
         .has_dynamic = hasCallTo(src, "loadlib") or hasCallTo(src, "loadlibfile") or
             hasCallTo(src, "eval"),
         .has_admit = hasCallTo(src, "admitfile") or hasCallTo(src, "admitcode") or
-            hasCallTo(src, "replacefile") or hasCallTo(src, "replacecode"),
+            hasCallTo(src, "replacefile") or hasCallTo(src, "replacecode") or
+            hasCallTo(src, "admitapp") or hasCallTo(src, "replaceapp") or hasCallTo(src, "admitstart"),
         .has_opaque_eval = false,
         .eval_names = &.{},
         .defnames = &.{},

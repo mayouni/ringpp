@@ -1102,6 +1102,13 @@ pub const EVAL_NESTED: u32 = 0xFFFFFFFF;
 /// `mode`: 0 admit, 1 replace (rung 3), 2 release (rung 6: `src` is null and `name` names the program's last admission).
 /// `pc` is the instruction that called -- a release refuses while a frame of the code it would drop is running.
 pub const AdmitHook = *const fn (vm_: *VM, name: []const u8, src: ?[]const u8, mode: u8, base: u32, fsp: u32, hsp: u32, pc: u32) ?[]const u8;
+/// Rung 9: `mode | ADMIT_BG` starts the admission's compile on a thread of its own and returns (`admitstart`);
+/// ADMIT_FINISH installs it and runs its top level (`admitfinish`), waiting first if it still compiles.
+pub const ADMIT_BG: u8 = 0x10;
+pub const ADMIT_FINISH: u8 = 0x20;
+/// Rung 9: where the background admission stands -- 0 none, 1 compiling, 2 compiled -- after waiting at most `wait_ms`
+/// for it to finish compiling (`admitstate`).
+pub const AdmitStateHook = *const fn (vm_: *VM, wait_ms: i64) u8;
 
 /// The builtin vocabulary, by id.
 ///
@@ -1333,6 +1340,20 @@ pub const Builtin = enum(u16) {
     // tables dropped, the program as it was before it
     releasefile,
     releasecode,
+    // D31: an APP is admitted into a namespace of its own -- its functions,
+    // classes and globals `app::Name` -- and exports what another app may
+    // reach as `app.Name`; replaceapp replaces within it
+    admitapp,
+    replaceapp,
+    // rung 9: an admission COMPILED IN THE BACKGROUND while the program runs --
+    // admitstart(cVerb, ...) with the verb's own arguments, admitstate([nWaitMs])
+    // and admitfinish(), which installs it and runs its top level
+    admitstart2,
+    admitstart3,
+    admitstart4,
+    admitstate0,
+    admitstate1,
+    admitfinish,
 };
 
 /// The name Ring gives a builtin's C frame in an error report -- `In
@@ -1359,6 +1380,8 @@ pub fn builtinRingName(b: Builtin) ?[]const u8 {
         .newlist1, .newlist2d => "newlist",
         .refv => "ref",
         .reference => "reference",
+        .admitstart2, .admitstart3, .admitstart4 => "admitstart",
+        .admitstate0, .admitstate1 => "admitstate",
         else => @tagName(b),
     };
 }
@@ -2092,6 +2115,14 @@ pub const VM = struct {
     /// before K existed finds it here once a later admission defines it.
     /// Empty outside the resident VM.
     name_cls: []const u32 = &.{},
+    /// D31: for a name an APP's code reaches late (`shop::f`, `shop::K`), the
+    /// index of the unqualified name (`f`, `K`) its late link falls back to
+    /// when the app defines none -- the base's function, class or native, as
+    /// the app's own name comes first. NO_FN where there is none. Built by
+    /// the installer from the names alone (rnxc.zig, nameUp).
+    name_up: []const u32 = &.{},
+    /// admitapp's third argument, the names the app exports, for the hook.
+    admit_exports: Value = Value.nil(),
     /// Parameters per function id, for that late call's R19/R20 (Ring counts
     /// at run time); 0xFF where unchecked.
     fn_nparams: []const u8 = &.{},
@@ -2107,6 +2138,9 @@ pub const VM = struct {
     /// is raised at its call, so only the outermost run reports.
     admit_hook: ?AdmitHook = null,
     admit_nest: u32 = 0,
+    /// rung 9: `admitstate()`, and the message admitstart() raises with
+    admit_state_hook: ?AdmitStateHook = null,
+    admit_msg: [256]u8 = undefined,
     /// Reused buffer for builtins that build a string before newStr copies
     /// it -- replaceAll and friends. Cleared per call, never freed.
     scratch: std.ArrayListUnmanaged(u8) = .{},
@@ -2230,6 +2264,52 @@ pub const VM = struct {
     /// over 45,000 names per call -- the shape this project has had to
     /// remove from the compiler twice (findFunc, collectAll) and will not
     /// put into the VM.
+    /// D31: a function by name, as code running at `pc` reaches it. In an APP's code (`shop::Handler`, or a method of
+    /// `shop::Box`) the app's own `shop::name` comes first, then the base's `name`. A PUBLIC name, `ledger.Sum`, is what
+    /// an app exports (VM.name_fn under that name, set by the installer) and nothing else. An internal `ledger::Sum` is
+    /// the base's to reach -- the host owns its apps -- and an app's for its own names only.
+    fn funcByNameAt(self: *VM, name: []const u8, pc: u32) ?u32 {
+        const app = self.appAt(pc);
+        if (std.mem.indexOf(u8, name, "::")) |k| {
+            if (app) |ap| {
+                if (!std.ascii.eqlIgnoreCase(name[0..k], ap)) return null;
+            }
+            return self.funcByName(name);
+        }
+        if (app) |ap| {
+            var buf: [250]u8 = undefined;
+            if (ap.len + 2 + name.len <= buf.len) {
+                const q = std.fmt.bufPrint(&buf, "{s}::{s}", .{ ap, name }) catch "";
+                if (self.funcByName(q)) |f| return f;
+            }
+        }
+        if (std.mem.indexOfScalar(u8, name, '.') != null) {
+            const ni = self.nameIdx(name) orelse return null;
+            return if (ni < self.name_fn.len and self.name_fn[ni] != NO_FN) self.name_fn[ni] else null;
+        }
+        return self.funcByName(name);
+    }
+
+    /// D31: the app whose code runs at `pc` -- the namespace of its function's name (`shop::Handler`) or, for a method,
+    /// of its class's (`shop::Box`) -- or null for the base. An app's top level and its lambdas carry no namespace in
+    /// their names, so they read as the base here (named in haro/serv/README.md).
+    fn appAt(self: *const VM, pc: u32) ?[]const u8 {
+        if (pc >= self.fn_of.len) return null;
+        const fid = self.fn_of[pc];
+        if (fid >= self.fn_names.len) return null;
+        var nm = self.fn_names[fid];
+        if (fid < fn_owner.len and fn_owner[fid] != 0xFFFF) {
+            const cid = fn_owner[fid];
+            if (cid >= class_konst.len or class_konst[cid] >= konst.len) return null;
+            const kv = konst[class_konst[cid]];
+            if (kv.tag != .str) return null;
+            nm = strOf(kv);
+        }
+        if (std.mem.startsWith(u8, nm, "@@")) return null;
+        const k = std.mem.indexOf(u8, nm, "::") orelse return null;
+        return nm[0..k];
+    }
+
     fn funcByName(self: *VM, name: []const u8) ?u32 {
         if (self.fn_index == null) {
             var m = std.StringHashMapUnmanaged(u32){};
@@ -3029,7 +3109,18 @@ pub const VM = struct {
     /// `newn`: the class the program holds under name `nd` as a new object,
     /// or null with Ring's R11 pending -- the name lower-cased, as Ring's
     /// scanner leaves it. Out of the run loop: it is a resident program's.
-    noinline fn lateObj(self: *VM, nd: usize) ?Value {
+    /// D31: the name a late link reaches -- `nd` when something answers to it (a function by that name, or a name with no
+    /// fall-back), else the unqualified name an APP's late name falls back to (VM.name_up): the base's function, class or
+    /// native, the app's own coming first. A plain program's name_up is empty, and this is `nd`.
+    inline fn lateIdx(self: *const VM, nd: usize) usize {
+        if (nd < self.name_fn.len and self.name_fn[nd] != NO_FN) return nd;
+        if (nd < self.name_up.len and self.name_up[nd] != NO_FN) return self.name_up[nd];
+        return nd;
+    }
+
+    noinline fn lateObj(self: *VM, nd0: usize) ?Value {
+        var nd = nd0;
+        if ((nd >= self.name_cls.len or self.name_cls[nd] == NO_CLS) and nd < self.name_up.len and self.name_up[nd] != NO_FN) nd = self.name_up[nd];
         const cid = if (nd < self.name_cls.len) self.name_cls[nd] else NO_CLS;
         if (cid == NO_CLS or cid >= class_slots.len) {
             const nm = if (nd < self.names.len) self.names[nd] else "";
@@ -4004,20 +4095,61 @@ pub const VM = struct {
     /// null when admitted, else the error to raise. Not inside eval: an
     /// admission cuts the eval code past the program. Out of the run loop, so
     /// the loop carries one call for the six of them.
-    noinline fn admitCall(self: *VM, which: Builtin, a0: Value, a1: Value, base: u32, fsp: u32, hsp: u32, pc: u32) ?[]const u8 {
-        const coded = which == .admitcode or which == .replacecode;
+    noinline fn admitCall(self: *VM, which_in: Builtin, a0_in: Value, a1_in: Value, a2_in: Value, a3_in: Value, base: u32, fsp: u32, hsp: u32, pc: u32) ?[]const u8 {
+        // RUNG 9: admitstart(cVerb, ...) is the verb's own call, its compile started on a thread of its own; admitfinish()
+        // installs it. The same admission as the verb's, and the same refusals, raised by admitfinish().
+        var which = which_in;
+        var a0 = a0_in;
+        var a1 = a1_in;
+        var a2 = a2_in;
+        var bg: u8 = 0;
+        if (which == .admitstart2 or which == .admitstart3 or which == .admitstart4 or which == .admitfinish) {
+            const hook = self.admit_hook orelse return "Error : admitstart(), admitstate() and admitfinish() need a resident program (rnxc resident)";
+            if (self.eval_nsites != 0) return "Error : admitstart() and admitfinish() are not called inside eval()";
+            if (which == .admitfinish) {
+                self.admit_nest += 1;
+                defer self.admit_nest -= 1;
+                return hook(self, "", null, ADMIT_FINISH, base, fsp, hsp, pc);
+            }
+            if (a0.tag != .str) return BADPARAM;
+            const given: u8 = switch (which) {
+                .admitstart2 => 1,
+                .admitstart3 => 2,
+                else => 3,
+            };
+            const verb = strOf(a0);
+            const named: ?Builtin = for ([_]Builtin{ .admitfile, .admitcode, .replacefile, .replacecode, .admitapp, .replaceapp }) |b| {
+                if (std.ascii.eqlIgnoreCase(verb, @tagName(b))) break b;
+            } else null;
+            which = named orelse return "Error : admitstart(): its first argument names the verb -- admitfile, admitcode, replacefile, replacecode, admitapp or replaceapp";
+            const takes: u8 = switch (which) {
+                .admitfile, .replacefile => 1,
+                .admitapp => 3,
+                else => 2,
+            };
+            if (takes != given) return std.fmt.bufPrint(&self.admit_msg, "Error : admitstart(): {s} takes {d} argument(s) after its name, given {d}", .{ @tagName(which), takes, given }) catch BADPARAM;
+            a0 = a1_in;
+            a1 = a2_in;
+            a2 = a3_in;
+            bg = ADMIT_BG;
+        }
+        const coded = which == .admitcode or which == .replacecode or which == .admitapp or which == .replaceapp;
         if (a0.tag != .str or (coded and a1.tag != .str)) return BADPARAM;
+        if (which == .admitapp and a2.tag != .vec) return BADPARAM;
+        self.admit_exports = if (which == .admitapp) a2 else Value.nil();
         const hook = self.admit_hook orelse
             return "Error : admitfile(), admitcode(), replacefile(), replacecode(), releasefile() and releasecode() need a resident program (rnxc resident)";
         if (self.eval_nsites != 0)
             return "Error : admitfile(), admitcode(), replacefile(), replacecode(), releasefile() and releasecode() are not admitted inside eval()";
         self.admit_nest += 1;
         defer self.admit_nest -= 1;
-        const mode: u8 = switch (which) {
+        const mode: u8 = bg | @as(u8, switch (which) {
             .replacefile, .replacecode => 1,
             .releasefile, .releasecode => 2,
+            .admitapp => 3,
+            .replaceapp => 4,
             else => 0,
-        };
+        });
         return hook(self, strOf(a0), if (coded) strOf(a1) else null, mode, base, fsp, hsp, pc);
     }
     pub fn holdValue(v: Value) void {
@@ -5206,7 +5338,7 @@ pub const VM = struct {
                 var fid: usize = 0;
                 if (cv.tag == .str) {
                     const nm = strOf(cv);
-                    const found = self.funcByName(nm) orelse {
+                    const found = self.funcByNameAt(nm, pc) orelse {
                         var low: [128]u8 = undefined;
                         const n = @min(nm.len, low.len);
                         for (nm[0..n], 0..) |ch, i| low[i] = std.ascii.toLower(ch);
@@ -5482,7 +5614,7 @@ pub const VM = struct {
                 continue :dispatch code[pc].op;
             },
             .nchk => {
-                const nd: usize = @intCast(code[pc].d);
+                const nd: usize = self.lateIdx(@intCast(code[pc].d));
                 if (nd < self.name_fn.len and self.name_fn[nd] != NO_FN) {
                     pc += 1;
                     continue :dispatch code[pc].op;
@@ -5501,8 +5633,9 @@ pub const VM = struct {
                 // (VM.name_fn). The arguments already sit in a window above
                 // everything live, as a direct call's do; the answer lands in
                 // `a` through the frame (lkind 1), where `ncall` puts its own.
-                if (@as(usize, @intCast(in.d)) < self.name_fn.len) {
-                    const uf = self.name_fn[@intCast(in.d)];
+                const ld = self.lateIdx(@intCast(in.d));
+                if (ld < self.name_fn.len) {
+                    const uf = self.name_fn[ld];
                     if (uf != NO_FN) {
                         const np: u8 = if (uf < self.fn_nparams.len) self.fn_nparams[uf] else 0xFF;
                         if (np != 0xFF and np != in.c) {
@@ -5531,11 +5664,11 @@ pub const VM = struct {
                         continue :dispatch code[pc].op;
                     }
                 }
-                const nm = self.names[@intCast(in.d)];
+                const nm = self.names[ld];
                 // `nchk` has normally found it already; a call reached
                 // without one (a brace's method-miss fallback) raises the
                 // same R3 here.
-                const f = self.nativeOf(@intCast(in.d)) orelse {
+                const f = self.nativeOf(ld) orelse {
                     self.r3Named(nm);
                     self.native_raise = false;
                     continue :dispatch .raise;
@@ -7312,14 +7445,15 @@ pub const VM = struct {
                         pc += 1;
                         continue :dispatch code[pc].op;
                     },
-                    .admitfile, .admitcode, .replacefile, .replacecode, .releasefile, .releasecode => {
-                        // THE RESIDENT VM, rungs 2, 3 and 6: the running
+                    .admitfile, .admitcode, .replacefile, .replacecode, .releasefile, .releasecode, .admitapp, .replaceapp, .admitstart2, .admitstart3, .admitstart4, .admitfinish => {
+                        // THE RESIDENT VM, rungs 2, 3, 6 and 9: the running
                         // program admits more source into itself, replaces a
-                        // function it holds, or releases its last admission
-                        // (admitCall, out of this loop).
+                        // function it holds, releases its last admission, or
+                        // starts one compiling in the background and later
+                        // finishes it (admitCall, out of this loop).
                         // An error its top level did not catch is raised
                         // here, as eval's is.
-                        const why = self.admitCall(which, regs[A], regs[A + 1], base, fsp, hsp, pc);
+                        const why = self.admitCall(which, regs[A], regs[A + 1], regs[A + 2], regs[A + 3], base, fsp, hsp, pc);
                         code = self.code;
                         if (why) |w| {
                             self.pending = w;
@@ -7330,6 +7464,37 @@ pub const VM = struct {
                             continue :dispatch .raise;
                         }
                         out = Value.int(1);
+                    },
+                    .admitstate0, .admitstate1 => {
+                        // rung 9: "" when no admission compiles in the
+                        // background, "compiling", or "compiled" -- ready for
+                        // admitfinish(). admitstate(nWaitMs) waits at most
+                        // that long for the compile first.
+                        var wait: i64 = 0;
+                        if (which == .admitstate1) {
+                            const w = regs[A];
+                            wait = switch (w.tag) {
+                                .int => w.p.i,
+                                .num => blk: {
+                                    const f = w.p.d;
+                                    break :blk if (f >= 0 and f < 1e12) @intFromFloat(f) else 0;
+                                },
+                                else => {
+                                    self.pending = BADPARAM;
+                                    continue :dispatch .raise;
+                                },
+                            };
+                        }
+                        const sh = self.admit_state_hook orelse {
+                            self.pending = "Error : admitstart(), admitstate() and admitfinish() need a resident program (rnxc resident)";
+                            continue :dispatch .raise;
+                        };
+                        const st = sh(self, wait);
+                        out = Value.str(self.newStr(switch (st) {
+                            0 => "",
+                            1 => "compiling",
+                            else => "compiled",
+                        }));
                     },
                     .catchlast => {
                         if (self.catch_last.tag == .nil) {
@@ -7354,7 +7519,7 @@ pub const VM = struct {
                             }
                             // a USER function -- `isfunction("len")` is 0 on 1.27
                             var has = false;
-                            if (self.funcByName(strOf(regs[A]))) |fid| {
+                            if (self.funcByNameAt(strOf(regs[A]), pc)) |fid| {
                                 const is_m = fid < self.fn_method.len and self.fn_method[fid];
                                 has = !is_m and fid < self.fn_names.len and self.fn_names[fid].len > 0 and !std.mem.startsWith(u8, self.fn_names[fid], "@@");
                             }
@@ -7507,7 +7672,7 @@ pub const VM = struct {
                         var fid: ?u32 = null;
                         var shift = false;
                         if (tv.tag == .str) {
-                            if (self.funcByName(strOf(tv))) |f| {
+                            if (self.funcByNameAt(strOf(tv), pc)) |f| {
                                 const is_m = f < self.fn_method.len and self.fn_method[f];
                                 if (!is_m) {
                                     fid = f;

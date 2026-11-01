@@ -663,7 +663,10 @@ fn loadFrom(
     c.prefix_classes = c.classes.items.len;
     c.prefix_code = c.code.items.len;
     c.prefix_fixups = c.fixups.items.len;
-    vm.n_names = @intCast(c.names.items.len);
+    // a prefix FILE sets the dispatch rows' width; the resident VM's own bytes
+    // do not -- its rows are wider than its names, and the compaction that
+    // reads them may run on the compiling thread while the VM dispatches
+    if (verify) vm.n_names = @intCast(c.names.items.len);
     image.say("prefix used: {d} file(s), {d} function(s), {d} class(es)", .{ h.nstamps, c.funcs.items.len, c.classes.items.len });
     return true;
 }

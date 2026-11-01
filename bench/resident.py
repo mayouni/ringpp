@@ -60,6 +60,21 @@ Six questions, each answered by running, never by reading the code:
      initial values), and a site in code that was released. Golden, and every line before the replacement is Ring's
      (ln_oracle.ring) but two: C-33's, and a brace's name the class lacks -- a variable on Ring, R12 here, because the
      class was unknown when the brace was compiled.
+ 11. D31, HAROSERVER'S NAMESPACES: ns_host.ring admits apps with admitapp(cApp, cSource, aExports) -- two apps defining the
+     same functions and the same global, each its own and the base's untouched; an app falling back to the base's names; a
+     public name only an export answers; another app's class and function through its exports, refused through what it
+     does not export and by its internal name; an app reached before it is admitted, and a name an app reaches before
+     anything defines it (the base's, then its own); an app's class taking its app's parent before the base's; replaceapp
+     within an app; refused: an export naming nothing, a name that is no identifier, a redefinition within an app, and the
+     release of an app's admission. Golden: Ring has no namespaces.
+ 12. RUNG 9, AN ADMISSION COMPILED IN THE BACKGROUND: bg_host.ring starts admissions with admitstart(cVerb, ...) -- each of
+     the six verbs, with its own arguments -- works while they compile, and installs them with admitfinish(): code, a
+     refusal (the verb's own reason, raised by admitfinish), one at a time (every other admission and release refused while
+     one compiles), the program's first class (its tables built by the compile and handed to the VM by the install alone),
+     a file and its replacement, code replacing code, an app and its replacement, a top level that raises (raised at
+     admitfinish), and admitstate(nWaitMs) waiting. Golden. bg_never.ring and bg_after.ring: the driver discards an
+     admission a file started and never finished -- not admitted, the program as it was. bg_overlap.ring, MEASURED: while
+     a 3,000-function admission compiles the program calls methods, runs eval and builds strings, and every answer is right.
   7. RUNG 5, THE LIVE COMPILER: every run above again, twice. Under RNXC_RESIDENT_CHECK=1 each refused admission must leave
      the program's saved bytes exactly as they were, and each admitted one the VM's tables a whole build of the program gives
      (rnxc stops if not); under RNXC_RESIDENT_BLOB=1 the program is saved to bytes and restored after every admission -- the
@@ -387,6 +402,40 @@ def main():
                 beh_ours = [l for l in beh_ours if l]
                 say(beh_ours == oc and len(oc) > 10, 'ringserv migrated: its library at work prints what Ring prints for the copy, %d lines' % len(oc))
                 say(oc == oo, 'ringserv: on Ring the migrated copy prints what the files as written print')
+    # ---- 11 (D31). HaroServer's namespaces: apps admitted into names of their own, reaching each other through exports
+    code14, out14, err14 = run([RNXC, 'resident', 'ns_host.ring'], RES)
+    want14 = open(os.path.join(RES, 'expect_ns.txt'), encoding='utf-8').read().replace('\r', '')
+    same14 = blank(out14) == want14
+    say(code14 == 0 and same14 and not err14.strip(), 'namespaces: the transcript is bench/resident/expect_ns.txt (%d lines, golden)' % len(want14.split('\n')))
+    if not same14:
+        a, b = blank(out14).split('\n'), want14.split('\n')
+        for i in range(max(len(a), len(b))):
+            x, y = a[i] if i < len(a) else '<none>', b[i] if i < len(b) else '<none>'
+            if x != y:
+                print('      line %d: got  %s\n               want %s' % (i + 1, x, y))
+                break
+    # ---- 12 (rung 9). An admission compiled in the background while the program runs
+    code15, out15, err15 = run([RNXC, 'resident', 'bg_host.ring'], RES)
+    want15 = open(os.path.join(RES, 'expect_bg.txt'), encoding='utf-8').read().replace('\r', '')
+    same15 = blank(out15) == want15
+    say(code15 == 0 and same15 and not err15.strip(), 'background: the transcript is bench/resident/expect_bg.txt (%d lines, golden)' % len(want15.split('\n')))
+    if not same15:
+        a, b = blank(out15).split('\n'), want15.split('\n')
+        for i in range(max(len(a), len(b))):
+            x, y = a[i] if i < len(a) else '<none>', b[i] if i < len(b) else '<none>'
+            if x != y:
+                print('      line %d: got  %s\n               want %s' % (i + 1, x, y))
+                break
+    code16, out16, err16 = run([RNXC, 'resident', 'bg_never.ring', 'bg_after.ring'], RES)
+    want16 = open(os.path.join(RES, 'expect_bg_drv.txt'), encoding='utf-8').read().replace('\r', '')
+    say(code16 == 0 and blank(out16) == want16 and not err16.strip(),
+        'background: the driver discards one started and never finished, bench/resident/expect_bg_drv.txt (%d lines, golden)' % len(want16.split('\n')))
+    code17, out17, err17 = run([RNXC, 'resident', 'bg_overlap.ring'], RES)
+    mr = re.search(r'rounds while it compiled: (\d+)', out17)
+    mb = re.search(r'wrong answers: (\d+)', out17)
+    rounds = int(mr.group(1)) if mr else -1
+    say(code17 == 0 and not err17.strip() and 'Big3000() 3000' in out17 and rounds > 0 and mb and mb.group(1) == '0',
+        'background: the program ran %d rounds of methods, eval and strings while 3,000 functions compiled, every answer right' % rounds)
     # ---- 7 (rung 5). The live compiler against its two proofs: each run above again under RNXC_RESIDENT_CHECK=1 (a refusal
     # leaves the saved program as it was; an admission leaves the VM the tables a whole build gives) and under
     # RNXC_RESIDENT_BLOB=1 (saved and restored after every admission, the path before rung 5) -- the same transcript all three ways.
@@ -394,7 +443,7 @@ def main():
             (['rp_drv_lib.ring', 'rp_drv_v2.ring', '--replace', 'rp_drv_v2.ring', '--replace', 'rp_drv_none.ring'], RES),
             (['cl_host.ring'], RES), (['ac_host.ring'], RES), (['am_host.ring'], RES),
             (['rl_host.ring'], RES), (['rl_lib.ring', '--release', 'rl_lib.ring', 'rl_lib.ring'], RES), (['gl_host.ring'], RES),
-            (['ln_host.ring'], RES)]
+            (['ln_host.ring'], RES), (['ns_host.ring'], RES), (['bg_host.ring'], RES), (['bg_never.ring', 'bg_after.ring'], RES)]
     lib = os.path.join(RINGSERV, 'src', 'ringlib')
     if os.path.exists(os.path.join(lib, LIB[0])):
         # as written: nine refusals after the program has called natives -- what a refusal's undo must restore

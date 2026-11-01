@@ -1,0 +1,40 @@
+admitted ns_host.ring: 7 function(s), 54 statement(s), # ms -- program: 8 function(s), # instruction(s), 9 global(s)
+host: start
+admit shop: 1
+admit bank: 1
+base Echo: base:x
+shop Hello: shop:hi
+bank Hello: bank:hi
+totals: base 1, shop 10, bank 20
+shop falls back to the base: QUIET, reads 42
+isfunction: in shop 1, in the base 0
+by its public name: shop:hi
+bank exports nothing: Error (R3) : Calling Function without definition: bank.hello
+admit ledger: 1
+admit report: 1
+report makes a ledger entry: 7
+report sums through ledger: 5
+the entry's class: ledger::entry
+an unexported function: Error (R3) : Calling Function without definition: ledger.hidden
+another app's own name, by string: Error (R3) : Calling Function without definition: ledger::hidden
+admit early: 1
+before nexus: Error (R3) : Calling Function without definition: nexus.ping
+admit nexus: 1
+after nexus: pong
+admit late: 1
+before any Later: Error (R3) : Calling Function without definition: later
+admit the base's Later: 1
+late falls back to the base: 300
+admit late's own Later: 1
+late finds its own first: 4
+admit zoo: 1
+zoo's Dog: zoo animal (zoo::dog)
+the base's Animal: base animal
+replace shop: 1
+shop Hello now: SHOP:hi, bank Hello: bank:hi
+an export naming nothing: Error : not admitted: bad: it exports Y, and bad defines no function or class of that name
+a name that is no identifier: Error : not admitted: 9bad: an app's name is an identifier (letters, digits, _)
+shop defines Echo again: Error : not admitted: shop: function shop::Echo is already defined (Ring: C22); replacefile and replacecode replace a running function
+an app's admission: Error : not released: late: the program's last admission cannot be released: it admitted an app, whose names other apps may reach by its exports
+host: done
+resident: 12 admitted, 2 refused, 0 top level(s) stopped on an error; 37 function(s), # instruction(s), 11 global(s)

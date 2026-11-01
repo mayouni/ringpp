@@ -1,0 +1,39 @@
+admitted bg_host.ring: 5 function(s), 60 statement(s), # ms -- program: 6 function(s), # instruction(s), 5 global(s)
+host: start
+state before any: []
+start lib: 1
+the program works meanwhile: 6000
+state while started: 1
+  lib: its top level runs at admitfinish()
+finish lib: 1
+Twice(21): 42
+state after: []
+the verb: Error : not admitted: bad: 1 statement(s) do not compile -- bad:5 in Bad: bare name is not a local (Rule A) `nBadGlobal`
+start bad: 1
+admitfinish: Error : not admitted: bad: 1 statement(s) do not compile -- bad:5 in Bad: bare name is not a local (Rule A) `nBadGlobal`
+after the refusal: BadOne defined 0, Twice(5) 10
+start slow: 1
+admitcode meanwhile: Error : not admitted: other: slow is compiling in the background -- admitfinish() first
+admitstart meanwhile: Error : not started: other: slow is compiling in the background -- admitfinish() first
+releasecode meanwhile: Error : not released: lib: slow is compiling in the background -- admitfinish() first
+admitapp meanwhile: Error : not admitted: other: slow is compiling in the background -- admitfinish() first
+finish slow: 1, Slow300() 300
+finish again: Error : admitfinish(): no admission was started (admitstart)
+a release: Error : admitstart(): its first argument names the verb -- admitfile, admitcode, replacefile, replacecode, admitapp or replaceapp
+too few: Error : admitstart(): admitcode takes 2 argument(s) after its name, given 1
+too many: Error : admitstart(): admitfile takes 1 argument(s) after its name, given 2
+  file v1: its top level runs
+admitfile: 1, FileSays() v1
+  file v2: its top level runs
+replacefile: 1, FileSays() v2
+replacecode: 1, Twice(21) 420
+admitapp: 1, shop.Price() 7, shop::Secret() kept
+replaceapp: 1, shop.Price() 70
+a first class: 1, MakeSq().Area() 9
+raised at admitfinish: from its top level
+Kept(): kept
+after waiting: compiled
+finish waited: 1, Waited1() 1
+state at the end: []
+host: done
+resident: 11 admitted, 2 refused, 1 top level(s) stopped on an error; 621 function(s), # instruction(s), 5 global(s)

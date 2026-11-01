@@ -62,7 +62,12 @@ const project = struct {
 /// What the whole run knows, as opposed to this one file. A project may load
 /// typehints.ring once in an entry file and `load` the rest from there, so
 /// "this file does not load it" is not on its own a verdict.
+/// What a closed check's absence finding says, in place of Ring's run-time claim.
+const closed_detail = "Checked CLOSED (`rnxc check --closed`): eval, loadlib and admissions do not keep this rule silent, and a native counts only when --natives names it. So this is a claim about what the unit DEFINES, not a proof of a run-time error on Ring, where a native or an eval could still supply the name.";
+
 pub const Ctx = struct {
+    /// The universe was built CLOSED (`rnxc check --closed`): the absence rules speak of what the unit defines.
+    closed: bool = false,
     typehints_loaded_in_scan: bool = false,
 
     /// May a bare call with no visible definition be reported as R3?
@@ -1051,13 +1056,24 @@ const Walker = struct {
     /// a call inside a brace block is skipped, because `o { hello() }`
     /// resolves hello against o's class at RUNTIME (verified) and o's type
     /// is exactly what a static pass does not know.
+    /// An absence finding in the words of the check that made it. Ring's words claim a run-time error, which holds only when
+    /// nothing the pass cannot see (eval, loadlib, an admission) could supply the name; a CLOSED check (`rnxc check
+    /// --closed`, the rung-5 gate's question) counts none of those, so it says what it proved instead: the unit does not
+    /// define the name.
+    fn addAbsence(self: *Walker, n: ts.Node, sev: anytype, rule: []const u8, comptime closed_fmt: []const u8, comptime ring_fmt: []const u8, args: anytype, ring_detail: []const u8) !void {
+        if (self.ctx.closed)
+            try self.report.add(self.gpa, self.file, n, sev, rule, closed_fmt, args, closed_detail)
+        else
+            try self.report.add(self.gpa, self.file, n, sev, rule, ring_fmt, args, ring_detail);
+    }
+
     fn reportUndefined(self: *Walker, n: ts.Node, callee: []const u8, key: []const u8) !void {
         if (!self.ctx.assert_undefined) return;
         const all = self.ctx.all_defined orelse return;
         if (all.contains(key)) return;
         if (builtins.isBuiltin(key)) return;
         if (insideBrace(n)) return;
-        try self.report.add(self.gpa, self.file, n, .err, "rpp/undefined-function", "{s}() is not defined anywhere this file can reach — Error (R3) the moment this line runs", .{callee}, "Ring resolves a bare call to a FUNCTION and nothing else: not a class name (that needs `new`), not a variable holding an anonymous function (that needs `call f()`), not a method from outside its class, and not a `func` that slid behind a class definition (F-21 made it a method). This name is defined in NONE of those forms anywhere in the checked set, every load resolved, nothing calls loadlib or eval — absence is proof. With identifiers being case-insensitive (F-18), the usual cause is one typo. See FINDINGS F-46.");
+        try self.addAbsence(n, .err, "rpp/undefined-function", "{s}() is not defined anywhere this file can reach -- checked closed: a name only eval, loadlib or an admission could make counts as absent", "{s}() is not defined anywhere this file can reach — Error (R3) the moment this line runs", .{callee}, "Ring resolves a bare call to a FUNCTION and nothing else: not a class name (that needs `new`), not a variable holding an anonymous function (that needs `call f()`), not a method from outside its class, and not a `func` that slid behind a class definition (F-21 made it a method). This name is defined in NONE of those forms anywhere in the checked set, every load resolved, nothing calls loadlib or eval — absence is proof. With identifiers being case-insensitive (F-18), the usual cause is one typo. See FINDINGS F-46.");
     }
 
     /// FINDINGS F-47 -- a read of a name that nothing could have assigned
@@ -1428,7 +1444,7 @@ const Walker = struct {
         // value (F-47). Only a CALL of a builtin is exempt, and a callee never reaches this function.
         if (reported.contains(lk)) return;
         try reported.put(lk, {});
-        try self.report.add(self.gpa, self.file, n, .warn, "rpp/uninitialized-variable", "{s} is read here, and nothing anywhere assigns it -- Error (R24) the moment this line runs", .{n.text()}, "A Ring local is born by assignment, and this function never assigns this name; no file main scope assigns it as a global either, no parameter carries it, and it is not one of the fifteen variables ring.exe predefines. Verified on 1.27: the read raises R24, and it ships silently in any branch tests skip. With case-insensitive identifiers (F-18) the usual cause is one typo. See FINDINGS F-47.");
+        try self.addAbsence(n, .warn, "rpp/uninitialized-variable", "{s} is read here, and nothing anywhere assigns it -- checked closed", "{s} is read here, and nothing anywhere assigns it -- Error (R24) the moment this line runs", .{n.text()}, "A Ring local is born by assignment, and this function never assigns this name; no file main scope assigns it as a global either, no parameter carries it, and it is not one of the fifteen variables ring.exe predefines. Verified on 1.27: the read raises R24, and it ships silently in any branch tests skip. With case-insensitive identifiers (F-18) the usual cause is one typo. See FINDINGS F-47.");
     }
 
     /// FINDINGS F-48. `new X`: only a CLASS named X will do -- a function
@@ -1455,7 +1471,7 @@ const Walker = struct {
         const lk = lower(self.arena, id.text()) catch return;
         if (classes.contains(lk)) return;
         if (insideBrace(n)) return; // object scope can shadow anything
-        try self.report.add(self.gpa, self.file, id, .err, "rpp/unknown-class", "new {s} -- no class of that name exists anywhere this program can load: Error (R11) the moment this line runs", .{id.text()}, "new accepts exactly one thing: a class. A FUNCTION of this name would still raise R11, and a VARIABLE holding a class name is looked up as its own name -- both verified on Ring 1.27. Every load resolved and nothing here calls eval or loadlib, so a class this name could reach does not exist. With case-insensitive identifiers (F-18) the usual cause is one typo. See FINDINGS F-48.");
+        try self.addAbsence(id, .err, "rpp/unknown-class", "new {s} -- no class of that name exists anywhere this program can load -- checked closed", "new {s} -- no class of that name exists anywhere this program can load: Error (R11) the moment this line runs", .{id.text()}, "new accepts exactly one thing: a class. A FUNCTION of this name would still raise R11, and a VARIABLE holding a class name is looked up as its own name -- both verified on Ring 1.27. Every load resolved and nothing here calls eval or loadlib, so a class this name could reach does not exist. With case-insensitive identifiers (F-18) the usual cause is one typo. See FINDINGS F-48.");
     }
 
     /// FINDINGS F-48. `class A from B` with B undefined loads and runs --
@@ -1476,7 +1492,7 @@ const Walker = struct {
             if (!std.mem.eql(u8, id.kind(), "identifier")) return;
             const lk = lower(self.arena, id.text()) catch return;
             if (classes.contains(lk)) return;
-            try self.report.add(self.gpa, self.file, id, .err, "rpp/unknown-class", "from {s} -- no class of that name exists anywhere this program can load: Error (R15) when this class is first instantiated", .{id.text()}, "A missing PARENT is quieter than a missing class: the file loads and runs normally (verified on 1.27), and R15 fires only at the first new of this class -- which may sit in the one branch tests never take. Every load resolved and nothing here calls eval or loadlib, so a class this name could reach does not exist. See FINDINGS F-48.");
+            try self.addAbsence(id, .err, "rpp/unknown-class", "from {s} -- no class of that name exists anywhere this program can load -- checked closed", "from {s} -- no class of that name exists anywhere this program can load: Error (R15) when this class is first instantiated", .{id.text()}, "A missing PARENT is quieter than a missing class: the file loads and runs normally (verified on 1.27), and R15 fires only at the first new of this class -- which may sit in the one branch tests never take. Every load resolved and nothing here calls eval or loadlib, so a class this name could reach does not exist. See FINDINGS F-48.");
             return;
         }
     }
@@ -1493,7 +1509,7 @@ const Walker = struct {
             if (!std.mem.eql(u8, q.kind(), "qualified_identifier")) continue;
             const name = project.dottedLower(self.arena, q) catch return orelse return;
             if (packages.contains(name)) return;
-            try self.report.add(self.gpa, self.file, q, .err, "rpp/unknown-package", "import {s} -- no package of that name exists anywhere this program can load: Error (R25) the moment this line runs", .{q.text()}, "Ring resolves the package name at RUNTIME, so a bad import ships silently in any branch tests skip -- verified on 1.27, inside functions too. The import matches the FULL dotted name. Every load resolved and nothing here calls eval or loadlib, so a package this name could reach does not exist. With case-insensitive identifiers (F-18) the usual cause is one typo. See FINDINGS F-48.");
+            try self.addAbsence(q, .err, "rpp/unknown-package", "import {s} -- no package of that name exists anywhere this program can load -- checked closed", "import {s} -- no package of that name exists anywhere this program can load: Error (R25) the moment this line runs", .{q.text()}, "Ring resolves the package name at RUNTIME, so a bad import ships silently in any branch tests skip -- verified on 1.27, inside functions too. The import matches the FULL dotted name. Every load resolved and nothing here calls eval or loadlib, so a package this name could reach does not exist. With case-insensitive identifiers (F-18) the usual cause is one typo. See FINDINGS F-48.");
             return;
         }
     }

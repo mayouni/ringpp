@@ -223,6 +223,17 @@ const builtin_table = [_]BuiltinEntry{
     // ...and releases its last admission (rung 6)
     .{ .name = "releasefile", .id = .releasefile, .argc = 1 },
     .{ .name = "releasecode", .id = .releasecode, .argc = 1 },
+    // ...and admits an APP into a namespace of its own, or replaces within one (D31)
+    .{ .name = "admitapp", .id = .admitapp, .argc = 3 },
+    .{ .name = "replaceapp", .id = .replaceapp, .argc = 2 },
+    // ...and compiles one in the background while it runs (rung 9): admitstart
+    // takes a verb and that verb's own arguments
+    .{ .name = "admitstart", .id = .admitstart2, .argc = 2 },
+    .{ .name = "admitstart", .id = .admitstart3, .argc = 3 },
+    .{ .name = "admitstart", .id = .admitstart4, .argc = 4 },
+    .{ .name = "admitstate", .id = .admitstate0, .argc = 0 },
+    .{ .name = "admitstate", .id = .admitstate1, .argc = 1 },
+    .{ .name = "admitfinish", .id = .admitfinish, .argc = 0 },
 };
 
 /// Is this callee one of the builtins codegen compiles to a `bcall`?
@@ -520,14 +531,17 @@ fn lessPiece(_: void, a: Piece, b: Piece) bool {
     return a.off < b.off;
 }
 
+/// THE COMPILER'S MODULE STATE IS PER THREAD (rung 9): an admission may compile on a thread of its own while the program runs,
+/// and the program's own thread compiles too (eval). Every `var` of this file a compile writes is `threadlocal` for that reason;
+/// `exe_dir` and `capFn` are set once, before any thread starts.
 /// The file behind each parsed root, in the same order, so a `load` can be
 /// resolved back to the root it names. Set by the driver after it walks the
 /// load graph; empty means "cannot resolve", and the splice below then
 /// leaves the order alone rather than guessing at it.
-pub var load_paths: []const []const u8 = &.{};
+pub threadlocal var load_paths: []const []const u8 = &.{};
 /// The source buffer of each loaded file, parallel to load_paths, so a
 /// statement's node (which points into one of them) names its file.
-pub var load_srcs: []const [*]const u8 = &.{};
+pub threadlocal var load_srcs: []const [*]const u8 = &.{};
 
 /// How many string comparisons each by-name lookup performed, and how
 /// large its table was at the end. Printed by `rnxc census` as `scans:`
@@ -537,22 +551,22 @@ pub var load_srcs: []const [*]const u8 = &.{};
 /// For the three that are hashed now (nameIndex, funcIndex, findFunc) the
 /// count is LOOKUPS; for the rest it is still comparisons. A hashed one
 /// climbing back into the billions is the scan returning.
-pub var scans = [_]u64{0} ** 10; // knownGlobal globalSlot nameIndex findClass funcIndex findFunc attrSlotOf konstIndex methodOf lookup
-pub var sizes = [_]usize{0} ** 8; // globals names funcs konst code locals cap_locals stmts
+pub threadlocal var scans = [_]u64{0} ** 10; // knownGlobal globalSlot nameIndex findClass funcIndex findFunc attrSlotOf konstIndex methodOf lookup
+pub threadlocal var sizes = [_]usize{0} ** 8; // globals names funcs konst code locals cap_locals stmts
 /// Nanoseconds per phase of `census`: collect, splice, pass A, the
 /// classify rounds, pass B -- and the number of rounds in [5].
-pub var census_ns = [_]u64{0} ** 6;
+pub threadlocal var census_ns = [_]u64{0} ** 6;
 /// Arena capacity at each census phase boundary, so "where does the memory
 /// go" is answered by measurement rather than by reasoning about struct
 /// sizes. Set by whoever owns the arena; unset leaves the row silent.
 pub var capFn: ?*const fn () usize = null;
-pub var census_mem = [_]usize{0} ** 6;
+pub threadlocal var census_mem = [_]usize{0} ** 6;
 fn capAt(i: usize) void {
     if (capFn) |f| census_mem[i] = f();
 }
 /// Nanoseconds inside collectAll, summed over files: gather, sort,
 /// pass 1, the class loop, pass 2.
-pub var collect_ns = [_]u64{0} ** 5;
+pub threadlocal var collect_ns = [_]u64{0} ** 5;
 
 /// Lower-case, forward slashes -- the same key the driver dedups on, so a
 /// resolved load target and a root's own path compare equal.
@@ -1758,7 +1772,7 @@ fn ifMergesNext(n: ts.Node) bool {
 /// dis` prints none), while the record puts lines into the code itself and
 /// exists only when an `ok` stands on its own line. Read once. An image is
 /// not keyed on it: judges run with RNXC_NOCACHE.
-var g_lines_static: ?bool = null;
+threadlocal var g_lines_static: ?bool = null;
 fn linesStatic() bool {
     if (g_lines_static) |b| return b;
     const b = std.process.hasEnvVarConstant("RNXC_LINES_STATIC");
@@ -1862,6 +1876,14 @@ pub const Compiler = struct {
     /// census took. Safe because `owner` is set only in the struct
     /// literal and `findFunc` is never called during the pre-pass.
     fn_index: std.StringHashMapUnmanaged(u32) = .{},
+    /// D31: the APP this admission is admitted into (`admitapp`, `replaceapp`), or null for the base. Its functions,
+    /// classes and globals are named `app::Name`; its code finds a name as `app::Name` first, then as the base's
+    /// `Name`; another app is reached late by the public name `app.Name`, which only an export answers. Per admission.
+    app: ?[]const u8 = null,
+    /// the names the admission exports (admitapp's third argument), checked in compileAdmit
+    app_exports: []const []const u8 = &.{},
+    /// what compileAdmit found the exports to be: the public name's index and the internal name; read by the driver
+    new_exports: std.ArrayListUnmanaged(AppExport) = .{},
     fn_indexed: usize = 0,
     /// Case-folded name -> its slot in `names`. The same scan, 2.7 billion.
     name_index: std.StringHashMapUnmanaged(u16) = .{},
@@ -2049,6 +2071,12 @@ pub const Compiler = struct {
     /// Rung 3: this admission may REDEFINE functions the program holds
     /// (`replacefile`, `replacecode`, `rnxc resident --replace`).
     replacing: bool = false,
+    /// Rung 9: whether the VM already holds class tables -- read by the installer before the compile starts, since the compile
+    /// may run on a thread of its own and must not read the VM's tables (the program's thread changes them as it runs).
+    vm_has_classes: bool = false,
+    /// Rung 9: what compileFinish built for the VM's own globals, for an admission -- published by the installer, on the
+    /// program's thread (publishVm).
+    vm_out: VmOut = .{},
     /// Rung 5: where compileFinish builds the VM's tables and the Program,
     /// which the resident installer copies out -- the admission's own arena,
     /// not the live program's, which would keep ~10 MB of them per admission.
@@ -4713,7 +4741,16 @@ pub const Compiler = struct {
         // callee's line. `nchk` there; the call itself at the END, where an
         // error raised INSIDE a native is reported (`left(5,` NL `2)` is
         // the closing line on Ring).
-        const ni2 = try self.nameIndex(callee);
+        // D31: an app's late name is its own `app::name`, falling back to the base's `name` (VM.name_up) -- interned
+        // first, so the fall-back's index is the smaller (the installer and the resident check derive name_up alike)
+        const ni2 = blk: {
+            var qb: [300]u8 = undefined;
+            if (self.appName(&qb, callee)) |q| {
+                _ = try self.nameIndex(callee);
+                break :blk try self.nameIndex(try self.alloc.dupe(u8, q));
+            }
+            break :blk try self.nameIndex(callee);
+        };
         try self.natives.append(self.alloc, ni2);
         self.stmts_native += 1;
         self.atNodeStart(n);
@@ -4815,6 +4852,15 @@ pub const Compiler = struct {
     }
 
     fn knownGlobal(self: *Compiler, name: []const u8) ?i32 {
+        // D31: an app's code reads its own `app::name` first, then the base's
+        var qb: [300]u8 = undefined;
+        if (self.appName(&qb, name)) |q| {
+            if (self.knownGlobalPlain(q)) |i| return i;
+        }
+        return self.knownGlobalPlain(name);
+    }
+
+    fn knownGlobalPlain(self: *Compiler, name: []const u8) ?i32 {
         for (self.globals.items, 0..) |g, i| {
             scans[0] += 1;
             if (std.ascii.eqlIgnoreCase(g, name)) return @intCast(i);
@@ -4825,6 +4871,16 @@ pub const Compiler = struct {
     /// The slot for a top-level name, created on first sight.
     /// Case-insensitive, because Ring folds identifier case (§2.5).
     fn globalSlot(self: *Compiler, name: []const u8) !i32 {
+        // D31: a name an app's code assigns at its top level (or a `$name` anywhere in it) is the app's own global --
+        // an app does not write the base's state by a bare name; it reads the base's (knownGlobal) when it has none
+        if (self.app != null and self.eval == null) {
+            var qb: [300]u8 = undefined;
+            if (self.appName(&qb, name)) |q| {
+                if (self.knownGlobalPlain(q)) |i| return i;
+                try self.globals.append(self.alloc, try self.alloc.dupe(u8, q));
+                return @intCast(self.globals.items.len - 1);
+            }
+        }
         sizes[0] = self.globals.items.len;
         for (self.globals.items, 0..) |g, i| {
             scans[1] += 1;
@@ -4920,6 +4976,14 @@ pub const Compiler = struct {
     }
 
     fn findClass(self: *Compiler, name: []const u8) ?*ClassInfo {
+        var qb: [300]u8 = undefined;
+        if (self.appName(&qb, name)) |q| {
+            if (self.findClassPlain(q)) |ci| return ci;
+        }
+        return self.findClassPlain(name);
+    }
+
+    fn findClassPlain(self: *Compiler, name: []const u8) ?*ClassInfo {
         for (self.classes.items) |*c| {
             scans[3] += 1;
             if (std.ascii.eqlIgnoreCase(c.name, name)) return c;
@@ -5507,7 +5571,16 @@ pub const Compiler = struct {
     fn newLate(self: *Compiler, n: ts.Node, cn: ts.Node, dst: u8, early: ?NewEarly) Error!void {
         const save = self.temp;
         defer self.temp = save;
-        const ni = try self.nameIndex(cn.text());
+        // D31: in an app, the app's own `app::K` first, then the base's `K` (VM.name_up); `new ledger.Entry`, another
+        // app's class, is its public name, which only an export answers
+        const ni = blk: {
+            var qb: [300]u8 = undefined;
+            if (self.appName(&qb, cn.text())) |q| {
+                _ = try self.nameIndex(cn.text());
+                break :blk try self.nameIndex(try self.alloc.dupe(u8, q));
+            }
+            break :blk try self.nameIndex(cn.text());
+        };
         const objr = try self.tmp();
         self.atNode(cn);
         _ = try self.emit(.newn, objr, 0, 0, ni);
@@ -5721,7 +5794,45 @@ pub const Compiler = struct {
 
     /// `recv.Method(args)` -- the receiver occupies the call window, so the
     /// callee sees it as r0 and its parameters as r1..
+    /// D31: `ledger.Sum(...)` in a resident program, where `ledger` is no name the code can see -- no local, global,
+    /// attribute, This or brace object -- is a call to another app's function by its PUBLIC name. It is compiled late:
+    /// the VM reaches it once `ledger` exports `Sum` (VM.name_fn under `ledger.Sum`), and raises R3 with the name until
+    /// then, as a late name does (rung 8). Under Rule A such a receiver was refused, so nothing that compiled before
+    /// changes meaning.
+    fn appRef(self: *Compiler, recv: ts.Node) bool {
+        if (!self.resident or self.eval != null) return false;
+        if (!std.mem.eql(u8, recv.kind(), "identifier")) return false;
+        const t = recv.text();
+        if (t.len == 0 or t[0] == '$' or t[0] == '@') return false;
+        if (std.ascii.eqlIgnoreCase(t, "this") or std.ascii.eqlIgnoreCase(t, "self") or std.ascii.eqlIgnoreCase(t, "super")) return false;
+        if (self.braces.items.len > 0) return false;
+        if (self.lookup(t) != null or self.knownGlobal(t) != null) return false;
+        if (self.cur.owner != null and self.declaredAttr(t) != null) return false;
+        return true;
+    }
+
+    fn appCall(self: *Compiler, mexp: ts.Node, args: ts.Node, argc: u32, dst: u8) Error!void {
+        if (argc > 16) return self.nope(mexp);
+        const q = try std.fmt.allocPrint(self.alloc, "{s}.{s}", .{ mexp.namedChild(0).text(), mexp.namedChild(1).text() });
+        const ni = try self.nameIndex(q);
+        try self.natives.append(self.alloc, ni);
+        self.stmts_native += 1;
+        self.atNodeStart(mexp);
+        _ = try self.emit(.nchk, 0, 0, 0, ni);
+        const save = self.temp;
+        defer self.temp = save;
+        const abase = self.temp;
+        var na: u32 = 0;
+        while (na < argc) : (na += 1) {
+            const r = try self.tmp();
+            try self.expr(args.namedChild(na), r);
+        }
+        self.atNode(mexp);
+        _ = try self.emit(.ncall, dst, abase, @intCast(argc), ni);
+    }
+
     fn memberCall(self: *Compiler, mexp: ts.Node, args: ts.Node, argc: u32, dst: u8) Error!void {
+        if (self.appRef(mexp.namedChild(0))) return self.appCall(mexp, args, argc, dst);
         const mname = mexp.namedChild(1).text();
         const save = self.temp;
         defer self.temp = save;
@@ -5896,7 +6007,23 @@ pub const Compiler = struct {
     /// method's params include `this`, the arity check PASSED and the call
     /// compiled with `x` handed over as the receiver. A silent miscompile,
     /// masked only by builtins being consulted first.
+    /// D31: in an app's admission, `name` is first the app's own `app::name`. Null outside an app, for a name already
+    /// qualified, or one too long for the buffer.
+    fn appName(self: *Compiler, buf: []u8, name: []const u8) ?[]const u8 {
+        const ap = self.app orelse return null;
+        if (std.mem.indexOf(u8, name, "::") != null or std.mem.indexOfScalar(u8, name, '.') != null) return null;
+        return std.fmt.bufPrint(buf, "{s}::{s}", .{ ap, name }) catch null;
+    }
+
     fn findFunc(self: *Compiler, name: []const u8) ?*Func {
+        var qb: [300]u8 = undefined;
+        if (self.appName(&qb, name)) |q| {
+            if (self.findFuncPlain(q)) |f| return f;
+        }
+        return self.findFuncPlain(name);
+    }
+
+    fn findFuncPlain(self: *Compiler, name: []const u8) ?*Func {
         scans[5] += 1;
         sizes[2] = self.funcs.items.len;
         self.catchUpFuncs() catch return self.findFuncSlow(name);
@@ -8193,7 +8320,7 @@ fn isFuncDef(n: ts.Node) bool {
     return std.mem.eql(u8, n.kind(), "function_definition");
 }
 
-var last_fail: struct {
+threadlocal var last_fail: struct {
     kind: []const u8 = "",
     row: u32 = 0,
     text: []const u8 = "",
@@ -8641,12 +8768,12 @@ pub fn rollbackProgram(c: *Compiler, m: *const Marks) void {
 
 /// Why the last admission was refused (compileAdmit), for rnxc to print.
 /// When it is refused statements, `c.refusals` lists them.
-pub var admit_why: []const u8 = "";
+pub threadlocal var admit_why: []const u8 = "";
 /// The last admission's compile, in four (RNXC_ADMIT_PHASES): collecting the
 /// file's definitions, resolving every class's slots, the front (classify
 /// and emit), and the finish (patching, the VM's tables).
-pub var admit_ns: [4]u64 = .{0} ** 4;
-var admit_buf: [512]u8 = undefined;
+pub threadlocal var admit_ns: [4]u64 = .{0} ** 4;
+threadlocal var admit_buf: [512]u8 = undefined;
 
 /// THE RESIDENT VM'S ADMISSION (`rnxc resident`). One file -- and whatever
 /// it loads that the program does not already hold -- compiled ON TOP of
@@ -8690,6 +8817,17 @@ var admit_buf: [512]u8 = undefined;
 ///
 /// On Error.Refused the caller discards `c` with its arena: the running
 /// program never saw this file.
+/// D31: an export of an app -- `pub_idx` the name index of `app.Name`, `internal` the `app::Name` it answers with.
+pub const AppExport = struct { pub_idx: u32, internal: []const u8, is_class: bool };
+
+/// D31: what an export answers with now -- the function that runs under its internal name (a replacement followed), or
+/// the class.
+pub fn exportTarget(c: *Compiler, internal: []const u8, is_class: bool) ?u32 {
+    if (is_class) return if (c.findClassPlain(internal)) |ci| @as(u32, ci.id) else null;
+    const f = c.findFuncPlain(internal) orelse return null;
+    return c.funcs.items[c.live(c.funcIndex(f))].id;
+}
+
 pub fn compileAdmit(c: *Compiler, roots: []const ts.Node, start: u32, alloc: std.mem.Allocator) Error!Program {
     last_fail = .{};
     admit_why = "";
@@ -8856,6 +8994,21 @@ pub fn compileAdmit(c: *Compiler, roots: []const ts.Node, start: u32, alloc: std
             return Error.Refused;
         }
     }
+    // 5. D31: what an app exports is a function or a class it defines, each reachable from another app as `app.Name`
+    if (c.app) |ap| {
+        for (c.app_exports) |e| {
+            var qb: [300]u8 = undefined;
+            const internal = std.fmt.bufPrint(&qb, "{s}::{s}", .{ ap, e }) catch "";
+            const is_fn = c.findFuncPlain(internal) != null;
+            const is_cls = !is_fn and c.findClassPlain(internal) != null;
+            if (e.len == 0 or (!is_fn and !is_cls)) {
+                admit_why = std.fmt.bufPrint(&admit_buf, "it exports {s}, and {s} defines no function or class of that name", .{ e, ap }) catch "an export names nothing the app defines";
+                return Error.Refused;
+            }
+            const pub_name = try std.fmt.allocPrint(alloc, "{s}.{s}", .{ ap, e });
+            try c.new_exports.append(alloc, .{ .pub_idx = try c.nameIndex(pub_name), .internal = try alloc.dupe(u8, internal), .is_class = is_cls });
+        }
+    }
     // admitted: from here every call to a replaced function -- the sites
     // already running included (compileFinish) -- goes to the new body
     for (pairs.items) |p| c.funcs.items[c.live(p[0])].replaced_by = p[1];
@@ -8884,7 +9037,7 @@ pub fn compileAdmit(c: *Compiler, roots: []const ts.Node, start: u32, alloc: std
 /// to ask. A wrong answer is not worth the milliseconds saved.
 /// The name that made the last prefix inapplicable, so the fallback can
 /// say WHICH one rather than only that there was one.
-pub var prefix_blocked_by: []const u8 = "";
+pub threadlocal var prefix_blocked_by: []const u8 = "";
 
 fn prefixApplies(c: *Compiler, roots: []const ts.Node, start: u32, alloc: std.mem.Allocator) Error!void {
     prefix_blocked_by = "";
@@ -9141,6 +9294,44 @@ fn patchCall(c: *Compiler, site: u32, fi: u32) void {
 /// The object model's tables, built whole for every class -- a program's
 /// compile, a resident program's first classes, and RNXC_RESIDENT_CHECK's
 /// proof that the grown tables are these. `nnm` is the dispatch rows' width.
+/// WHAT AN ADMISSION'S COMPILE BUILT FOR THE VM'S GLOBALS (rung 9). A whole program's compile writes vm.dispatch, vm.fn_masks
+/// and the rest directly; an admission's keeps them here, and rnxc's installer publishes them on the program's own thread
+/// (publishVm). An admission may compile on a thread of its own while the program runs, and the running VM reads those tables
+/// -- the eval compiler among them -- so a compile that wrote them would change them under it.
+pub const VmOut = struct {
+    /// vm.fn_masks for c.funcs[masks_from..]
+    masks_from: usize = 0,
+    /// the class tables, when this admission built them whole (the VM held none)
+    tables: ?ClassTables = null,
+    n_names: u32 = 0,
+    /// fn_owner and the accessor tables, when built whole (the VM held no class tables)
+    fn_owner: ?[]u16 = null,
+    acc: ?[2][]u32 = null,
+};
+
+/// Hand the VM what an admission's compile built for its globals (VmOut): what compileFinish writes directly for a whole program.
+pub fn publishVm(c: *Compiler) void {
+    for (c.funcs.items[c.vm_out.masks_from..]) |f| {
+        if (f.id < vm.fn_masks.len) vm.fn_masks[f.id] = f.mask;
+    }
+    if (c.vm_out.tables) |ct| {
+        vm.n_names = c.vm_out.n_names;
+        vm.dispatch = ct.dispatch;
+        vm.method_tab = ct.method_tab;
+        vm.class_slots = ct.class_slots;
+        vm.attr_from = ct.attr_from;
+        vm.attr_ent = ct.attr_ent;
+        vm.class_konst = ct.class_konst;
+        vm.class_parent = ct.class_parent;
+    }
+    if (c.vm_out.fn_owner) |fo| vm.fn_owner = fo;
+    if (c.vm_out.acc) |acc| {
+        vm.acc_get = acc[0];
+        vm.acc_set = acc[1];
+    }
+    c.vm_out = .{};
+}
+
 pub const ClassTables = struct {
     dispatch: []u32,
     method_tab: []vm.MethodEnt,
@@ -9427,9 +9618,13 @@ fn compileFinish(c: *Compiler, alloc: std.mem.Allocator) Error!Program {
     // frames are swept whole on return; before, a missing mask meant
     // sweeping NOTHING, and every call in every real program leaked its
     // registers (found 2026-09-12).
-    // (resident: an earlier admission's functions set theirs when admitted)
-    for (c.funcs.items[from_fn..]) |f| {
-        if (f.id < vm.fn_masks.len) vm.fn_masks[f.id] = f.mask;
+    // (resident: an earlier admission's functions set theirs when admitted;
+    // an admission's are published by the installer, rung 9 -- VmOut)
+    c.vm_out = .{ .masks_from = from_fn };
+    if (!c.resident) {
+        for (c.funcs.items[from_fn..]) |f| {
+            if (f.id < vm.fn_masks.len) vm.fn_masks[f.id] = f.mask;
+        }
     }
 
     // ---- and the object-model tables ----------------------------------
@@ -9445,7 +9640,7 @@ fn compileFinish(c: *Compiler, alloc: std.mem.Allocator) Error!Program {
     // wide as the names), and a run-time addmethod was lost with them. Here
     // only what the installer cannot make: the new classes' attribute names
     // interned, and their names as constants.
-    const grow = c.resident and vm.dispatch.len > 0;
+    const grow = c.resident and c.vm_has_classes;
     var class_konst_new = std.ArrayListUnmanaged(u32){};
     if (grow) {
         for (c.classes.items[c.prefix_classes..]) |ci| {
@@ -9463,22 +9658,20 @@ fn compileFinish(c: *Compiler, alloc: std.mem.Allocator) Error!Program {
             // resident: rows wider than the names, so the admissions that follow
             // can add names and keep this table
             const nnm = if (c.resident) c.names.items.len + c.names.items.len / 8 + 256 else c.names.items.len;
-            vm.n_names = @intCast(nnm);
             const ct = try buildClassTables(c, talloc, nnm);
-            vm.dispatch = ct.dispatch;
-            vm.method_tab = ct.method_tab;
-            vm.class_slots = ct.class_slots;
-            vm.attr_from = ct.attr_from;
-            vm.attr_ent = ct.attr_ent;
-            vm.class_konst = ct.class_konst;
-            vm.class_parent = ct.class_parent;
+            c.vm_out.tables = ct;
+            c.vm_out.n_names = @intCast(nnm);
         }
-        vm.fn_owner = try buildFnOwner(c, talloc);
-        const acc = try buildAccessors(c, talloc);
-        vm.acc_get = acc[0];
-        vm.acc_set = acc[1];
+        c.vm_out.fn_owner = try buildFnOwner(c, talloc);
+        c.vm_out.acc = try buildAccessors(c, talloc);
     }
-    vm.konst = c.konst.items;
+    // a whole program's tables are the VM's now; an admission's wait for
+    // the installer (rung 9), which never takes the compiler's constants --
+    // the VM appends the admission's to its own
+    if (!c.resident) {
+        publishVm(c);
+        vm.konst = c.konst.items;
+    }
 
     // Resident (rung 5): the tables below for this admission's functions and
     // code only -- the VM holds the rest and appends these (rnxc.zig's
@@ -9582,7 +9775,8 @@ fn collectAll(c: *Compiler, root: ts.Node, alloc: std.mem.Allocator) Error!void 
     for (pieces.items) |p| {
         if (p.kind != .class) continue;
         var ci = ClassInfo{
-            .name = p.node.namedChild(0).text(),
+            // D31: an app's class is `app::Name`
+            .name = if (c.app) |ap| try std.fmt.allocPrint(alloc, "{s}::{s}", .{ ap, p.node.namedChild(0).text() }) else p.node.namedChild(0).text(),
             .node = p.node,
             .id = @intCast(c.classes.items.len),
         };
@@ -9689,9 +9883,7 @@ fn collectAll(c: *Compiler, root: ts.Node, alloc: std.mem.Allocator) Error!void 
     collect_ns[2] += ctm.lap();
     for (c.classes.items) |*ci| {
         if (ci.parent_name.len == 0) continue;
-        for (c.classes.items) |*p| {
-            if (std.ascii.eqlIgnoreCase(p.name, ci.parent_name)) ci.parent = p.id;
-        }
+        resolveParent(c, ci);
     }
     // (slots are resolved after collectAll's Rule A pre-pass, below)
 
@@ -10229,7 +10421,11 @@ fn declaredArity(f: *const Func) usize {
 /// Register a function or method. A method's register 0 is the receiver, so
 /// its declared parameters start at r1.
 fn startFunc(c: *Compiler, n: ts.Node, owner: ?u16, alloc: std.mem.Allocator) !void {
-    const name = n.namedChild(0).text();
+    // D31: an app's function is `app::Name`; a method keeps its name, its class carries the app
+    const name = if (owner == null and c.app != null)
+        try std.fmt.allocPrint(alloc, "{s}::{s}", .{ c.app.?, n.namedChild(0).text() })
+    else
+        n.namedChild(0).text();
     var params = std.ArrayListUnmanaged([]const u8){};
     var hints = std.ArrayListUnmanaged(Class){};
     if (owner != null) {
@@ -10463,13 +10659,25 @@ fn residentFrozen(c: *const Compiler, cid: usize) bool {
     return true;
 }
 
+/// A class's parent by the name its `from` gives, the last class of that name as before -- and, D31, for a class of an
+/// app (`zoo::Dog`), its app's own class of that name (`zoo::Animal`) before the base's. Both places that resolve a parent
+/// ask here, so an app's class cannot be given the base's parent by one and its app's by the other.
+fn resolveParent(c: *Compiler, ci: *ClassInfo) void {
+    for (c.classes.items) |*p| {
+        if (std.ascii.eqlIgnoreCase(p.name, ci.parent_name)) ci.parent = p.id;
+    }
+    const k = std.mem.indexOf(u8, ci.name, "::") orelse return;
+    for (c.classes.items) |*p| {
+        if (p.name.len == k + 2 + ci.parent_name.len and std.ascii.eqlIgnoreCase(p.name[0..k], ci.name[0..k]) and
+            std.mem.eql(u8, p.name[k .. k + 2], "::") and std.ascii.eqlIgnoreCase(p.name[k + 2 ..], ci.parent_name)) ci.parent = p.id;
+    }
+}
+
 fn resolveAllSlots(c: *Compiler, alloc: std.mem.Allocator) !void {
     for (c.classes.items) |*ci| {
         if (ci.parent_name.len == 0) continue;
         if (residentFrozen(c, ci.id)) continue;
-        for (c.classes.items) |*p| {
-            if (std.ascii.eqlIgnoreCase(p.name, ci.parent_name)) ci.parent = p.id;
-        }
+        resolveParent(c, ci);
     }
     c.resolve_pass += 1;
     for (c.classes.items) |*ci| try resolveSlots(c, ci, alloc);
@@ -11794,7 +12002,7 @@ const SHARE_PROV: usize = 140;
 const SHARE_TEMPS: usize = 40;
 
 /// RNXC_TRACE_SHARE=1: say, on stderr, what shareFunction decided and why.
-var g_share_trace: ?bool = null;
+threadlocal var g_share_trace: ?bool = null;
 fn shareNote(f: *const Func, comptime why: []const u8, args: anytype) void {
     const on = g_share_trace orelse blk: {
         const b = std.process.hasEnvVarConstant("RNXC_TRACE_SHARE");

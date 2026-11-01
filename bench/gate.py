@@ -432,6 +432,20 @@ def migrate_sites(exe=None):
     return ok
 
 
+def check_closed(exe=None):
+    """`rnxc check --closed`, `--subst` and `--natives` -- the question the rung-5 refinement gate asks of a unit (Haro D32): does it DEFINE every
+    name it uses? Asked of a library alone and of a unit holding eval and loadlib, with one file's text replaced, with a native list, with arity
+    resolved through the whole unit, and refused on a hole (bench/check_closed.py, 12 cases; the build before fails 5)."""
+    env = dict(os.environ)
+    if exe:
+        env['RNXC'] = exe
+    t0 = time.time()
+    r = subprocess.run([sys.executable, 'bench/check_closed.py'], cwd=ROOT, capture_output=True, text=True, env=env)
+    last = [l for l in r.stdout.strip().split('\n') if l.strip()]
+    record('check --closed (D32)', r.returncode == 0, (last[-1] if last else '(no output)').strip()[:110], time.time() - t0)
+    return r.returncode == 0
+
+
 def quiet():
     """A plain run prints the PROGRAM's output and nothing of rnxc's own. Ring
     prints nothing around a program; rnxc's three status lines went to stderr,
@@ -506,6 +520,7 @@ def main():
     ok &= console()
     ok &= refusal()
     ok &= migrate_sites()
+    ok &= check_closed()
     ok &= quiet()
     ok &= execprobes()
     ok &= onto()
