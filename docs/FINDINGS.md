@@ -4354,3 +4354,18 @@ classes in one file, or one method, work. Measured with a child of one, two and 
 **Not a decision**: Ring++'s `eval` cannot define a class at all (F-72, refused loudly), and the resident VM admits classes by compiling
 them (`rnxc resident`, `admitfile`), so nothing of Ring++ reproduces the shape. bench/resident/cl_square.ring keeps each class it admits
 to one method so that the oracle can answer for it.
+
+## F-149. A program's own function may be named with a leading `@@`, and Ring treats it like any other
+
+Found by the Softanza lab on HaroServer (2026-11-01): a check's failure report, which calls Softanza's display function
+`@@`, raised `Error (R3) : Calling Function without definition: @@` -- from code admitted BEFORE Softanza, while code admitted after it
+called `@@` without trouble. Softanza defines `@@`, `@@NL`, `@@NL1`, `@@S`, `@@SP`, `@@SXT` and `@@XT`. Measured on the oracle and the
+official 1.27, which agree on every row (`bench/exec/atat_names.ring`): `isfunction("@@")`, `isfunction("@@nl")` and `isfunction("@@XT")`
+are 1, `functions()` lists them, `call "@@"(20)` answers 21; `@@main` is unknown to Ring.
+
+Ring++ treated every name beginning with `@@` as one of the compiler's own synthetic functions (`@@main`, `@@attrs`, `@@eval`,
+`@@lambda<n>`), in eleven places: `isfunction` answered 0 and `functions()` left them out (silent wrong answers in any program), and the
+resident VM's late link skipped them, so a call compiled before the function was admitted stayed R3. **Fixed**: one predicate,
+`vm.internalFn`, names the compiler's functions exactly, and all eleven places ask it. The exec probe and a row of the resident guard
+(`bench/resident/in_host.ring`, `@@Twice` admitted after the call that reaches it) fail on the build before; kernels B/A 1.000 over 15
+rounds, 177 of 177 programs disassemble byte for byte as before; gate PASSED, 176 probes in both modes; Linux 177 of 177.

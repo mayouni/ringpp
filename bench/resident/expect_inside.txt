@@ -1,4 +1,4 @@
-admitted in_host.ring: 1 function(s), 22 statement(s), # ms -- program: 2 function(s), # instruction(s), 1 global(s)
+admitted in_host.ring: 2 function(s), 25 statement(s), # ms -- program: 3 function(s), # instruction(s), 1 global(s)
 host: start
 lib: its top level runs
 admit lib: 1
@@ -17,9 +17,10 @@ inside eval: Error : admitfile(), admitcode(), replacefile(), replacecode(), rel
 twice: Error : not admitted: in_lib.ring: it is already admitted (Ring loads a file once)
 redefined: Error : not admitted: again: function Square is already defined (Ring: C22); replacefile and replacecode replace a running function
 Square still: 16
+a late @@ name: 42
 from a function: 42
 raises: before
 its top level raised: raised in an admitted top level
 its function stays: yes
 host: end
-resident: 7 admitted, 3 refused, 1 top level(s) stopped on an error; 11 function(s), # instruction(s), 1 global(s)
+resident: 8 admitted, 3 refused, 1 top level(s) stopped on an error; 13 function(s), # instruction(s), 1 global(s)

@@ -8853,7 +8853,7 @@ pub fn compileAdmit(c: *Compiler, roots: []const ts.Node, start: u32, alloc: std
     var pairs = std.ArrayListUnmanaged([2]u32){};
     for (c.funcs.items[c.prefix_funcs..], c.prefix_funcs..) |*f, fi| {
         if (f.owner != null or f.lambda_at != null) continue;
-        if (std.mem.startsWith(u8, f.name, "@@")) continue;
+        if (vm.internalFn(f.name)) continue;
         const g = c.findFunc(f.name) orelse continue;
         const gi = c.funcIndex(g);
         if (gi >= c.prefix_funcs) continue;
@@ -9107,7 +9107,7 @@ fn prefixApplies(c: *Compiler, roots: []const ts.Node, start: u32, alloc: std.me
         // The synthetic ones are never called by name: there is deliberately
         // one @@main per top level and the entry trampoline calls both, and
         // a lambda is reached through the closure that carries its id.
-        if (std.mem.startsWith(u8, f.name, "@@")) continue;
+        if (vm.internalFn(f.name)) continue;
         if (deferred.contains(f.name_idx)) {
             prefix_blocked_by = f.name;
             return Error.PrefixInapplicable;

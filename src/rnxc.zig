@@ -1637,7 +1637,7 @@ const Resident = struct {
 /// and a whole build agree.
 fn nameUpOf(c: *co.Compiler, names: []const []const u8, i: usize) u32 {
     const nm = names[i];
-    if (std.mem.startsWith(u8, nm, "@@")) return vm.NO_FN;
+    if (vm.internalFn(nm)) return vm.NO_FN;
     const k = std.mem.lastIndexOf(u8, nm, "::") orelse return vm.NO_FN;
     const suf = nm[k + 2 ..];
     var buf: [256]u8 = undefined;
@@ -1920,11 +1920,16 @@ fn bgDiscard(rs: *Resident) void {
     job.destroy();
 }
 
-/// `admitstate([nWaitMs])`: 0 none, 1 compiling, 2 compiled.
+/// `admitstate([nWaitMs])`: 0 none, 1 compiling, 2 compiled. A wait of -1
+/// -- the VM's own, never the program's -- waits until the compile ends:
+/// `chdir()` asks it first, since the compile reads its files, and resolves
+/// a relative path and the root's loads, against the current directory, as
+/// the verb would have where the program called admitstart.
 fn admitStateHook(m: *vm.VM, wait_ms: i64) u8 {
     _ = m;
     const rs = &g_res;
     if (rs.bg == null) return 0;
+    if (wait_ms < 0) rs.bg_done.wait();
     if (wait_ms > 0 and !rs.bg_done.isSet()) rs.bg_done.timedWait(@as(u64, @intCast(wait_ms)) * std.time.ns_per_ms) catch {};
     return if (rs.bg_done.isSet()) 2 else 1;
 }
@@ -1987,12 +1992,14 @@ fn admitHook(m: *vm.VM, name: []const u8, src: ?[]const u8, mode_in: u8, base: u
 
 /// RNXC_ADMIT_PHASES=1: one line per admission on stderr -- restoring the
 /// program's state, loading the file, compiling it (and inside that,
-/// co.admit_ns's four), installing the delta, saving the state, running its
-/// top level. The resident VM's cost is the sum, and which part grows with
+/// co.admit_ns's four), preparing the install (Staged, on the thread that
+/// compiled), waiting until the install begins (a background admission's
+/// admitfinish), installing the delta, saving the state, running its top
+/// level. The resident VM's cost is the sum, and which part grows with
 /// the program is the question this answers.
 const AdmitPhases = struct {
-    const Phase = enum { restore, load, compile, install, save, run };
-    ns: [6]u64 = .{0} ** 6,
+    const Phase = enum { restore, load, compile, stage, wait, install, save, run };
+    ns: [8]u64 = .{0} ** 8,
     t: ?std.time.Timer = null,
     fn lap(self: *AdmitPhases, p: Phase) void {
         if (self.t == null) self.t = std.time.Timer.start() catch return;
@@ -2005,10 +2012,10 @@ const AdmitPhases = struct {
                 return @as(f64, @floatFromInt(x)) / 1e6;
             }
         }.f;
-        std.debug.print("phases: {s}: restore {d:.1} load {d:.1} compile {d:.1} (collect {d:.1} resolve {d:.1} front {d:.1} finish {d:.1}) install {d:.1} save {d:.1} run {d:.1} ms; program arena {d} MB, compacted {d}x\n", .{
+        std.debug.print("phases: {s}: restore {d:.1} load {d:.1} compile {d:.1} (collect {d:.1} resolve {d:.1} front {d:.1} finish {d:.1}) stage {d:.1} wait {d:.1} install {d:.1} save {d:.1} run {d:.1} ms; program arena {d} MB, compacted {d}x\n", .{
             std.fs.path.basename(path), msOf(self.ns[0]), msOf(self.ns[1]), msOf(self.ns[2]),
             msOf(ans[0]), msOf(ans[1]), msOf(ans[2]), msOf(ans[3]),
-            msOf(self.ns[3]), msOf(self.ns[4]), msOf(self.ns[5]),
+            msOf(self.ns[3]), msOf(self.ns[4]), msOf(self.ns[5]), msOf(self.ns[6]), msOf(self.ns[7]),
             // a background compile, or its tidy-up, may be using the arena (rung 9)
             if (rs.bg == null and !rs.bg_tidying) rs.parena.queryCapacity() >> 20 else 0, rs.compactions,
         });
@@ -2082,15 +2089,37 @@ fn gainedValue(m: *vm.VM, v: co.ConstVal) vm.Value {
     };
 }
 
-fn growClassTables(rs: *Resident, c: *co.Compiler, prog: co.Program, old_funcs: usize, old_classes: usize) !void {
+fn growClassTables(rs: *Resident, c: *co.Compiler, prog: co.Program, old_funcs: usize, old_classes: usize, st: *Staged) !void {
     const H = vmheap;
     const vt = &rs.vt;
     const ncls = c.classes.items.len;
     const nn = c.names.items.len;
     var nnm: usize = vm.n_names;
     std.debug.assert(vm.class_slots.len == old_classes and vt.dispatch.items.len == old_classes * nnm);
+    // the new classes' rows the job's preparation wrote (Staged), used only
+    // when nothing changed the tables since it read them
+    const staged = st.rows and ncls > old_classes and st.classesValid(rs);
+    if (!staged) {
+        st.rows_list.deinit(H);
+        st.rows_list = .{};
+    }
+    st.rows = false;
     // the rows' width
-    if (nn > nnm) {
+    if (staged and !st.rows_inplace) {
+        // a new list, the new rows in it: the earlier rows copied in, widened
+        // when the names outgrew them
+        const wide = st.rows_wide;
+        for (0..old_classes) |k| {
+            const dst = st.rows_list.items[k * wide ..][0..wide];
+            @memcpy(dst[0..nnm], vt.dispatch.items[k * nnm ..][0..nnm]);
+            @memset(dst[nnm..], 0);
+        }
+        vt.dispatch.deinit(H);
+        vt.dispatch = st.rows_list;
+        st.rows_list = .{};
+        nnm = wide;
+        vm.n_names = @intCast(wide);
+    } else if (nn > nnm) {
         const wide = nn + nn / 8 + 256;
         var nd = std.ArrayListUnmanaged(u32){};
         try nd.ensureTotalCapacityPrecise(H, (old_classes + 32) * wide);
@@ -2116,11 +2145,12 @@ fn growClassTables(rs: *Resident, c: *co.Compiler, prog: co.Program, old_funcs: 
         }
     }
     for (c.classes.items[old_classes..]) |ci| try added.appendSlice(H, ci.methods.items);
+    const ments: ?[]vm.MethodEnt = if (st.ments) |x| (if (x.len == added.items.len) x else null) else null;
     if (added.items.len > 0) {
         const mt = try H.alloc(vm.MethodEnt, vm.method_tab.len + added.items.len);
         @memcpy(mt[0..vm.method_tab.len], vm.method_tab);
         for (added.items, vm.method_tab.len..) |mi, at| {
-            mt[at] = co.methodEnt(&c.funcs.items[mi]);
+            mt[at] = if (ments) |x| x[at - vm.method_tab.len] else co.methodEnt(&c.funcs.items[mi]);
             slot_of[mi - old_funcs] = @intCast(at + 1);
         }
         if (vm.method_tab.len > 0) H.free(vm.method_tab);
@@ -2209,14 +2239,21 @@ fn growClassTables(rs: *Resident, c: *co.Compiler, prog: co.Program, old_funcs: 
             row.*[g.slot] = v;
         }
     }
-    // the new classes' rows, a parent before its children
+    // the new classes' rows, a parent before its children -- those the job's
+    // preparation wrote are done, and in the list already
     if (ncls > old_classes) {
-        if (vt.dispatch.capacity < ncls * nnm) try vt.dispatch.ensureTotalCapacityPrecise(H, (ncls + 32) * nnm);
-        vt.dispatch.appendNTimesAssumeCapacity(0, (ncls - old_classes) * nnm);
+        if (staged) {
+            if (st.rows_inplace) vt.dispatch.items.len = ncls * nnm;
+        } else {
+            if (vt.dispatch.capacity < ncls * nnm) try vt.dispatch.ensureTotalCapacityPrecise(H, (ncls + 32) * nnm);
+            vt.dispatch.appendNTimesAssumeCapacity(0, (ncls - old_classes) * nnm);
+        }
         const done = try H.alloc(bool, ncls - old_classes);
         defer H.free(done);
         @memset(done, false);
-        var left = ncls - old_classes;
+        if (staged) @memcpy(done, st.rows_done);
+        var left: usize = 0;
+        for (done) |d| left += @intFromBool(!d);
         while (left > 0) {
             const before = left;
             for (old_classes..ncls) |k| {
@@ -2297,7 +2334,22 @@ fn growClassTables(rs: *Resident, c: *co.Compiler, prog: co.Program, old_funcs: 
         vm.fn_owner = fo;
     }
     // the accessor tables: a new name `get<k>` names k's getter, and a new
-    // name k takes a `get<k>` the program already had
+    // name k takes a `get<k>` the program already had -- grown by the job's
+    // preparation from the tables the VM still holds
+    if (st.acc_new) |acc| {
+        st.acc_new = null;
+        if (acc[0].len == nn and st.acc[0].ptr == vm.acc_get.ptr and st.acc[0].len == vm.acc_get.len) {
+            if (vm.acc_get.len > 0) {
+                H.free(vm.acc_get);
+                H.free(vm.acc_set);
+            }
+            vm.acc_get = acc[0];
+            vm.acc_set = acc[1];
+            return;
+        }
+        H.free(acc[0]);
+        H.free(acc[1]);
+    }
     {
         const old_nn = vm.acc_get.len;
         const ag = try H.alloc(u32, nn);
@@ -2439,7 +2491,7 @@ fn checkVmTables(m: *vm.VM, c: *co.Compiler, prog: co.Program, a: std.mem.Alloca
     for (prog.funcs, 0..) |f, i| {
         if (!std.mem.eql(u8, m.fn_names[i], f.name)) S.bad("fn_names");
         if (m.fn_method[i] != (f.owner != null)) S.bad("fn_method");
-        const plain = f.owner == null and f.lambda_at == null and !std.mem.startsWith(u8, f.name, "@@");
+        const plain = f.owner == null and f.lambda_at == null and !vm.internalFn(f.name);
         if (m.fn_nparams[i] != (if (plain and f.params.len < 0xFF) @as(u8, @intCast(f.params.len)) else 0xFF)) S.bad("fn_nparams");
         if (plain and f.name_idx < nfn.len and nfn[f.name_idx] == vm.NO_FN) nfn[f.name_idx] = prog.funcs[c.live(@intCast(i))].id;
     }
@@ -2609,6 +2661,8 @@ const AdmitJob = struct {
     why: ?[]const u8 = null,
     err: ?anyerror = null,
     compiled: bool = false,
+    /// what the install needs from the compile alone, made ready by the thread that compiled (Staged)
+    st: Staged = .{},
 
     fn create(rs: *Resident, path: []const u8, src: ?[]const u8, replace: bool, nested: bool, own: bool) !*AdmitJob {
         const H = vmheap;
@@ -2633,6 +2687,7 @@ const AdmitJob = struct {
             .sa = std.heap.ArenaAllocator.init(std.heap.page_allocator),
             .timer = try std.time.Timer.start(),
             .ph = .{ .t = std.time.Timer.start() catch null },
+            .st = Staged.capture(rs),
         };
         return job;
     }
@@ -2642,6 +2697,7 @@ const AdmitJob = struct {
         for (job.on_top.trees.items) |t| t.deinit();
         job.on_top.trees.clearRetainingCapacity();
         if (job.check_before) |b| H.free(b);
+        job.st.free();
         job.sa.deinit();
         job.arena.deinit();
         if (job.own) {
@@ -2654,6 +2710,348 @@ const AdmitJob = struct {
         H.destroy(job);
     }
 };
+
+/// THE INSTALL'S PREPARATION (rung 9, the pause closed 2026-11-01). What an
+/// admission's install builds from the compile's outcome alone is built right
+/// after the compile instead -- on the compiling thread when the admission is
+/// a background one -- so the program's thread appends it and builds nothing:
+/// the file records (a realpath and a hash per file: 26 ms for Softanza's 613
+/// files), the strings the VM keeps (constants, names, locals, function names
+/// and their lower-case keys), D31's fall-back names, and the class tables (64
+/// ms to copy a first classes' admission's out of the compile's arena, 36 ms of
+/// rows for a later one's 597 classes). Each part is null when it was not
+/// made, and the install then builds it as it always did; what the install
+/// takes it owns, and `free` releases the rest.
+///
+/// The class parts read the VM's tables as they stood when the job began.
+/// `addmethod` is the one thing that changes them while a compile runs, and
+/// every call appends to vm.dyn_methods: the install uses those parts only
+/// when that list and the tables have not moved (classesValid), and otherwise
+/// builds the rows itself, as before. Rows that read an EARLIER class's row --
+/// a new class with an old ancestor -- are never prepared: the running program
+/// may change that row meanwhile.
+const Staged = struct {
+    // what the job found, on the program's thread
+    dyn: usize = 0,
+    mt_len: usize = 0,
+    nnm: usize = 0,
+    disp: []u32 = &.{},
+    disp_cap: usize = 0,
+    names_len: usize = 0,
+    fns_len: usize = 0,
+    konst_from: usize = 0,
+    acc: [2][]const u32 = .{ &.{}, &.{} },
+    // the files' records
+    stamps: ?[]image.Stamp = null,
+    norm: ?[][]const u8 = null,
+    fnames: ?[][]const u8 = null,
+    // the strings the VM keeps
+    konst: ?[]vm.Value = null,
+    names: ?[][]const u8 = null,
+    names_lc: ?[]?[]u8 = null,
+    locals: ?[][]const u8 = null,
+    fn_names: ?[][]const u8 = null,
+    fn_keys: ?[]?[]u8 = null,
+    name_up: ?[]u32 = null,
+    /// a first classes' admission: compileFinish's tables, copied into the
+    /// VM's heap where they stand in c.vm_out -- the dispatch rows into a list
+    /// with room for 32 more classes, as the install gave them
+    whole: ?Whole = null,
+    /// a later class admission: its method entries, the accessor tables
+    /// grown, and the new classes' rows -- each class whose ancestors are all
+    /// new (`rows_done`) -- written into the dispatch list's own spare room
+    /// (`rows_inplace`: past its length nothing reads it, and nothing moves
+    /// the list while a compile runs) or, when the rows grow wider or outgrow
+    /// that room, into a new list whose earlier rows the install copies in
+    ments: ?[]vm.MethodEnt = null,
+    acc_new: ?[2][]u32 = null,
+    rows: bool = false,
+    rows_inplace: bool = false,
+    rows_list: std.ArrayListUnmanaged(u32) = .{},
+    rows_wide: usize = 0,
+    rows_done: []bool = &.{},
+
+    const Whole = struct { ct: ?co.ClassTables = null, disp: std.ArrayListUnmanaged(u32) = .{}, fo: ?[]u16 = null, acc: ?[2][]u32 = null };
+
+    fn capture(rs: *const Resident) Staged {
+        return .{
+            .dyn = vm.dyn_methods.items.len,
+            .mt_len = vm.method_tab.len,
+            .nnm = vm.n_names,
+            .disp = rs.vt.dispatch.items,
+            .disp_cap = rs.vt.dispatch.capacity,
+            .names_len = rs.vt.names.items.len,
+            .fns_len = rs.vt.fn_names.items.len,
+            .konst_from = rs.prog_konst,
+            .acc = .{ vm.acc_get, vm.acc_set },
+        };
+    }
+
+    /// The class tables are the ones the preparation read: no `addmethod`
+    /// since, and the dispatch list where it was.
+    fn classesValid(st: *const Staged, rs: *const Resident) bool {
+        return vm.dyn_methods.items.len == st.dyn and vm.method_tab.len == st.mt_len and vm.n_names == st.nnm and
+            rs.vt.dispatch.items.ptr == st.disp.ptr and rs.vt.dispatch.items.len == st.disp.len and
+            rs.vt.dispatch.capacity == st.disp_cap;
+    }
+
+    fn free(st: *Staged) void {
+        const H = vmheap;
+        const each = struct {
+            fn strs(xs: ?[][]const u8) void {
+                const a = xs orelse return;
+                for (a) |x| vmheap.free(x);
+                vmheap.free(a);
+            }
+            fn keys(xs: ?[]?[]u8) void {
+                const a = xs orelse return;
+                for (a) |k| if (k) |kk| vmheap.free(kk);
+                vmheap.free(a);
+            }
+        };
+        if (st.stamps) |sp| {
+            for (sp) |x| H.free(x.path);
+            H.free(sp);
+        }
+        each.strs(st.norm);
+        each.strs(st.fnames);
+        if (st.konst) |ks| freeKonst(ks);
+        each.strs(st.names);
+        each.keys(st.names_lc);
+        each.strs(st.locals);
+        each.strs(st.fn_names);
+        each.keys(st.fn_keys);
+        if (st.name_up) |u| H.free(u);
+        if (st.whole) |*w| {
+            // the dispatch rows are w.disp's
+            if (w.ct) |ct| {
+                H.free(ct.method_tab);
+                H.free(ct.class_slots);
+                H.free(ct.attr_from);
+                H.free(ct.attr_ent);
+                H.free(ct.class_konst);
+                H.free(ct.class_parent);
+            }
+            w.disp.deinit(H);
+            if (w.fo) |fo| H.free(fo);
+            if (w.acc) |acc| {
+                H.free(acc[0]);
+                H.free(acc[1]);
+            }
+        }
+        if (st.ments) |x| H.free(x);
+        if (st.acc_new) |acc| {
+            H.free(acc[0]);
+            H.free(acc[1]);
+        }
+        st.rows_list.deinit(H);
+        H.free(st.rows_done);
+        st.* = .{};
+    }
+};
+
+/// Constants dupKonst made and nothing took.
+fn freeKonst(ks: []vm.Value) void {
+    for (ks) |v| {
+        if (v.tag != .str) continue;
+        vmheap.free(v.p.s.ptr[0..@max(v.p.s.len, 1)]);
+        vmheap.destroy(v.p.s);
+    }
+    vmheap.free(ks);
+}
+
+/// The install's preparation (Staged), run by the thread that compiled, right
+/// after a compile that admits. A part that cannot be made is left to the
+/// install, which builds it as before.
+fn stageInstall(job: *AdmitJob) void {
+    const st = &job.st;
+    stageFiles(st, &job.on_top) catch {};
+    stageStrings(st, job.c, job.prog) catch {};
+    if (job.prog.grow_classes)
+        stageRows(st, job.c, job.old_funcs, job.old_classes) catch {}
+    else
+        stageWhole(st, job.c) catch {};
+}
+
+fn stageFiles(st: *Staged, on_top: *const Unit) !void {
+    const H = vmheap;
+    const n = on_top.paths.items.len;
+    const stamps = try H.alloc(image.Stamp, n);
+    const norm = try H.alloc([]const u8, n);
+    for (on_top.paths.items, 0..) |p, k| {
+        const text = on_top.origs.items[k];
+        stamps[k] = .{ .path = try H.dupe(u8, p), .len = text.len, .hash = image.hashOf(text) };
+        norm[k] = try normalisePath(H, p);
+    }
+    const fnames = try H.alloc([]const u8, on_top.names.items.len);
+    for (on_top.names.items, 0..) |nm, k| fnames[k] = try H.dupe(u8, nm);
+    st.stamps = stamps;
+    st.norm = norm;
+    st.fnames = fnames;
+}
+
+fn stageStrings(st: *Staged, c: *co.Compiler, prog: co.Program) !void {
+    const H = vmheap;
+    const lower = struct {
+        fn f(nm: []const u8) ![]u8 {
+            const key = try vmheap.alloc(u8, nm.len);
+            for (nm, 0..) |ch, k| key[k] = std.ascii.toLower(ch);
+            return key;
+        }
+    }.f;
+    if (st.konst_from <= c.konst.items.len) st.konst = try dupKonst(H, c.konst.items[st.konst_from..]);
+    if (st.names_len <= prog.names.len) {
+        const new = prog.names[st.names_len..];
+        const names = try H.alloc([]const u8, new.len);
+        const lc = try H.alloc(?[]u8, new.len);
+        const up = try H.alloc(u32, new.len);
+        for (new, 0..) |nm, k| {
+            names[k] = try H.dupe(u8, nm);
+            lc[k] = if (nm.len == 0 or nm.len > 250) null else try lower(nm);
+            up[k] = nameUpOf(c, prog.names, st.names_len + k);
+        }
+        st.names = names;
+        st.names_lc = lc;
+        st.name_up = up;
+    }
+    const ln = try H.alloc([]const u8, prog.local_names.len);
+    for (prog.local_names, 0..) |nm, k| ln[k] = try H.dupe(u8, nm);
+    st.locals = ln;
+    if (st.fns_len <= prog.funcs.len) {
+        const new = prog.funcs[st.fns_len..];
+        const fnn = try H.alloc([]const u8, new.len);
+        const keys = try H.alloc(?[]u8, new.len);
+        for (new, 0..) |f, k| {
+            fnn[k] = try H.dupe(u8, f.name);
+            keys[k] = if (f.name.len == 0 or f.name.len > 250 or f.owner != null) null else try lower(f.name);
+        }
+        st.fn_names = fnn;
+        st.fn_keys = keys;
+    }
+}
+
+/// A first classes' admission: the tables compileFinish built in the
+/// admission's arena, copied into the VM's heap, and the compile's output
+/// pointed at the copies -- the install publishes them and copies nothing.
+fn stageWhole(st: *Staged, c: *co.Compiler) !void {
+    const H = vmheap;
+    var w: Staged.Whole = .{};
+    if (c.vm_out.tables) |ct| {
+        try w.disp.ensureTotalCapacityPrecise(H, ct.dispatch.len + 32 * @as(usize, c.vm_out.n_names));
+        w.disp.appendSliceAssumeCapacity(ct.dispatch);
+        w.ct = .{
+            .dispatch = w.disp.items,
+            .method_tab = try H.dupe(vm.MethodEnt, ct.method_tab),
+            .class_slots = try H.dupe(u32, ct.class_slots),
+            .attr_from = try H.dupe(u32, ct.attr_from),
+            .attr_ent = try H.dupe(vm.AttrEnt, ct.attr_ent),
+            .class_konst = try H.dupe(u32, ct.class_konst),
+            .class_parent = try H.dupe(u16, ct.class_parent),
+        };
+    }
+    if (c.vm_out.fn_owner) |fo| w.fo = try H.dupe(u16, fo);
+    if (c.vm_out.acc) |acc| w.acc = .{ try H.dupe(u32, acc[0]), try H.dupe(u32, acc[1]) };
+    if (w.ct) |ct| c.vm_out.tables = ct;
+    if (w.fo) |fo| c.vm_out.fn_owner = fo;
+    if (w.acc) |acc| c.vm_out.acc = acc;
+    st.whole = w;
+}
+
+/// A later class admission: what growClassTables builds that reads only this
+/// compile and the VM's tables as the job found them -- the method entries,
+/// the accessor tables, and the rows of the new classes whose ancestors are
+/// all new, numbered as growClassTables numbers them.
+fn stageRows(st: *Staged, c: *co.Compiler, old_funcs: usize, old_classes: usize) !void {
+    const H = vmheap;
+    const ncls = c.classes.items.len;
+    const nn = c.names.items.len;
+    // the methods this admission adds to a class, in growClassTables' order
+    var added = std.ArrayListUnmanaged(u32){};
+    defer added.deinit(H);
+    for (c.class_repl.items) |r| {
+        for (c.classes.items[r.cid].methods.items) |mi| {
+            if (mi >= old_funcs) try added.append(H, mi);
+        }
+    }
+    for (c.classes.items[old_classes..]) |ci| try added.appendSlice(H, ci.methods.items);
+    const old_nn = st.acc[0].len;
+    if (old_nn > nn) return error.Unexpected;
+    const ments = try H.alloc(vm.MethodEnt, added.items.len);
+    for (added.items, 0..) |mi, k| ments[k] = co.methodEnt(&c.funcs.items[mi]);
+    // the accessor tables, grown from the VM's (only an install changes them)
+    const ag = try H.alloc(u32, nn);
+    const as = try H.alloc(u32, nn);
+    @memcpy(ag[0..old_nn], st.acc[0]);
+    @memcpy(as[0..old_nn], st.acc[1]);
+    @memset(ag[old_nn..], vm.ACC_NONE);
+    @memset(as[old_nn..], vm.ACC_NONE);
+    var buf: [256]u8 = undefined;
+    for (c.names.items[old_nn..], old_nn..) |nm, i| {
+        co.accessorOf(c, nm, @intCast(i), ag, as);
+        if (nm.len + 3 > buf.len) continue;
+        _ = std.ascii.lowerString(buf[3 .. 3 + nm.len], nm);
+        @memcpy(buf[0..3], "get");
+        if (c.name_index.get(buf[0 .. 3 + nm.len])) |gi| ag[i] = gi;
+        @memcpy(buf[0..3], "set");
+        if (c.name_index.get(buf[0 .. 3 + nm.len])) |si| as[i] = si;
+    }
+    st.ments = ments;
+    st.acc_new = .{ ag, as };
+    if (ncls <= old_classes or st.disp.len != old_classes * st.nnm) return;
+    // the rows: wider when the names outgrew them, as growClassTables lays them
+    const wide = if (nn > st.nnm) nn + nn / 8 + 256 else st.nnm;
+    const need = ncls * wide;
+    const inplace = nn <= st.nnm and st.disp_cap >= need;
+    var list = std.ArrayListUnmanaged(u32){};
+    const base: [*]u32 = if (inplace) st.disp.ptr else blk: {
+        try list.ensureTotalCapacityPrecise(H, (ncls + 32) * wide);
+        list.items.len = need;
+        break :blk list.items.ptr;
+    };
+    @memset(base[old_classes * wide .. need], 0);
+    // slot numbers past the method table the job found
+    const slot_of = try H.alloc(u32, c.funcs.items.len - old_funcs);
+    defer H.free(slot_of);
+    @memset(slot_of, 0);
+    for (added.items, 0..) |mi, k| slot_of[mi - old_funcs] = @intCast(st.mt_len + k + 1);
+    const done = try H.alloc(bool, ncls - old_classes);
+    @memset(done, false);
+    var progress = true;
+    while (progress) {
+        progress = false;
+        for (old_classes..ncls) |k| {
+            if (done[k - old_classes]) continue;
+            const ci = &c.classes.items[k];
+            // an old ancestor -- its row the running program may change -- or
+            // no way up at all (a cycle, which the install refuses): left
+            var p = ci.parent;
+            var steps: usize = 0;
+            const all_new = while (p) |pid| : (steps += 1) {
+                if (pid < old_classes or steps > ncls) break false;
+                p = c.classes.items[pid].parent;
+            } else true;
+            if (!all_new) continue;
+            if (ci.parent) |pp| {
+                if (!done[pp - old_classes]) continue;
+            }
+            const row = base[k * wide ..][0..wide];
+            for (ci.methods.items) |mi| row[c.funcs.items[mi].name_idx] = slot_of[mi - old_funcs];
+            if (ci.parent) |pp| {
+                const prow = base[@as(usize, pp) * wide ..][0..wide];
+                for (row, prow) |*cell, pv| {
+                    if (cell.* == 0) cell.* = pv;
+                }
+            }
+            done[k - old_classes] = true;
+            progress = true;
+        }
+    }
+    st.rows = true;
+    st.rows_inplace = inplace;
+    st.rows_list = list;
+    st.rows_wide = wide;
+    st.rows_done = done;
+}
 
 fn residentAdmitOnce(rs: *Resident, path: []const u8, src: ?[]const u8, replace: bool, at: RunAt) !?[]const u8 {
     const job = try AdmitJob.create(rs, path, src, replace, at.nested, false);
@@ -2786,6 +3184,10 @@ fn admitCompileOrFail(job: *AdmitJob) !void {
     };
     ph.lap(.compile);
     job.compiled = true;
+    // what the install would build from this compile alone, built here -- on
+    // the compiling thread when the admission is a background one (Staged)
+    stageInstall(job);
+    ph.lap(.stage);
 }
 
 /// A refusal's reason, held where it outlives the compile: `rs.why`, which
@@ -2820,6 +3222,7 @@ fn admitInstall(job: *AdmitJob, at: RunAt) !?[]const u8 {
     const on_top = &job.on_top;
     const ph = &job.ph;
     const timer = &job.timer;
+    ph.lap(.wait);
     // what the compile built for the VM's own globals is published HERE, on
     // the program's thread (co.VmOut) -- what it replaces kept first, so the
     // install can tell the tables a first class admission built whole
@@ -2880,22 +3283,49 @@ fn admitInstall(job: *AdmitJob, at: RunAt) !?[]const u8 {
         m.rows = vt.rows.items;
         m.files = vt.files.items;
     }
-    // constants: appended, pinned as the freeze pins them
+    // constants: appended, pinned as the freeze pins them (copied already by
+    // the job's preparation, Staged)
     {
-        const add = try dupKonst(H, c.konst.items[rs.prog_konst..]);
+        const ready = if (job.st.konst_from == rs.prog_konst) job.st.konst else null;
+        job.st.konst = if (ready == null) job.st.konst else null;
+        const add = ready orelse try dupKonst(H, c.konst.items[rs.prog_konst..]);
         for (add) |kv| _ = m.appendKonst(kv);
         H.free(add);
     }
     // names: appended, and the VM's two maps that read them extended rather
     // than dropped (a name's index never changes)
     const old_names = vt.names.items.len;
-    for (prog.names[old_names..]) |nm| try vt.names.append(H, try H.dupe(u8, nm));
+    // the names and their lower-case keys, when the job's preparation made them
+    var lc_ready: ?[]?[]u8 = null;
+    if (job.st.names) |sn| {
+        if (job.st.names_len == old_names and sn.len == prog.names.len - old_names) {
+            try vt.names.appendSlice(H, sn);
+            H.free(sn);
+            job.st.names = null;
+            lc_ready = job.st.names_lc;
+            job.st.names_lc = null;
+        }
+    }
+    defer {
+        if (lc_ready) |lc| {
+            for (lc) |k| if (k) |kk| H.free(kk);
+            H.free(lc);
+        }
+    }
+    if (lc_ready == null) for (prog.names[old_names..]) |nm| try vt.names.append(H, try H.dupe(u8, nm));
     m.names = vt.names.items;
     if (m.name_lc) |*nl| {
         for (vt.names.items[old_names..], old_names..) |nm, i| {
-            if (nm.len == 0 or nm.len > 250) continue;
-            const key = try H.alloc(u8, nm.len);
-            for (nm, 0..) |ch, k| key[k] = std.ascii.toLower(ch);
+            const key = if (lc_ready) |lc| blk: {
+                const k2 = lc[i - old_names] orelse continue;
+                lc[i - old_names] = null;
+                break :blk k2;
+            } else blk: {
+                if (nm.len == 0 or nm.len > 250) continue;
+                const k2 = try H.alloc(u8, nm.len);
+                for (nm, 0..) |ch, k| k2[k] = std.ascii.toLower(ch);
+                break :blk k2;
+            };
             if (nl.contains(key)) {
                 H.free(key);
                 continue;
@@ -2937,7 +3367,12 @@ fn admitInstall(job: *AdmitJob, at: RunAt) !?[]const u8 {
         try vt.fn_entry.appendSlice(H, prog.fn_entry);
         try vt.fn_frame.appendSlice(H, prog.fn_frame);
         for (prog.fn_local_from) |x| try vt.fn_local_from.append(H, lbase + x);
-        for (prog.local_names) |nm| try vt.local_names.append(H, try H.dupe(u8, nm));
+        const ln_ready: ?[][]const u8 = if (job.st.locals) |ln| (if (ln.len == prog.local_names.len) ln else null) else null;
+        if (ln_ready) |ln| {
+            try vt.local_names.appendSlice(H, ln);
+            H.free(ln);
+            job.st.locals = null;
+        } else for (prog.local_names) |nm| try vt.local_names.append(H, try H.dupe(u8, nm));
         try vt.local_regs.appendSlice(H, prog.local_regs);
         try vt.local_boxed.appendSlice(H, prog.local_boxed);
         m.fn_entry = vt.fn_entry.items;
@@ -2952,14 +3387,27 @@ fn admitInstall(job: *AdmitJob, at: RunAt) !?[]const u8 {
     // a call compiled before it existed reaches (VM.name_fn: the first plain
     // function of that name, as Ring takes the first definition)
     const old_fns = vt.fn_names.items.len;
+    // the functions' names, and their keys for the name map below, when the
+    // job's preparation made them
+    const fn_ready: ?[][]const u8 = if (job.st.fn_names) |x| (if (job.st.fns_len == old_fns and x.len == prog.funcs.len - old_fns) x else null) else null;
+    if (fn_ready != null) job.st.fn_names = null;
+    const fn_keys: ?[]?[]u8 = if (fn_ready != null) job.st.fn_keys else null;
+    if (fn_keys != null) job.st.fn_keys = null;
+    defer {
+        if (fn_keys) |ks| {
+            for (ks) |k| if (k) |kk| H.free(kk);
+            H.free(ks);
+        }
+    }
     {
         for (prog.funcs[old_fns..], old_fns..) |f, i| {
             std.debug.assert(f.id == i);
-            try vt.fn_names.append(H, try H.dupe(u8, f.name));
+            try vt.fn_names.append(H, if (fn_ready) |r| r[i - old_fns] else try H.dupe(u8, f.name));
             try vt.fn_method.append(H, f.owner != null);
-            const plain = f.owner == null and f.lambda_at == null and !std.mem.startsWith(u8, f.name, "@@");
+            const plain = f.owner == null and f.lambda_at == null and !vm.internalFn(f.name);
             try vt.fn_nparams.append(H, if (plain and f.params.len < 0xFF) @intCast(f.params.len) else 0xFF);
         }
+        if (fn_ready) |r| H.free(r);
         m.fn_names = vt.fn_names.items;
         m.fn_method = vt.fn_method.items;
         m.fn_nparams = vt.fn_nparams.items;
@@ -2974,7 +3422,7 @@ fn admitInstall(job: *AdmitJob, at: RunAt) !?[]const u8 {
         // name none held takes the new one -- a full mapping's answer.
         const nfn = vt.name_fn.items;
         for (prog.funcs[old_fns..], old_fns..) |f, i| {
-            if (f.owner != null or f.lambda_at != null or std.mem.startsWith(u8, f.name, "@@")) continue;
+            if (f.owner != null or f.lambda_at != null or vm.internalFn(f.name)) continue;
             if (f.name_idx >= nfn.len) continue;
             const cur = nfn[f.name_idx];
             nfn[f.name_idx] = prog.funcs[c.live(if (cur == vm.NO_FN) @intCast(i) else cur)].id;
@@ -2996,7 +3444,12 @@ fn admitInstall(job: *AdmitJob, at: RunAt) !?[]const u8 {
         for (c.new_exports.items) |e| try rs.exports.append(H, .{ .pub_idx = e.pub_idx, .internal = try H.dupe(u8, e.internal), .is_class = e.is_class });
         applyExports(rs, c, vt.name_fn.items, vt.name_cls.items);
         const had = vt.name_up.items.len;
-        for (had..prog.names.len) |i| try vt.name_up.append(H, nameUpOf(c, prog.names, i));
+        const up_ready: ?[]u32 = if (job.st.name_up) |x| (if (job.st.names_len == had and x.len == prog.names.len - had) x else null) else null;
+        if (up_ready) |up| {
+            try vt.name_up.appendSlice(H, up);
+            H.free(up);
+            job.st.name_up = null;
+        } else for (had..prog.names.len) |i| try vt.name_up.append(H, nameUpOf(c, prog.names, i));
         m.name_up = vt.name_up.items;
         if (c.app != null) rs.apps += 1;
     }
@@ -3013,13 +3466,17 @@ fn admitInstall(job: *AdmitJob, at: RunAt) !?[]const u8 {
     // in the arena, and those are copied out -- the dispatch rows into the
     // list they grow in from then on
     if (prog.grow_classes) {
-        try growClassTables(rs, c, prog, old_funcs, old_classes);
+        try growClassTables(rs, c, prog, old_funcs, old_classes, &job.st);
     } else {
+        // already in the VM's heap when the job's preparation copied them
+        // (Staged.whole), and published so; else copied out here
+        const whole = job.st.whole;
+        job.st.whole = null;
         inline for (.{ "dispatch", "method_tab", "class_slots", "attr_from", "attr_ent", "class_konst", "class_parent", "fn_owner", "acc_get", "acc_set" }) |t| {
             const cur = @field(vm, t);
             const was = @field(keep, t);
             if (cur.ptr != was.ptr) {
-                @field(vm, t) = try H.dupe(@TypeOf(cur[0]), cur);
+                if (whole == null) @field(vm, t) = try H.dupe(@TypeOf(cur[0]), cur);
                 H.free(was);
             }
         }
@@ -3027,8 +3484,12 @@ fn admitInstall(job: *AdmitJob, at: RunAt) !?[]const u8 {
         // pays for a copy anyway: a row is as wide as the names (~175 MB of
         // rows at Softanza's size, ~40 ms to move)
         if (vm.dispatch.len > 0 and vt.dispatch.items.len == 0) {
-            vt.dispatch = std.ArrayListUnmanaged(u32).fromOwnedSlice(vm.dispatch);
-            try vt.dispatch.ensureTotalCapacityPrecise(H, vt.dispatch.items.len + 32 * @as(usize, vm.n_names));
+            if (whole) |w| {
+                vt.dispatch = w.disp;
+            } else {
+                vt.dispatch = std.ArrayListUnmanaged(u32).fromOwnedSlice(vm.dispatch);
+                try vt.dispatch.ensureTotalCapacityPrecise(H, vt.dispatch.items.len + 32 * @as(usize, vm.n_names));
+            }
             vm.dispatch = vt.dispatch.items;
         }
     }
@@ -3065,7 +3526,11 @@ fn admitInstall(job: *AdmitJob, at: RunAt) !?[]const u8 {
     } else if (m.fn_index) |*fi| {
         for (prog.funcs[old_fns..], old_fns..) |f, i| {
             if (f.name.len == 0 or f.name.len > 250 or f.owner != null) continue;
-            const key = try lowKey(f.name);
+            const key = if (fn_keys) |ks| blk: {
+                const k2 = ks[i - old_fns] orelse continue;
+                ks[i - old_fns] = null;
+                break :blk k2;
+            } else try lowKey(f.name);
             if (fi.getPtr(key)) |v| {
                 v.* = prog.funcs[c.live(v.*)].id;
                 H.free(key);
@@ -3092,21 +3557,35 @@ fn admitInstall(job: *AdmitJob, at: RunAt) !?[]const u8 {
 
     ph.lap(.install);
     // ---- the program, kept for the next admission ---------------------
-    for (on_top.paths.items, 0..) |p, k| {
-        const text = on_top.origs.items[k];
-        try rs.stamps.append(H, .{ .path = try H.dupe(u8, p), .len = text.len, .hash = image.hashOf(text) });
-        try rs.held_norm.append(H, try normalisePath(H, p));
+    // the files' records: made by the job's preparation (a realpath and a
+    // hash per file -- 26 ms for Softanza's 613), else here
+    if (job.st.stamps) |sp| {
+        try rs.stamps.appendSlice(H, sp);
+        try rs.held_norm.appendSlice(H, job.st.norm.?);
+        try rs.fnames.appendSlice(H, job.st.fnames.?);
+        H.free(sp);
+        H.free(job.st.norm.?);
+        H.free(job.st.fnames.?);
+        job.st.stamps = null;
+        job.st.norm = null;
+        job.st.fnames = null;
+    } else {
+        for (on_top.paths.items, 0..) |p, k| {
+            const text = on_top.origs.items[k];
+            try rs.stamps.append(H, .{ .path = try H.dupe(u8, p), .len = text.len, .hash = image.hashOf(text) });
+            try rs.held_norm.append(H, try normalisePath(H, p));
+        }
+        for (on_top.names.items) |nm| try rs.fnames.append(H, try H.dupe(u8, nm));
     }
-    for (on_top.names.items) |nm| try rs.fnames.append(H, try H.dupe(u8, nm));
     var new_funcs: usize = 0;
     for (c.funcs.items[old_funcs..]) |f| {
-        if (f.lambda_at == null and !std.mem.startsWith(u8, f.name, "@@")) new_funcs += 1;
+        if (f.lambda_at == null and !vm.internalFn(f.name)) new_funcs += 1;
     }
     var replaced: usize = 0;
     if (replace) for (c.funcs.items[0..old_funcs]) |f| {
         if (f.replaced_by) |r| {
             // a class's prologue (rung 4) is not one of its functions
-            if (r >= old_funcs and !std.mem.startsWith(u8, f.name, "@@")) replaced += 1;
+            if (r >= old_funcs and !vm.internalFn(f.name)) replaced += 1;
         }
     };
     const stmts = c.stmts_ok;

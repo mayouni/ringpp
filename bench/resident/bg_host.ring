@@ -97,7 +97,33 @@ catch
 done
 ? "Kept(): " + Kept()
 
-# 7. it waits: admitstate(nWaitMs) waits at most that long, admitfinish() as long as it takes
+# 7. classes admitted in the background while the program attaches a method to a class it holds (addmethod): the
+#    compiling thread prepares the new classes' rows numbered after the method table it found, addmethod grows that
+#    table, and the install builds the rows itself -- every method answers as the verb's admission would have
+oSq = MakeSq()
+cMore = Many("More", 300) + "func MakeCube" + nl + tab + "return new Cube" + nl +
+	"class Box" + nl + tab + "s = 2" + nl + tab + "func Side" + nl + tab + tab + "return s" + nl +
+	"class Cube from Box" + nl + tab + "func Vol" + nl + tab + tab + "return Side() * Side() * Side()" + nl
+admitstart("admitcode", "more", cMore)
+addmethod(oSq, "Twice", "SqTwice")
+? "attached while it compiles: " + oSq.Twice()
+? "finish more: " + admitfinish() + ", MakeCube().Vol() " + MakeCube().Vol() + ", Side() " + MakeCube().Side() + ", oSq.Twice() " + oSq.Twice()
+
+# 8. the current directory stays where the program stood when it called admitstart: chdir() waits for the compile,
+#    which reads the root's loads and a relative path against it, as the verb does -- the code is large, so the load
+#    is read well after the chdir would have moved it
+write("bg_cd.ring", "func FromHere" + nl + tab + "return 'here'" + nl)
+admitstart("admitcode", "cd", "load 'bg_cd.ring'" + nl + Many("Cd", 3000))
+? "chdir while it compiles: " + chdir("..")
+try
+	? "then admitfinish: " + admitfinish() + ", FromHere() " + FromHere()
+catch
+	? "then admitfinish: " + cCatchError
+done
+chdir("resident")
+remove("bg_cd.ring")
+
+# 9. it waits: admitstate(nWaitMs) waits at most that long, admitfinish() as long as it takes
 admitstart("admitcode", "waited", Many("Waited", 300))
 st = admitstate(60000)
 ? "after waiting: " + st
@@ -143,3 +169,7 @@ func Refused cWhat, nWhich
 
 func Call0 cName
 	return call cName()
+
+# attached to Sq by addmethod: a plain function, This the receiver
+func SqTwice
+	return This.Area() * 2

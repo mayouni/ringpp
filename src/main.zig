@@ -1869,6 +1869,25 @@ pub const Instr = extern struct { op: Op, a: u8, b: u8, c: u8, d: i32 };
 /// thing a program writes by accident.
 pub const closure_bias: i64 = 1 << 30;
 
+/// The compiler's own functions -- the top level (`@@main`), a class's
+/// attribute prologue (`@@attrs`), eval's code (`@@eval`) and a lambda
+/// (`@@lambda<offset>`) -- which no program reaches by name. A PROGRAM's
+/// function may begin with `@@` too: Softanza defines `@@`, `@@NL`, `@@S`,
+/// `@@SP`, `@@XT` and more, and Ring lists them, answers isfunction() for
+/// them and calls them by name like any other. The prefix alone was the test
+/// in eleven places until 2026-11-01, so `isfunction("@@")` was 0 and a
+/// resident call to `@@` compiled before Softanza was admitted stayed R3.
+pub fn internalFn(nm: []const u8) bool {
+    if (!std.mem.startsWith(u8, nm, "@@")) return false;
+    const rest = nm[2..];
+    if (std.mem.eql(u8, rest, "main") or std.mem.eql(u8, rest, "attrs") or std.mem.eql(u8, rest, "eval")) return true;
+    if (!std.mem.startsWith(u8, rest, "lambda") or rest.len == 6) return false;
+    for (rest[6..]) |ch| {
+        if (!std.ascii.isDigit(ch)) return false;
+    }
+    return true;
+}
+
 
 comptime {
     if (@sizeOf(Instr) != 8) @compileError("Instr must be 8 bytes");
@@ -2292,7 +2311,7 @@ pub const VM = struct {
 
     /// D31: the app whose code runs at `pc` -- the namespace of its function's name (`shop::Handler`) or, for a method,
     /// of its class's (`shop::Box`) -- or null for the base. An app's top level and its lambdas carry no namespace in
-    /// their names, so they read as the base here (named in haro/serv/README.md).
+    /// their names, so they read as the base here (named in HaroServer's README).
     fn appAt(self: *const VM, pc: u32) ?[]const u8 {
         if (pc >= self.fn_of.len) return null;
         const fid = self.fn_of[pc];
@@ -2305,7 +2324,7 @@ pub const VM = struct {
             if (kv.tag != .str) return null;
             nm = strOf(kv);
         }
-        if (std.mem.startsWith(u8, nm, "@@")) return null;
+        if (internalFn(nm)) return null;
         const k = std.mem.indexOf(u8, nm, "::") orelse return null;
         return nm[0..k];
     }
@@ -2480,7 +2499,7 @@ pub const VM = struct {
     /// constraint engine reported `no @isnumber() predicate exists` and two
     /// tests stopped without an error line (2026-09-24).
     fn reflectName(nm: []const u8, buf: []u8) ?[]const u8 {
-        if (nm.len == 0 or nm.len > buf.len or std.mem.startsWith(u8, nm, "@@")) return null;
+        if (nm.len == 0 or nm.len > buf.len or internalFn(nm)) return null;
         for (nm, 0..) |ch, i| buf[i] = std.ascii.toLower(ch);
         return buf[0..nm.len];
     }
@@ -6823,6 +6842,9 @@ pub const VM = struct {
                             self.pending = BADPARAM;
                             continue :dispatch .raise;
                         }
+                        // rung 9: an admission compiling in the background reads its
+                        // files against the current directory -- it ends first
+                        if (self.admit_state_hook) |sh| _ = sh(self, -1);
                         out = Value.int(if (std.process.changeCurDir(strOf(regs[A]))) |_| 0 else |_| -1);
                     },
                     .exefilename => {
@@ -7474,7 +7496,8 @@ pub const VM = struct {
                         if (which == .admitstate1) {
                             const w = regs[A];
                             wait = switch (w.tag) {
-                                .int => w.p.i,
+                                // never below 0: -1 is the VM's own "until it ends" (chdir)
+                                .int => @max(w.p.i, 0),
                                 .num => blk: {
                                     const f = w.p.d;
                                     break :blk if (f >= 0 and f < 1e12) @intFromFloat(f) else 0;
@@ -7521,7 +7544,7 @@ pub const VM = struct {
                             var has = false;
                             if (self.funcByNameAt(strOf(regs[A]), pc)) |fid| {
                                 const is_m = fid < self.fn_method.len and self.fn_method[fid];
-                                has = !is_m and fid < self.fn_names.len and self.fn_names[fid].len > 0 and !std.mem.startsWith(u8, self.fn_names[fid], "@@");
+                                has = !is_m and fid < self.fn_names.len and self.fn_names[fid].len > 0 and !internalFn(self.fn_names[fid]);
                             }
                             out = Value.int(if (has) 1 else 0);
                         }

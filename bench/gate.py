@@ -277,15 +277,25 @@ def resident():
     return code == 0
 
 
+def httpd():
+    """rnxc's server natives (rpp_http_*): a program holding its own request loop, driven over HTTP, every byte it answers
+    checked (bench/httpd.py)."""
+    code, out, secs = run([sys.executable, 'bench/httpd.py'], ROOT)
+    last = [l for l in out.strip().split('\n') if l.strip()]
+    record('server natives', code == 0, (last[-1] if last else '(no output)').strip()[:110], secs)
+    return code == 0
+
+
 def haroserv():
-    """HaroServer's host loop on the resident VM and rnxc's server natives (rpp_http_*): booted, deployed to, redeployed,
-    refused, failed, loaded and stopped over HTTP (haro/serv/court.py, a small load). A tree published without haro/ has
-    no host to run."""
-    if not os.path.isfile(os.path.join(ROOT, 'haro', 'serv', 'court.py')):
-        record('HaroServer', None, 'its host, haro/serv, is not in this tree', 0)
+    """HaroServer -- a program of its own repository since 2026-11-02, built on the resident VM and the server natives --
+    booted on THIS build and driven over HTTP by its own court (court.py, a small load). Run when its checkout sits beside
+    this one, or where HAROSERVER names it; without it, a named SKIP: nothing here depends on it."""
+    where = os.environ.get('HAROSERVER') or os.path.join(os.path.dirname(ROOT), 'haroserver')
+    if not os.path.isfile(os.path.join(where, 'court.py')):
+        record('HaroServer', None, 'no HaroServer checkout at ' + where, 0)
         return True
-    env = dict(os.environ, HAROSERV_LOAD='300', HAROSERV_PER_REQUEST='50')
-    code, out, secs = run([sys.executable, 'haro/serv/court.py'], ROOT, env=env)
+    env = dict(os.environ, HAROSERV_LOAD='300', HAROSERV_PER_REQUEST='50', RNXC=os.path.join(ROOT, 'zig-out', 'bin', 'rnxc.exe'))
+    code, out, secs = run([sys.executable, 'court.py'], where, env=env)
     last = [l for l in out.strip().split('\n') if l.strip()]
     record('HaroServer', code == 0, (last[-1] if last else '(no output)').strip()[:110], secs)
     return code == 0
@@ -525,6 +535,7 @@ def main():
     ok &= execprobes()
     ok &= onto()
     ok &= resident()
+    ok &= httpd()
     ok &= haroserv()
     ok &= imagecache()
     ok &= checker()

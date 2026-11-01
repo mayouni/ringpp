@@ -47,6 +47,11 @@ catch
 done
 ? "Square still: " + Square(4)
 
+# a call compiled before its function exists, to a name that begins with `@@` -- Softanza's own `@@`,
+# `@@NL`, `@@S` are -- reaches it once an admission defines it, as any late call does
+admitcode("atat", "func @@Twice x" + nl + tab + "return x * 2" + nl)
+? "a late @@ name: " + AtTwice()
+
 # from inside a function, deep in the call stack
 ? "from a function: " + AdmitIn(3)
 # LAST, because on Ring the program ends without a word after it (C-21's family):
@@ -66,3 +71,6 @@ func AdmitIn n
 	ok
 	admitcode("deep", "func Deep" + nl + tab + "return 42" + nl)
 	return Deep()
+
+func AtTwice
+	return @@Twice(21)

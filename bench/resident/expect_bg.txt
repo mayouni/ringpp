@@ -1,4 +1,4 @@
-admitted bg_host.ring: 5 function(s), 60 statement(s), # ms -- program: 6 function(s), # instruction(s), 5 global(s)
+admitted bg_host.ring: 6 function(s), 73 statement(s), # ms -- program: 7 function(s), # instruction(s), 7 global(s)
 host: start
 state before any: []
 start lib: 1
@@ -32,8 +32,12 @@ replaceapp: 1, shop.Price() 70
 a first class: 1, MakeSq().Area() 9
 raised at admitfinish: from its top level
 Kept(): kept
+attached while it compiles: 18
+finish more: 1, MakeCube().Vol() 8, Side() 2, oSq.Twice() 18
+chdir while it compiles: 0
+then admitfinish: 1, FromHere() here
 after waiting: compiled
 finish waited: 1, Waited1() 1
 state at the end: []
 host: done
-resident: 11 admitted, 2 refused, 1 top level(s) stopped on an error; 621 function(s), # instruction(s), 5 global(s)
+resident: 13 admitted, 2 refused, 1 top level(s) stopped on an error; 3929 function(s), # instruction(s), 7 global(s)
